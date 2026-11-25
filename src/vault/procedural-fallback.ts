@@ -464,7 +464,7 @@ const ENGINE_STANDARD_TOP: readonly string[] = [
   '751111111...............',
 ];
 
-const ENGINE_AFTERBURN_TOP: readonly string[] = [
+const ENGINE_SUPERBOOST_TOP: readonly string[] = [
   '........................',
   '........................',
   '........................',
@@ -479,7 +479,7 @@ const ENGINE_AFTERBURN_TOP: readonly string[] = [
   '..1111111...............',
 ];
 
-const ENGINE_RECOILJET_TOP: readonly string[] = [
+const ENGINE_GUNGINE_TOP: readonly string[] = [
   '........................',
   '........................',
   '........................',
@@ -494,22 +494,22 @@ const ENGINE_RECOILJET_TOP: readonly string[] = [
   '.11111111...............',
 ];
 
-const ENGINE_HYDROJET_TOP: readonly string[] = [
+const ENGINE_UNDERWATER_TOP: readonly string[] = [
   '........................',
   '........................',
   '........................',
   '........................',
   '........................',
   '........................',
-  '...11...................',
-  '....111.................',
-  '.....111................',
+  '..111...................',
+  '..15111.................',
   '....1111................',
-  '...115111...............',
+  '....11111...............',
+  '...115711...............',
   '..1111111...............',
 ];
 
-const ENGINE_GRAVDRIVE_TOP: readonly string[] = [
+const ENGINE_HOVER_TOP: readonly string[] = [
   '........................',
   '........................',
   '........................',
@@ -540,7 +540,7 @@ const BODY_STANDARD_TOP: readonly string[] = [
   '......11111115771111111.',
 ];
 
-const BODY_BULWARK_TOP: readonly string[] = [
+const BODY_ARMOR_TOP: readonly string[] = [
   '........................',
   '........................',
   '........................',
@@ -548,14 +548,14 @@ const BODY_BULWARK_TOP: readonly string[] = [
   '........................',
   '........................',
   '........................',
-  '........................',
-  '..........11111111......',
-  '.........11511115111....',
-  '......1111111177111111..',
-  '......11111111571111111.',
+  '........11111...........',
+  '.......115111111........',
+  '......111111111111151...',
+  '......1115771111111111..',
+  '......11157711111111111.',
 ];
 
-const BODY_RAMPROW_TOP: readonly string[] = [
+const BODY_MELEE_TOP: readonly string[] = [
   '........................',
   '........................',
   '........................',
@@ -563,14 +563,14 @@ const BODY_RAMPROW_TOP: readonly string[] = [
   '........................',
   '........................',
   '........................',
-  '........................',
-  '................115.....',
-  '...............111157...',
-  '......1111111111111157..',
+  '..................115...',
+  '..................1115..',
+  '.................111157.',
+  '......111111111111111577',
   '......111111571111111777',
 ];
 
-const BODY_COREBLAST_TOP: readonly string[] = [
+const BODY_NUKE_TOP: readonly string[] = [
   '........................',
   '........................',
   '........................',
@@ -578,14 +578,14 @@ const BODY_COREBLAST_TOP: readonly string[] = [
   '........................',
   '........................',
   '........................',
-  '........................',
-  '...........1111.........',
-  '..........1157111.......',
-  '......111115775111111...',
-  '......1111115511111111..',
+  '........11551...........',
+  '.......1157751..........',
+  '......115777511.........',
+  '......11157751111111....',
+  '......1111551111111111..',
 ];
 
-const BODY_PAYLOAD_TOP: readonly string[] = [
+const BODY_BOMB_TOP: readonly string[] = [
   '........................',
   '........................',
   '........................',
@@ -593,9 +593,9 @@ const BODY_PAYLOAD_TOP: readonly string[] = [
   '........................',
   '........................',
   '........................',
-  '........................',
-  '...........111157.......',
-  '............11111.......',
+  '......1.11115...........',
+  '......1111157...........',
+  '........1111............',
   '......111111155111111...',
   '......11111115711111111.',
 ];
@@ -616,7 +616,7 @@ const WINGS_STANDARD_TOP: readonly string[] = [
   '........................',
 ];
 
-const WINGS_PULSEBEAM_TOP: readonly string[] = [
+const WINGS_LASER_TOP: readonly string[] = [
   '................11157...',
   '...............111115...',
   '..............11111.....',
@@ -631,22 +631,22 @@ const WINGS_PULSEBEAM_TOP: readonly string[] = [
   '........................',
 ];
 
-const WINGS_SCATTER_TOP: readonly string[] = [
+const WINGS_SPREAD_TOP: readonly string[] = [
   '...........1115.........',
-  '...........1111.........',
+  '...........1111157......',
   '............1111........',
-  '............111115......',
   '............11111.......',
+  '............11111157....',
   '.............11111......',
-  '.............1111115....',
   '.............111111.....',
-  '..............11111.....',
+  '.............111111157..',
+  '.............11111......',
   '..............1111......',
   '........................',
   '........................',
 ];
 
-const WINGS_SEEKER_TOP: readonly string[] = [
+const WINGS_MISSILES_TOP: readonly string[] = [
   '.........111............',
   '..........1111..........',
   '...........1111.........',
@@ -661,7 +661,7 @@ const WINGS_SEEKER_TOP: readonly string[] = [
   '........................',
 ];
 
-const WINGS_PLASMA_TOP: readonly string[] = [
+const WINGS_CANNON_TOP: readonly string[] = [
   '........1111............',
   '.........11111..........',
   '..........11111.........',
@@ -1521,15 +1521,15 @@ function drawProceduralSpriteFrame(
     return;
   }
   if (name === 'engine_superboost') {
-    p.gridSymY(ENGINE_AFTERBURN_TOP);
+    p.gridSymY(ENGINE_SUPERBOOST_TOP);
     return;
   }
   if (name === 'engine_gungine') {
-    p.gridSymY(ENGINE_RECOILJET_TOP);
+    p.gridSymY(ENGINE_GUNGINE_TOP);
     return;
   }
   if (name === 'engine_underwater') {
-    p.gridSymY(ENGINE_HYDROJET_TOP);
+    p.gridSymY(ENGINE_UNDERWATER_TOP);
     // 6-frame animated rear marine propeller
     const propHalf = [5, 4, 2, 1, 2, 4][frameIdx % 6]!;
     p.vline(1, 11 - propHalf, 12 + propHalf, 1);
@@ -1542,7 +1542,7 @@ function drawProceduralSpriteFrame(
     return;
   }
   if (name === 'engine_hover') {
-    p.gridSymY(ENGINE_GRAVDRIVE_TOP);
+    p.gridSymY(ENGINE_HOVER_TOP);
     return;
   }
 
@@ -1552,19 +1552,19 @@ function drawProceduralSpriteFrame(
     return;
   }
   if (name === 'body_armor') {
-    p.gridSymY(BODY_BULWARK_TOP);
+    p.gridSymY(BODY_ARMOR_TOP);
     return;
   }
   if (name === 'body_melee') {
-    p.gridSymY(BODY_RAMPROW_TOP);
+    p.gridSymY(BODY_MELEE_TOP);
     return;
   }
   if (name === 'body_nuke') {
-    p.gridSymY(BODY_COREBLAST_TOP);
+    p.gridSymY(BODY_NUKE_TOP);
     return;
   }
   if (name === 'body_bomb') {
-    p.gridSymY(BODY_PAYLOAD_TOP);
+    p.gridSymY(BODY_BOMB_TOP);
     return;
   }
 
@@ -1574,19 +1574,19 @@ function drawProceduralSpriteFrame(
     return;
   }
   if (name === 'wings_laser') {
-    p.gridSymY(WINGS_PULSEBEAM_TOP);
+    p.gridSymY(WINGS_LASER_TOP);
     return;
   }
   if (name === 'wings_spread') {
-    p.gridSymY(WINGS_SCATTER_TOP);
+    p.gridSymY(WINGS_SPREAD_TOP);
     return;
   }
   if (name === 'wings_missiles') {
-    p.gridSymY(WINGS_SEEKER_TOP);
+    p.gridSymY(WINGS_MISSILES_TOP);
     return;
   }
   if (name === 'wings_cannon') {
-    p.gridSymY(WINGS_PLASMA_TOP);
+    p.gridSymY(WINGS_CANNON_TOP);
     return;
   }
 
