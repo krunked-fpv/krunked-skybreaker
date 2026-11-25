@@ -18,7 +18,7 @@ import type {
   PartIndex,
   SimSnapshot,
 } from '../contracts/sim';
-import type { VaultSource } from '../contracts/vault';
+import type { AssetPackMode, VaultSource } from '../contracts/vault';
 import {
   ACT2_BONUS_PALETTES,
   DEFAULT_PALETTE_ID,
@@ -37,6 +37,7 @@ export const HANGAR_ROWS: readonly HangarRow[] = [
   'body',
   'engine',
   'palette',
+  'assets',
   'mode',
   'launch',
 ];
@@ -86,6 +87,8 @@ export interface HangarControllerOptions {
   initialPaletteId?: string;
   vaultSource?: VaultSource;
   totalMissionsCount?: number;
+  initialAssetMode?: AssetPackMode;
+  steamAvailable?: boolean;
 }
 
 export interface HangarCycleResult {
@@ -97,6 +100,7 @@ export interface HangarCycleResult {
   mode?: GameMode;
   paletteId?: string;
   paletteIndex?: number;
+  assetMode?: AssetPackMode;
 }
 
 export interface HangarActionResult {
@@ -109,6 +113,7 @@ export interface HangarActionResult {
   mode?: GameMode;
   paletteId?: string;
   paletteIndex?: number;
+  assetMode?: AssetPackMode;
 }
 
 export interface ModDeckCallbacks {
@@ -145,6 +150,8 @@ export class HangarController {
   private paletteIndex: number;
   private selectedPaletteId: string;
   private vaultSource: VaultSource;
+  private assetMode: AssetPackMode;
+  private steamAvailable: boolean;
   private totalMissionsCount: number;
 
   private modDeckOpen = false;
@@ -173,6 +180,8 @@ export class HangarController {
       }
     }
     this.vaultSource = options.vaultSource ?? 'procedural-fallback';
+    this.assetMode = options.initialAssetMode ?? 'skybreaker';
+    this.steamAvailable = Boolean(options.steamAvailable);
     this.totalMissionsCount = options.totalMissionsCount ?? 90;
   }
 
@@ -461,6 +470,22 @@ export class HangarController {
     this.vaultSource = source;
   }
 
+  public setAssetMode(mode: AssetPackMode): void {
+    this.assetMode = mode;
+  }
+
+  public getAssetMode(): AssetPackMode {
+    return this.assetMode;
+  }
+
+  public setSteamAvailable(avail: boolean): void {
+    this.steamAvailable = Boolean(avail);
+  }
+
+  public isSteamAvailable(): boolean {
+    return this.steamAvailable;
+  }
+
   public setTotalMissionsCount(count: number): void {
     this.totalMissionsCount = Math.max(1, Math.floor(count));
   }
@@ -496,6 +521,10 @@ export class HangarController {
 
     if (row === 'palette') {
       return this.cyclePalette(dir, snapshot);
+    }
+
+    if (row === 'assets') {
+      return this.cycleAssetMode();
     }
 
     if (row === 'mode') {
@@ -766,6 +795,8 @@ export class HangarController {
           : snapshot.profile.highScoreNormal,
       sfmtUnlocked: snapshot.profile.sfmtUnlocked,
       vaultSource: vaultSourceOverride ?? this.vaultSource,
+      assetMode: this.assetMode,
+      steamAvailable: this.steamAvailable,
       completedMissionsCount: snapshot.profile.completedMissions.length,
       totalMissionsCount: this.totalMissionsCount,
       modDeckOpen: this.modDeckOpen,
@@ -895,6 +926,28 @@ export class HangarController {
       row: 'palette',
       paletteId: current.id,
       paletteIndex: this.paletteIndex,
+    };
+  }
+
+  private cycleAssetMode(): HangarCycleResult {
+    if (!this.steamAvailable) {
+      return {
+        changed: false,
+        locked: true,
+        cue: 'snddeny',
+        row: 'assets',
+        assetMode: this.assetMode,
+      };
+    }
+    const next: AssetPackMode =
+      this.assetMode === 'skybreaker' ? 'steam-local' : 'skybreaker';
+    this.assetMode = next;
+    return {
+      changed: true,
+      locked: false,
+      cue: 'sndswap',
+      row: 'assets',
+      assetMode: next,
     };
   }
 }

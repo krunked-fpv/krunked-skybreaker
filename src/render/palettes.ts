@@ -19,18 +19,18 @@ const TRANSPARENT: RgbaTuple = [0, 0, 0, 0];
 
 const ORIGINAL_PALETTE: PaletteDefinition = {
   id: 'original',
-  name: 'ORIGINAL',
+  name: 'SKYBREAKER',
   unlockMissionsRequired: 0,
-  backcol: hexToRgba('#dec796'),
+  backcol: hexToRgba('#d6c39c'),
   colors: [
     TRANSPARENT,
-    hexToRgba('#4b0e1c'), // 1: Player silhouette
-    hexToRgba('#82383e'), // 2: Enemy aircraft/boats/ebullet core
-    hexToRgba('#b89378'), // 3: Water reflection of [1, 2]
-    hexToRgba('#c7aa88'), // 4: Distant background props
-    hexToRgba('#e7ddb0'), // 5: Player bullet core
-    hexToRgba('#e5ddac'), // 6: Midground parallax clouds & reflection of [5, 7]
-    hexToRgba('#f7f0d4'), // 7: Foreground clouds, explosions, ocean_line, health exterior
+    hexToRgba('#162030'), // 1: Deep charcoal-navy player silhouette
+    hexToRgba('#8c2630'), // 2: Bold crimson-rust enemy aircraft/boats/ebullet core
+    hexToRgba('#8e897f'), // 3: Cool steel water reflection of [1, 2]
+    hexToRgba('#a89d86'), // 4: Muted horizon background props
+    hexToRgba('#ffe066'), // 5: Hot gold player fire core
+    hexToRgba('#e3d9bc'), // 6: Pale cloud haze & reflection of [5, 7]
+    hexToRgba('#f7f3e3'), // 7: Crisp ivory clouds, blasts, ocean_line, health exterior
   ],
 };
 
@@ -157,8 +157,8 @@ export function sanitizeCustomPalette(raw: unknown): PaletteDefinition | null {
 export const PALETTES: readonly PaletteDefinition[] = [
   ORIGINAL_PALETTE,
   {
-    id: 'lanigiro',
-    name: 'LANIGIRO',
+    id: 'inverted',
+    name: 'INVERTED',
     unlockMissionsRequired: 2,
     backcol: invertRgb(ORIGINAL_PALETTE.backcol),
     colors: [
@@ -237,8 +237,8 @@ export const PALETTES: readonly PaletteDefinition[] = [
     ],
   },
   {
-    id: 'kozilek',
-    name: 'KOZILEK',
+    id: 'synthdusk',
+    name: 'SYNTH DUSK',
     unlockMissionsRequired: 25,
     backcol: hexToRgba('#23112d'),
     colors: [
@@ -285,8 +285,8 @@ export const PALETTES: readonly PaletteDefinition[] = [
     ],
   },
   {
-    id: 'sfmt',
-    name: 'SFMT',
+    id: 'overdrive',
+    name: 'OVERDRIVE',
     unlockMissionsRequired: 60,
     backcol: hexToRgba('#120608'),
     colors: [
@@ -418,7 +418,7 @@ export function isPaletteUnlocked(
   completedMissionsCount: number,
   sfmtUnlocked = false,
 ): boolean {
-  if (palette.id === 'sfmt' && sfmtUnlocked) {
+  if (palette.id === 'overdrive' && sfmtUnlocked) {
     return true;
   }
   return completedMissionsCount >= palette.unlockMissionsRequired;
