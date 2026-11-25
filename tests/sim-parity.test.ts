@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_ACT2_MOD_FLAGS } from '../src/contracts/mod';
 import type { InputState, PartIndex } from '../src/contracts/sim';
+import { createProceduralFallbackBundle } from '../src/vault';
 import type {
   BitmapFontSpec,
   BodySpec,
@@ -1542,5 +1544,301 @@ describe('Deterministic 60Hz Simulation Parity', () => {
     expect(observedScales[observedScales.length - 1]).toBeGreaterThan(0);
     expect(observedScales[observedScales.length - 1]).toBeLessThanOrEqual(0.03);
     expect(observedScales.length).toBe(49);
+  });
+
+  it('17. Launch carrier submarine (launchSubY) surfaces at seaLevel, holds 24 ticks, submerges past +44, and resets cleanly', () => {
+    const data = createProceduralFallbackBundle().data;
+    const sim = new Simulation(data);
+    sim.launch({ weapon: 0, body: 0, engine: 0 }, 'normal', 1701);
+
+    const initSnap = sim.getSnapshot();
+    expect(initSnap.launchSubY).toBe(data.room.sealevel);
+    expect(initSnap.particles.some((pt) => pt.kind === 'splashSub' && pt.id >= 1_000_000)).toBe(true);
+    expect(initSnap.particles.some((pt) => pt.kind === 'splashM' && pt.id >= 1_000_000)).toBe(true);
+
+    // Hold for 24 ticks at seaLevel
+    for (let t = 1; t <= 24; t++) {
+      const s = sim.step(IDLE_INPUT);
+      expect(s.launchSubY).toBe(data.room.sealevel);
+    }
+
+    // Tick 25 starts submerging at +0.55/tick and disappears once > seaLevel + 44
+    const submergingSnap = sim.step(IDLE_INPUT);
+    expect(submergingSnap.launchSubY).toBeCloseTo(0.55, 6);
+
+    let sawPeriodicSubSplash = false;
+    let clearedTick = -1;
+    for (let t = 26; t <= 130; t++) {
+      const s = sim.step(IDLE_INPUT);
+      if (t % 14 === 0 && s.launchSubY !== undefined && s.launchSubY < data.room.sealevel + 18) {
+        if (s.particles.some((pt) => pt.kind === 'splashSub')) {
+          sawPeriodicSubSplash = true;
+        }
+      }
+      if (s.launchSubY === undefined) {
+        clearedTick = t;
+        break;
+      }
+    }
+    expect(sawPeriodicSubSplash).toBe(true);
+    expect(clearedTick).toBeGreaterThan(24);
+    expect(clearedTick).toBeLessThanOrEqual(115);
+
+    // returnToHangar resets launchSubY even if still surfaced
+    sim.launch({ weapon: 0, body: 0, engine: 0 }, 'normal', 1702);
+    expect(sim.getSnapshot().launchSubY).toBe(data.room.sealevel);
+    sim.returnToHangar();
+    expect(sim.getSnapshot().launchSubY).toBeUndefined();
+
+    // Dogfight 1v1 does not spawn carrier submarine
+    const dogSim = new Simulation(data);
+    dogSim.setModFlags({ moddedEnabled: true, multiplayerMode: 'dogfight1v1', p2BotEnabled: false });
+    dogSim.launch({ weapon: 0, body: 0, engine: 0 }, 'normal', 1703);
+    expect(dogSim.getSnapshot().launchSubY).toBeUndefined();
+  });
+
+  it('18. Directional muzzle flashes inherit player angleDeg and Steam FX play full frame counts & TTLs', () => {
+    const fallbackData = createProceduralFallbackBundle().data;
+    const testData = createTestGameDataBundle();
+
+    // Spread & original muzzle flashes inherit player.angleDeg (-90 straight up, and rotated angles)
+    for (const data of [fallbackData, testData]) {
+      const simSpread = new Simulation(data);
+      launchToPlaying(simSpread, { weapon: 2, body: 0, engine: 4 }, 'normal', 1801);
+      const upSnap = simSpread.step({ left: false, right: false, thrust: false, fire: true });
+      const spreadUp = upSnap.particles.find((pt) => pt.kind === 'spreadfireFlash');
+      expect(spreadUp).toBeDefined();
+      expect(spreadUp!.angleDeg).toBeCloseTo(-90, 5);
+      expect(spreadUp!.frameCount).toBe(3);
+
+      // Rotate right 135 deg (+45 deg facing down-right) and fire again after cooldown
+      for (let i = 0; i < 13; i++) {
+        simSpread.step({ left: false, right: true, thrust: false, fire: false });
+      }
+      const angledSnap = simSpread.step({ left: false, right: true, thrust: false, fire: true });
+      const spreadAngled = angledSnap.particles.find((pt) => pt.kind === 'spreadfireFlash');
+      expect(spreadAngled).toBeDefined();
+      expect(spreadAngled!.angleDeg).toBeCloseTo(angledSnap.player.angleDeg, 5);
+      expect(spreadAngled!.angleDeg).not.toBe(0);
+
+      // Original fireFlash inherits -90 deg
+      const simOrig = new Simulation(data);
+      launchToPlaying(simOrig, { weapon: 0, body: 0, engine: 4 }, 'normal', 1802);
+      const origSnap = simOrig.step({ left: false, right: false, thrust: false, fire: true });
+      const fireFlash = origSnap.particles.find((pt) => pt.kind === 'fireFlash');
+      expect(fireFlash).toBeDefined();
+      expect(fireFlash!.angleDeg).toBeCloseTo(-90, 5);
+      expect(fireFlash!.frameCount).toBe(3);
+    }
+
+    // splashB plays all 16 frames (ttl >= 40) instead of truncating at 10 frames / 16 ticks
+    const simSplash = new Simulation(fallbackData);
+    simSplash.launch({ weapon: 0, body: 0, engine: 0 }, 'normal', 1803);
+    const launchSnap = simSplash.getSnapshot();
+    const splashB = launchSnap.particles.find((pt) => pt.kind === 'splashB');
+    expect(splashB).toBeDefined();
+    expect(splashB!.frameCount).toBe(16);
+    expect(splashB!.ttl).toBeGreaterThanOrEqual(40);
+    for (let i = 0; i < 20; i++) {
+      simSplash.step(IDLE_INPUT);
+    }
+    expect(simSplash.getSnapshot().particles.some((pt) => pt.id === splashB!.id)).toBe(true);
+  });
+
+  it('19. Damaged smoke_long, wing drip, underwater bubbles, boostsplash, bigboostcircle, spreadfade, laser_fade & debris FX', () => {
+    const data = createProceduralFallbackBundle().data;
+
+    // 1. Damaged player (< 75% HP) emits smoke_long behind tail; critical (< 35%) also emits smoke
+    const simSmoke = new Simulation(data);
+    launchToPlaying(simSmoke, { weapon: 0, body: 0, engine: 4 }, 'normal', 1901);
+    simSmoke.damagePlayer(6); // 10 / 16 = 62.5% (< 75%)
+    let sawSmokeLong = false;
+    for (let i = 0; i < 10; i++) {
+      const s = simSmoke.step(IDLE_INPUT);
+      const sl = s.particles.find((pt) => pt.kind === 'smoke_long');
+      if (sl) {
+        sawSmokeLong = true;
+        expect(sl.id).toBeGreaterThanOrEqual(1_000_000);
+        expect(sl.frameCount).toBe(9);
+      }
+    }
+    expect(sawSmokeLong).toBe(true);
+
+    // 2. Ocean exit emits wing drip (gravity 0.14, allowBelowSea: false) and deep submergence emits poof bubbles
+    const simWet = new Simulation(data);
+    launchToPlaying(simWet, { weapon: 0, body: 0, engine: 3 }, 'normal', 1902);
+    // Turn straight down (+90) in 18 ticks, dive deep underwater, then turn straight up (-90) and breach
+    for (let i = 0; i < 18; i++) {
+      simWet.step({ left: false, right: true, thrust: false, fire: false });
+    }
+    let sawBubble = false;
+    for (let i = 0; i < 65; i++) {
+      const s = simWet.step({ left: false, right: false, thrust: true, fire: false });
+      const bubble = s.particles.find((pt) => pt.kind === 'poof' && pt.allowBelowSea && pt.vy < 0);
+      if (bubble) sawBubble = true;
+    }
+    expect(sawBubble).toBe(true);
+    for (let i = 0; i < 18; i++) {
+      simWet.step({ left: false, right: true, thrust: false, fire: false });
+    }
+    let sawDrip = false;
+    for (let i = 0; i < 80; i++) {
+      const s = simWet.step({ left: false, right: false, thrust: true, fire: false });
+      const drip = s.particles.find((pt) => pt.kind === 'drip');
+      if (drip) {
+        sawDrip = true;
+        expect(drip.spriteName).toBe('fx_drip');
+        expect(drip.gravity).toBeCloseTo(0.14, 5);
+        expect(drip.allowBelowSea).toBe(false);
+        expect(drip.frameCount).toBe(3);
+      }
+    }
+    expect(sawDrip).toBe(true);
+
+    // 3. Superboost rising edge bigboostcircle, superboostend angleDeg, boostsplash, laser_fade & spreadfade
+    const simFx = new Simulation(data);
+    launchToPlaying(simFx, { weapon: 1, body: 0, engine: 1 }, 'normal', 1903);
+    // Launch ends with boosting: true, so coast 1 tick first to emit superboostend & reset wasBoosting
+    const boostEndSnap = simFx.step({ left: false, right: false, thrust: false, fire: true });
+    const boostEnd = boostEndSnap.particles.find((pt) => pt.kind === 'superboostend');
+    expect(boostEnd).toBeDefined();
+    expect(boostEnd!.angleDeg).toBeCloseTo(boostEndSnap.player.angleDeg, 5);
+    expect(boostEnd!.frameCount).toBe(4);
+
+    const boostSnap = simFx.step({ left: false, right: false, thrust: true, fire: false });
+    expect(boostSnap.particles.some((pt) => pt.kind === 'bigboostcircle')).toBe(true);
+    const laserFade = boostSnap.particles.find((pt) => pt.kind === 'laser_fade');
+    expect(laserFade).toBeDefined();
+    expect(laserFade!.spriteName).toBe('laser_fade');
+    expect(laserFade!.frameCount).toBe(5);
+    expect(laserFade!.frameSpeed).toBeCloseTo(0.5, 5);
+    expect(laserFade!.angleDeg).toBeCloseTo(boostSnap.player.angleDeg, 5);
+
+    // Low-altitude boost emits boostsplash at seaLevel
+    const simSkim = new Simulation(data);
+    launchToPlaying(simSkim, { weapon: 0, body: 0, engine: 0 }, 'normal', 1906);
+    for (let i = 0; i < 18; i++) {
+      simSkim.step({ left: false, right: true, thrust: false, fire: false });
+    }
+    let sawBoostSplash = false;
+    for (let i = 0; i < 40; i++) {
+      const s = simSkim.step({ left: false, right: false, thrust: true, fire: false });
+      const bs = s.particles.find((pt) => pt.kind === 'boostsplash');
+      if (bs) {
+        sawBoostSplash = true;
+        expect(bs.y).toBe(data.room.sealevel);
+        expect(bs.frameCount).toBe(5);
+        break;
+      }
+    }
+    expect(sawBoostSplash).toBe(true);
+
+    const simSpreadFade = new Simulation(data);
+    launchToPlaying(simSpreadFade, { weapon: 2, body: 0, engine: 4 }, 'normal', 1904);
+    simSpreadFade.step({ left: false, right: false, thrust: false, fire: true });
+    let sawSpreadFade = false;
+    for (let i = 0; i < 45; i++) {
+      const s = simSpreadFade.step(IDLE_INPUT);
+      if (s.particles.some((pt) => pt.kind === 'spreadfade')) {
+        sawSpreadFade = true;
+        break;
+      }
+    }
+    expect(sawSpreadFade).toBe(true);
+
+    // 4. Damaged Boat emits smoke_long and killEnemy emits planepart + poof debris
+    const simDebris = new Simulation(data);
+    const preDebris = launchToPlaying(simDebris, { weapon: 4, body: 0, engine: 4 }, 'normal', 1905);
+    const boat = simDebris.spawnEnemy('Boat', preDebris.player.x + 240, 0);
+    boat.health = boat.maxHealth * 0.4;
+    let sawBoatSmoke = false;
+    for (let i = 0; i < 10; i++) {
+      const s = simDebris.step(IDLE_INPUT);
+      if (s.particles.some((pt) => pt.kind === 'smoke_long')) {
+        sawBoatSmoke = true;
+        break;
+      }
+    }
+    expect(sawBoatSmoke).toBe(true);
+
+    simDebris.spawnEnemy('Fighter', preDebris.player.x, preDebris.player.y - 40);
+    let sawPlanepart = false;
+    let sawPoof = false;
+    for (let i = 0; i < 12; i++) {
+      const s = simDebris.step({ left: false, right: false, thrust: false, fire: true });
+      if (s.particles.some((pt) => pt.kind === 'planepart')) sawPlanepart = true;
+      if (s.particles.some((pt) => pt.kind === 'poof')) sawPoof = true;
+    }
+    expect(sawPlanepart).toBe(true);
+    expect(sawPoof).toBe(true);
+
+    simDebris.damagePlayer(999);
+    const deathFxSnap = simDebris.getSnapshot();
+    const bigExp = deathFxSnap.particles.find((pt) => pt.kind === 'explode_big');
+    expect(bigExp).toBeDefined();
+    expect(bigExp!.frameCount).toBe(13);
+    expect(deathFxSnap.particles.some((pt) => pt.kind === 'planepart')).toBe(true);
+  });
+
+  it('20. LaserAce transitions through 24-tick laserChargeTicks telegraph before laserActive === true', () => {
+    const data = createTestGameDataBundle();
+    const sim = new Simulation(data);
+    const pre = launchToPlaying(sim, { weapon: 0, body: 0, engine: 4 }, 'normal', 2001);
+    const laserAce = sim.spawnEnemy('LaserAce', pre.player.x + 180, pre.player.y);
+
+    const observedChargeTicks: number[] = [];
+    let beamStartIndex = -1;
+    let firstChargeIndex = -1;
+
+    for (let i = 0; i < 100; i++) {
+      const s = sim.step(IDLE_INPUT);
+      const tracked = s.enemies.find((e) => e.id === laserAce.id);
+      if (!tracked) break;
+      if ((tracked.laserChargeTicks ?? 0) > 0) {
+        if (firstChargeIndex === -1) firstChargeIndex = i;
+        observedChargeTicks.push(tracked.laserChargeTicks!);
+        expect(tracked.laserActive).toBe(false);
+      }
+      if (tracked.laserActive && beamStartIndex === -1) {
+        beamStartIndex = i;
+        expect(tracked.laserChargeTicks ?? 0).toBe(0);
+        break;
+      }
+    }
+
+    expect(firstChargeIndex).toBeGreaterThanOrEqual(0);
+    expect(observedChargeTicks[0]).toBe(24);
+    expect(observedChargeTicks.length).toBe(24);
+    expect(observedChargeTicks[observedChargeTicks.length - 1]).toBe(1);
+    expect(beamStartIndex).toBeGreaterThan(firstChargeIndex + 23);
+  });
+
+  it('21. Switching MODDED [5, 6, 8] -> VANILLA 1:1 resets cleanly to [0, 0, 0] while [5, 5, 5] Urauser stays [5, 5, 5]', () => {
+    const data = createTestGameDataBundle();
+
+    // [5, 6, 8] (AEGIS HEX ION) -> VANILLA 1:1 resets cleanly to [0, 0, 0] (original, NOT ???)
+    const simHex = new Simulation(data);
+    simHex.unlockAll();
+    simHex.setModFlags({ moddedEnabled: true, arsenalBosses: true });
+    simHex.setLoadout({ weapon: 5, body: 6, engine: 8 });
+    expect(simHex.getSnapshot().player.loadout).toEqual({ weapon: 5, body: 6, engine: 8 });
+
+    simHex.setModFlags({ ...DEFAULT_ACT2_MOD_FLAGS, moddedEnabled: false });
+    const hexExitSnap = simHex.getSnapshot();
+    expect(hexExitSnap.player.loadout).toEqual({ weapon: 0, body: 0, engine: 0 });
+    expect(hexExitSnap.player.planeName).toBe('original');
+
+    // Pure unlocked [5, 5, 5] URAUSER stays [5, 5, 5] when switching MODDED -> VANILLA 1:1
+    const simUra = new Simulation(data);
+    simUra.unlockAll();
+    simUra.setModFlags({ moddedEnabled: true, arsenalBosses: true });
+    simUra.setLoadout({ weapon: 5, body: 5, engine: 5 });
+    expect(simUra.getSnapshot().player.planeName).toBe('URAUSER');
+
+    simUra.setModFlags({ ...DEFAULT_ACT2_MOD_FLAGS, moddedEnabled: false });
+    const uraExitSnap = simUra.getSnapshot();
+    expect(uraExitSnap.player.loadout).toEqual({ weapon: 5, body: 5, engine: 5 });
+    expect(uraExitSnap.player.planeName).toBe('URAUSER');
+    expect(uraExitSnap.player.isUrauser).toBe(true);
   });
 });
