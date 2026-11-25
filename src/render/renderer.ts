@@ -47,6 +47,8 @@ import {
 } from './pixel-font';
 import {
   BATCH_FRAG,
+  BATCH_MENU_FRAG,
+  BATCH_MENU_VERT,
   BATCH_REFLECT_FRAG,
   BATCH_REFLECT_VERT,
   BATCH_VERT,
@@ -70,10 +72,15 @@ const INSTANCE_FLOATS = 13; // x,y,angle, ax,ay,w,h, cx,cy,sx,sy, depth,flash
 const MAX_BATCH_INSTANCES = 4096;
 const SOLID_VERTEX_FLOATS = 6; // x,y, r,g,b,a
 
-interface UploadedTexture {
+export interface UploadedTexture {
   texture: WebGLTexture;
   width: number;
   height: number;
+}
+
+export interface ResolvedFont {
+  spec: BitmapFontSpec;
+  tex: UploadedTexture;
 }
 
 interface FboTarget {
@@ -82,7 +89,7 @@ interface FboTarget {
   depthRenderbuffer: WebGLRenderbuffer;
 }
 
-interface SpriteInstance {
+export interface SpriteInstance {
   entry: SpriteEntry;
   frame: number;
   x: number;
@@ -94,6 +101,95 @@ interface SpriteInstance {
   flash: number;
   clipSea: boolean;
 }
+
+export interface HangarHudDrawContext {
+  gl: WebGL2RenderingContext;
+  activePalette: PaletteDefinition;
+  allPalettes: readonly PaletteDefinition[];
+  vault: VaultAssetBundle | null;
+  builtinFontSpec: BitmapFontSpec;
+  screenProjMatrix: Float32Array;
+  resolveFont: (primaryName: string, secondaryName: string) => ResolvedFont;
+  resolveAtlasTexture: (
+    atlas: SpriteAtlasSpec | undefined,
+    preferredKeys: string[],
+  ) => UploadedTexture;
+  drawSpriteBatch: (
+    tex: UploadedTexture,
+    instances: readonly SpriteInstance[],
+    paletteOverride?: PaletteDefinition,
+    useMenuShader?: boolean,
+  ) => void;
+  drawBitmapText: (
+    font: ResolvedFont,
+    text: string,
+    x: number,
+    y: number,
+    scale: number,
+    align: TextAlign,
+    color: RgbaTuple,
+    cutoffY?: number,
+  ) => void;
+  drawComboText: (
+    font: ResolvedFont,
+    text: string,
+    x: number,
+    y: number,
+    scale: number,
+    align: TextAlign,
+    textColor: RgbaTuple,
+    fillColor: RgbaTuple,
+    barhY: number,
+  ) => void;
+  drawPauseLines: (color: RgbaTuple) => void;
+  flushSolids: (verts: number[]) => void;
+  resolveApexCraftSpriteName: (
+    sprites: Record<string, SpriteEntry>,
+  ) => string | undefined;
+  bumpDrawCall: () => void;
+}
+
+export interface HangarHudPass {
+  drawHangarMenuPass: (
+    ctx: HangarHudDrawContext,
+    snapshot: SimSnapshot,
+    hangarUi: HangarUiState,
+    elapsedSec: number,
+  ) => void;
+  drawInGameHudPass: (
+    ctx: HangarHudDrawContext,
+    snapshot: SimSnapshot,
+    elapsedSec: number,
+    camX: number,
+    camY: number,
+  ) => void;
+  drawPauseOverlayPass: (
+    ctx: HangarHudDrawContext,
+    snapshot: SimSnapshot,
+    elapsedSec: number,
+  ) => void;
+  drawGameOverDebriefPass: (
+    ctx: HangarHudDrawContext,
+    snapshot: SimSnapshot,
+    elapsedSec: number,
+  ) => void;
+}
+
+let defaultHangarHudPass: HangarHudPass | null = null;
+
+export function registerDefaultHangarHudPass(pass: HangarHudPass | null): void {
+  defaultHangarHudPass = pass;
+}
+
+type EnemyVisualExtras = EnemyEntity & {
+  gunRecoilTicks?: number;
+  gunAnimFrame?: number;
+  boosting?: boolean;
+};
+
+type ParallaxVisualExtras = SimSnapshot['parallax'][number] & {
+  angleDeg?: number;
+};
 
 interface CompiledProgram {
   program: WebGLProgram;
@@ -387,6 +483,8 @@ export class WebGL2Renderer implements IRenderer {
   private pauseLinesProg: CompiledProgram | null = null;
   private solidProg: CompiledProgram | null = null;
   private outpassProg: CompiledProgram | null = null;
+  private menuBatchProg: CompiledProgram | null = null;
+  private hangarHudPass: HangarHudPass | null = null;
 
   private fullscreenVao: WebGLVertexArrayObject | null = null;
   private fullscreenVbo: WebGLBuffer | null = null;
@@ -476,6 +574,12 @@ export class WebGL2Renderer implements IRenderer {
     );
     this.solidProg = this.compileProgram(gl, SOLID_VERT, SOLID_FRAG);
     this.outpassProg = this.compileProgram(gl, OUTPASS_VERT, OUTPASS_FRAG);
+    // Compiled strictly after outpassProg (index 8) to preserve program indices 0..7
+    this.menuBatchProg = this.compileProgram(
+      gl,
+      BATCH_MENU_VERT,
+      BATCH_MENU_FRAG,
+    );
 
     this.defaultFbo = this.createFbo(gl, VIRTUAL_WIDTH, VIRTUAL_HEIGHT);
     this.comboFbo = this.createFbo(gl, VIRTUAL_WIDTH, VIRTUAL_HEIGHT);
@@ -532,6 +636,10 @@ export class WebGL2Renderer implements IRenderer {
       shockwaves: Boolean(fx.shockwaves),
     };
     this.shaderFxExplicit = true;
+  }
+
+  public setHangarHudPass(pass: HangarHudPass | null): void {
+    this.hangarHudPass = pass;
   }
 
   public listPalettes(): readonly PaletteDefinition[] {
@@ -666,6 +774,36 @@ export class WebGL2Renderer implements IRenderer {
       this.camX = elapsedSec * 18;
       this.camY = -120;
       this.cameraInitialized = true;
+    } else if (snapshot.phase === 'launching') {
+      const targetCamX = playerX + clamp(snapshot.player.vx * 8, -80, 80);
+      const targetCamY = clamp(
+        playerY - 30,
+        snapshot.spaceLevel + 60,
+        -60,
+      );
+      if (!this.cameraInitialized || prevSnapshot.phase === 'hangar') {
+        this.camX = targetCamX;
+        this.camY = Math.min(-80, targetCamY);
+        this.cameraInitialized = true;
+      } else {
+        this.camX = lerp(this.camX, targetCamX, 0.16);
+        this.camY = lerp(this.camY, targetCamY, 0.15);
+      }
+    } else if (snapshot.phase === 'dying' || snapshot.phase === 'gameover') {
+      const targetCamX = playerX + clamp(snapshot.player.vx * 4, -50, 50);
+      const targetCamY = clamp(
+        playerY,
+        snapshot.spaceLevel + 80,
+        -35,
+      );
+      if (!this.cameraInitialized) {
+        this.camX = targetCamX;
+        this.camY = targetCamY;
+        this.cameraInitialized = true;
+      } else {
+        this.camX = lerp(this.camX, targetCamX, 0.045);
+        this.camY = lerp(this.camY, targetCamY, 0.045);
+      }
     } else if (is2PCameraMode && interpPlayer2) {
       const midX = (playerX + interpPlayer2.x) * 0.5;
       const midY = (playerY + interpPlayer2.y) * 0.5;
@@ -677,11 +815,11 @@ export class WebGL2Renderer implements IRenderer {
         playerX + 220,
       );
       const targetCamY = clamp(
-        clamp(clampedMidY, snapshot.spaceLevel + 160, 120),
+        clamp(clampedMidY, snapshot.spaceLevel + 60, 85),
         playerY - 140,
         playerY + 140,
       );
-      if (!this.cameraInitialized || snapChangedPhase) {
+      if (!this.cameraInitialized || prevSnapshot.phase === 'hangar') {
         this.camX = targetCamX;
         this.camY = targetCamY;
         this.cameraInitialized = true;
@@ -690,19 +828,23 @@ export class WebGL2Renderer implements IRenderer {
         this.camY = lerp(this.camY, targetCamY, 0.14);
       }
     } else {
-      const targetCamX = playerX + snapshot.player.vx * 14;
+      const targetCamX = playerX + clamp(snapshot.player.vx * 13, -110, 110);
+      const maxCamY = playerY > 0 ? 95 : 55;
       const targetCamY = clamp(
-        playerY + snapshot.player.vy * 10,
-        snapshot.spaceLevel + 160,
-        120,
+        playerY + clamp(snapshot.player.vy * 9, -70, 70),
+        snapshot.spaceLevel + 60,
+        maxCamY,
       );
-      if (!this.cameraInitialized || snapChangedPhase) {
+      if (
+        !this.cameraInitialized ||
+        (snapChangedPhase && prevSnapshot.phase !== 'launching')
+      ) {
         this.camX = targetCamX;
         this.camY = targetCamY;
         this.cameraInitialized = true;
       } else {
-        this.camX = lerp(this.camX, targetCamX, 0.14);
-        this.camY = lerp(this.camY, targetCamY, 0.14);
+        this.camX = lerp(this.camX, targetCamX, 0.15);
+        this.camY = lerp(this.camY, targetCamY, 0.13);
       }
     }
 
@@ -819,6 +961,7 @@ export class WebGL2Renderer implements IRenderer {
         this.pauseLinesProg,
         this.solidProg,
         this.outpassProg,
+        this.menuBatchProg,
       ];
       for (const p of programs) {
         if (p) gl.deleteProgram(p.program);
@@ -900,7 +1043,9 @@ export class WebGL2Renderer implements IRenderer {
     );
 
     // 1. Collect world sprites for colorpass + reflectpass
-    const mainSprites: SpriteInstance[] = [];
+    const skyBgSprites: SpriteInstance[] = [];
+    const oceanLineSprites: SpriteInstance[] = [];
+    const foregroundSprites: SpriteInstance[] = [];
     const underwaterSprites: SpriteInstance[] = [];
     const reflectSprites: SpriteInstance[] = [];
     const worldSolidQuads: number[] = [];
@@ -912,11 +1057,21 @@ export class WebGL2Renderer implements IRenderer {
       elapsedSec,
       camX,
       camY,
-      mainSprites,
+      skyBgSprites,
+      oceanLineSprites,
+      foregroundSprites,
       underwaterSprites,
       reflectSprites,
       worldSolidQuads,
     );
+
+    // True depth ordering (largest depth = farthest background drawn first; smallest = closest foreground last)
+    const sortBackToFront = (a: SpriteInstance, b: SpriteInstance): number =>
+      b.depth - a.depth;
+    if (skyBgSprites.length > 1) skyBgSprites.sort(sortBackToFront);
+    if (foregroundSprites.length > 1) foregroundSprites.sort(sortBackToFront);
+    if (underwaterSprites.length > 1) underwaterSprites.sort(sortBackToFront);
+    if (reflectSprites.length > 1) reflectSprites.sort(sortBackToFront);
 
     const spritesAtlas = this.vault?.data.atlases.sprites;
     const spritesTex = this.resolveAtlasTexture(spritesAtlas, [
@@ -935,14 +1090,29 @@ export class WebGL2Renderer implements IRenderer {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     if (this.batchProg) {
-      this.drawSpriteBatch(
-        gl,
-        this.batchProg,
-        spritesTex,
-        worldProj,
-        mainSprites,
-        true,
-      );
+      // Sky background (space_clouds_blank, space_clouds, parallax_clouds, bg_* props, clouds)
+      if (skyBgSprites.length > 0) {
+        this.drawSpriteBatch(
+          gl,
+          this.batchProg,
+          spritesTex,
+          worldProj,
+          skyBgSprites,
+          true,
+        );
+      }
+      // Above-sea foreground (launch sub, enemies, smoke behind player, player, projectiles, flashes, explosions)
+      if (foregroundSprites.length > 0) {
+        this.drawSpriteBatch(
+          gl,
+          this.batchProg,
+          spritesTex,
+          worldProj,
+          foregroundSprites,
+          true,
+        );
+      }
+      // Submerged entities & underwater particles
       if (underwaterSprites.length > 0) {
         this.drawSpriteBatch(
           gl,
@@ -962,11 +1132,7 @@ export class WebGL2Renderer implements IRenderer {
       gl.disable(gl.BLEND);
     }
 
-    // Nuke sprite sequence (when nuke triggered)
-    if (snapshot.player.nukeTriggered && snapshot.phase !== 'hangar') {
-      this.drawNukeSequence(gl, snapshot, worldProj);
-    }
-
+    // Complete depth-sorted water reflection pass below y = 0
     if (this.batchReflectProg && reflectSprites.length > 0) {
       this.drawSpriteBatch(
         gl,
@@ -976,6 +1142,23 @@ export class WebGL2Renderer implements IRenderer {
         reflectSprites,
         false,
       );
+    }
+
+    // Ocean horizon line rendered UNCLIPPED at y = seaLevel (glDepth 0.5050: crisp waterline over hull/reflection seam)
+    if (this.batchProg && oceanLineSprites.length > 0) {
+      this.drawSpriteBatch(
+        gl,
+        this.batchProg,
+        spritesTex,
+        worldProj,
+        oceanLineSprites,
+        false,
+      );
+    }
+
+    // Nuke sprite sequence (16-frame mushroom cloud + ocean reflection)
+    if (snapshot.player.nukeTriggered && snapshot.phase !== 'hangar') {
+      this.drawNukeSequence(gl, snapshot, worldProj);
     }
 
     // --- combopass (post.shader water + quantized health circle) into comboFbo ---
@@ -993,7 +1176,21 @@ export class WebGL2Renderer implements IRenderer {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-    if (snapshot.phase === 'hangar' && hangarUi) {
+    const overlayPass = this.hangarHudPass ?? defaultHangarHudPass;
+    if (overlayPass) {
+      const ctx = this.buildHangarHudContext(gl);
+      if (snapshot.phase === 'hangar' && hangarUi) {
+        overlayPass.drawHangarMenuPass(ctx, snapshot, hangarUi, elapsedSec);
+      } else {
+        overlayPass.drawInGameHudPass(ctx, snapshot, elapsedSec, camX, camY);
+        if (snapshot.paused) {
+          overlayPass.drawPauseOverlayPass(ctx, snapshot, elapsedSec);
+        }
+        if (snapshot.phase === 'gameover') {
+          overlayPass.drawGameOverDebriefPass(ctx, snapshot, elapsedSec);
+        }
+      }
+    } else if (snapshot.phase === 'hangar' && hangarUi) {
       this.drawMenuPass(gl, snapshot, hangarUi, elapsedSec);
     } else {
       this.drawHudPass(gl, snapshot, elapsedSec, camX, camY);
@@ -1020,6 +1217,96 @@ export class WebGL2Renderer implements IRenderer {
     }
   }
 
+  private buildHangarHudContext(gl: WebGL2RenderingContext): HangarHudDrawContext {
+    return {
+      gl,
+      activePalette: this.activePalette,
+      allPalettes: this.listPalettes(),
+      vault: this.vault,
+      builtinFontSpec: this.builtinFontSpec,
+      screenProjMatrix: this.screenProjMatrix,
+      resolveFont: (primaryName, secondaryName) =>
+        this.resolveFont(primaryName, secondaryName),
+      resolveAtlasTexture: (atlas, preferredKeys) =>
+        this.resolveAtlasTexture(atlas, preferredKeys),
+      drawSpriteBatch: (tex, instances, paletteOverride, useMenuShader) => {
+        const prog =
+          useMenuShader && this.menuBatchProg
+            ? this.menuBatchProg
+            : this.batchProg;
+        if (!prog || instances.length === 0) return;
+        this.drawSpriteBatch(
+          gl,
+          prog,
+          tex,
+          this.screenProjMatrix,
+          instances,
+          false,
+          paletteOverride,
+        );
+      },
+      drawBitmapText: (font, text, x, y, scale, align, color, cutoffY) => {
+        this.drawBitmapText(gl, font, text, x, y, scale, align, color, cutoffY);
+      },
+      drawComboText: (
+        font,
+        text,
+        x,
+        y,
+        scale,
+        align,
+        textColor,
+        fillColor,
+        barhY,
+      ) => {
+        this.drawComboText(
+          gl,
+          font,
+          text,
+          x,
+          y,
+          scale,
+          align,
+          textColor,
+          fillColor,
+          barhY,
+        );
+      },
+      drawPauseLines: (color) => {
+        this.drawPauseLinesPass(gl, color);
+      },
+      flushSolids: (verts) => {
+        this.flushSolidArray(gl, verts, this.screenProjMatrix);
+      },
+      resolveApexCraftSpriteName: (sprites) =>
+        this.resolveApexCraftSpriteName(sprites),
+      bumpDrawCall: () => {
+        this.frameDrawCalls++;
+      },
+    };
+  }
+
+  private drawPauseLinesPass(
+    gl: WebGL2RenderingContext,
+    color: RgbaTuple,
+  ): void {
+    if (!this.pauseLinesProg) return;
+    gl.useProgram(this.pauseLinesProg.program);
+    gl.bindVertexArray(this.fullscreenVao);
+    this.setUniform4f(
+      gl,
+      this.pauseLinesProg,
+      'uLineColor',
+      color[0],
+      color[1],
+      color[2],
+      color[3],
+    );
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    this.frameDrawCalls++;
+    gl.bindVertexArray(null);
+  }
+
   private collectWorldScene(
     snapshot: SimSnapshot,
     prevSnapshot: SimSnapshot,
@@ -1027,7 +1314,9 @@ export class WebGL2Renderer implements IRenderer {
     elapsedSec: number,
     camX: number,
     camY: number,
-    mainOut: SpriteInstance[],
+    skyBgOut: SpriteInstance[],
+    oceanLineOut: SpriteInstance[],
+    foregroundOut: SpriteInstance[],
     underwaterOut: SpriteInstance[],
     reflectOut: SpriteInstance[],
     solidWorldOut: number[],
@@ -1035,46 +1324,109 @@ export class WebGL2Renderer implements IRenderer {
     const sprites = this.vault?.data.atlases.sprites.sprites ?? {};
     const tickTime = snapshot.tick + alpha;
 
-    // 1. Space clouds ceiling at y = spaceLevel
+    // 1. Space clouds ceiling at y = spaceLevel + solid space_clouds_blank upper bank above it
+    // Matches reference layering: rear parallax bank (f2 idx6 pale haze in Normal, f1 in SFMT) +
+    // foreground bright crest (f0 idx7 pure white, +300px offset) + solid white space_clouds_blank cap.
     const spaceClouds = sprites['space_clouds'];
-    if (spaceClouds && camY - 260 <= snapshot.spaceLevel + 120) {
-      const step = Math.max(200, spaceClouds.size[0]);
-      const startX = Math.floor((camX - 600) / step) * step;
-      for (let tx = startX; tx <= camX + 600; tx += step) {
-        mainOut.push({
-          entry: spaceClouds,
-          frame: Math.floor(tickTime * 0.08),
-          x: tx,
-          y: snapshot.spaceLevel,
-          angleRad: 0,
-          scaleX: 1,
-          scaleY: 1,
-          depth: 0.9,
-          flash: 0,
-          clipSea: true,
-        });
+    const spaceCloudsBlank = sprites['space_clouds_blank'];
+    if (
+      (spaceClouds || spaceCloudsBlank) &&
+      camY - VIRTUAL_HEIGHT * 0.5 <= snapshot.spaceLevel + 180
+    ) {
+      const step = Math.max(
+        200,
+        spaceClouds?.size[0] ?? spaceCloudsBlank?.size[0] ?? 600,
+      );
+      const camTop = camY - VIRTUAL_HEIGHT * 0.5;
+      const spaceFrameCount = Math.max(1, spaceClouds?.subs.length ?? 1);
+
+      // Rear space cloud haze (0.5x X parallax, f2 = idx 6 pale haze; never draws crimson f1 in Normal!)
+      if (spaceClouds && spaceFrameCount >= 2) {
+        const rearFrame =
+          snapshot.mode === 'sfmt' ? 1 : Math.min(2, spaceFrameCount - 1);
+        const rearParallaxX = camX * 0.5;
+        const rearMinTile = Math.floor(
+          (camX - rearParallaxX - VIRTUAL_WIDTH) / step,
+        );
+        const rearMaxTile = Math.ceil(
+          (camX - rearParallaxX + VIRTUAL_WIDTH) / step,
+        );
+        const rearY = snapshot.spaceLevel - 30 - camTop * 0.025;
+        for (let tile = rearMinTile; tile <= rearMaxTile; tile++) {
+          skyBgOut.push({
+            entry: spaceClouds,
+            frame: rearFrame,
+            x: rearParallaxX + tile * step,
+            y: rearY,
+            angleRad: 0,
+            scaleX: 1,
+            scaleY: 1,
+            depth: 0.92,
+            flash: 0,
+            clipSea: true,
+          });
+        }
+      }
+
+      // Solid white upper space cap + crisp bright white foreground cloud bank (f0, +300px offset)
+      const minTile = Math.floor((camX - VIRTUAL_WIDTH - 300) / step);
+      const maxTile = Math.ceil((camX + VIRTUAL_WIDTH + 300) / step);
+      const capY = snapshot.spaceLevel - 20;
+
+      for (let tile = minTile; tile <= maxTile; tile++) {
+        const tx = tile * step;
+        if (spaceCloudsBlank) {
+          skyBgOut.push({
+            entry: spaceCloudsBlank,
+            frame: 0,
+            x: tx,
+            y: capY,
+            angleRad: 0,
+            scaleX: step / Math.max(1, spaceCloudsBlank.size[0]),
+            scaleY: 400,
+            depth: 0.9,
+            flash: 0,
+            clipSea: true,
+          });
+        }
+        if (spaceClouds) {
+          skyBgOut.push({
+            entry: spaceClouds,
+            frame: 0,
+            x: tx + 300,
+            y: capY,
+            angleRad: 0,
+            scaleX: 1,
+            scaleY: 1,
+            depth: 0.88,
+            flash: 0,
+            clipSea: true,
+          });
+        }
       }
     }
 
-    // 2. Midground parallax clouds (index 6)
+    // 2. Lush multi-altitude midground parallax clouds (index 6)
     const paraClouds = sprites['parallax_clouds'];
     if (paraClouds) {
-      const parallaxX = camX * 0.65;
-      const cellW = 260;
-      const minBand = Math.floor((camX - parallaxX - 420) / cellW);
-      const maxBand = Math.ceil((camX - parallaxX + 420) / cellW);
-      const yRows = [-220, -480, -760, -1040];
+      const parallaxX = camX * 0.62;
+      const cellW = 190;
+      const minBand = Math.floor((camX - parallaxX - 460) / cellW);
+      const maxBand = Math.ceil((camX - parallaxX + 460) / cellW);
+      const yRows = [-125, -295, -495, -715, -945, -1155];
+      const paraFrameCount = Math.max(1, paraClouds.subs.length);
       for (let r = 0; r < yRows.length; r++) {
         const bandY = yRows[r] ?? -300;
         if (Math.abs(bandY - camY) > 360) continue;
         for (let b = minBand; b <= maxBand; b++) {
-          const hash = ((b * 73856093) ^ (r * 19349663)) & 0x7fffffff;
-          const cx =
-            parallaxX + b * cellW + (hash % 90) - elapsedSec * (4 + (r % 3));
-          const cy = bandY + ((hash >> 4) % 50) - 25;
-          mainOut.push({
+          const hash = ((b * 73856093) ^ (r * 19349663) ^ 0x5bd1e995) & 0x7fffffff;
+          if ((hash % 11) === 0) continue; // subtle open pockets
+          const drift = elapsedSec * (3.2 + (r % 3) * 1.1);
+          const cx = parallaxX + b * cellW + (hash % 115) - 35 - drift;
+          const cy = bandY + ((hash >> 5) % 84) - 42;
+          skyBgOut.push({
             entry: paraClouds,
-            frame: hash % Math.max(1, paraClouds.subs.length),
+            frame: hash % paraFrameCount,
             x: cx,
             y: cy,
             angleRad: 0,
@@ -1084,26 +1436,60 @@ export class WebGL2Renderer implements IRenderer {
             flash: 0,
             clipSea: true,
           });
+          // Natural cluster companion puff on ~45% of cells
+          if ((hash & 7) < 3) {
+            skyBgOut.push({
+              entry: paraClouds,
+              frame: (hash + 2) % paraFrameCount,
+              x: cx + 44 + ((hash >> 9) % 36),
+              y: cy + ((hash >> 12) % 30) - 15,
+              angleRad: 0,
+              scaleX: (hash & 2) === 0 ? 1 : -1,
+              scaleY: 1,
+              depth: 0.848,
+              flash: 0,
+              clipSea: true,
+            });
+          }
         }
       }
     }
 
-    // 3. Distant parallax background props (bg_boat, bg_jet, bg_sub, bg_blimp)
-    for (const p of snapshot.parallax) {
+    // 3. Distant parallax background props (bg_boat, bg_sub, bg_blimp, bg_jet + bg_jet_trail, bg_plane, bg_ace)
+    const bgJetTrailEntry = sprites['bg_jet_trail'];
+    for (const rawP of snapshot.parallax) {
+      const p = rawP as ParallaxVisualExtras;
       const entry = sprites[p.spriteName];
-      const py = p.kind.includes('boat') || p.kind.includes('sub')
-        ? Math.min(p.y, -1)
-        : p.y;
+      const py = p.y;
+      const pAngleRad = (p.angleDeg ?? 0) * DEG_TO_RAD;
+      const pScaleX = p.reversed ? -1 : 1;
+      const pDepth = clamp(0.79 + (p.depth || 8) * 0.003, 0.78, 0.84);
+
+      if (p.spriteName === 'bg_jet' && bgJetTrailEntry) {
+        skyBgOut.push({
+          entry: bgJetTrailEntry,
+          frame: 0,
+          x: p.x,
+          y: py,
+          angleRad: pAngleRad,
+          scaleX: pScaleX,
+          scaleY: 1,
+          depth: pDepth + 0.005,
+          flash: 0,
+          clipSea: true,
+        });
+      }
+
       if (entry) {
-        mainOut.push({
+        skyBgOut.push({
           entry,
           frame: p.frame,
           x: p.x,
           y: py,
-          angleRad: 0,
-          scaleX: p.reversed ? -1 : 1,
+          angleRad: pAngleRad,
+          scaleX: pScaleX,
           scaleY: 1,
-          depth: 0.8,
+          depth: pDepth,
           flash: 0,
           clipSea: true,
         });
@@ -1114,60 +1500,65 @@ export class WebGL2Renderer implements IRenderer {
           py,
           28,
           10,
-          0,
+          pAngleRad,
           this.activePalette.colors[4],
         );
       }
     }
 
-    // 4. Foreground clouds (index 7, reflected as index 6)
+    // 4. Lush billowing foreground cumulus clouds (352x192, index 7, reflected as index 6)
     const fgClouds = sprites['clouds'];
     if (fgClouds) {
-      const parallaxX = camX * 0.35;
-      const cellW = 420;
-      const minBand = Math.floor((camX - parallaxX - 500) / cellW);
-      const maxBand = Math.ceil((camX - parallaxX + 500) / cellW);
-      const yRows = [-160, -420, -720, -1000];
+      const parallaxX = camX * 0.32;
+      const cellW = 310;
+      const minBand = Math.floor((camX - parallaxX - 580) / cellW);
+      const maxBand = Math.ceil((camX - parallaxX + 580) / cellW);
+      const yRows = [-145, -365, -605, -855, -1095];
+      const fgFrameCount = Math.max(1, fgClouds.subs.length);
       for (let r = 0; r < yRows.length; r++) {
         const bandY = yRows[r] ?? -180;
-        if (Math.abs(bandY - camY) > 380) continue;
+        if (Math.abs(bandY - camY) > 420) continue;
         for (let b = minBand; b <= maxBand; b++) {
-          const hash = ((b * 83492791) ^ (r * 297121507)) & 0x7fffffff;
-          const cx =
-            parallaxX + b * cellW + (hash % 120) - elapsedSec * (8 + r * 2);
-          const cy = bandY + ((hash >> 5) % 60) - 30;
+          const hash = ((b * 83492791) ^ (r * 297121507) ^ 0x1b873593) & 0x7fffffff;
+          // Open air pockets higher up while keeping horizon cloudscape rich
+          if (r > 0 && (hash % 7) === 0) continue;
+          const drift = elapsedSec * (6.5 + r * 1.6);
+          const cx = parallaxX + b * cellW + (hash % 150) - 50 - drift;
+          const cy = bandY + ((hash >> 6) % 96) - 48;
           const sx = (hash & 1) === 0 ? 1 : -1;
           const inst: SpriteInstance = {
             entry: fgClouds,
-            frame: hash % Math.max(1, fgClouds.subs.length),
+            frame: hash % fgFrameCount,
             x: cx,
             y: cy,
             angleRad: 0,
             scaleX: sx,
             scaleY: 1,
-            depth: 0.75,
+            depth: 0.75 + (r % 2) * 0.002,
             flash: 0,
             clipSea: true,
           };
-          mainOut.push(inst);
-          if (cy > -260) {
+          skyBgOut.push(inst);
+          if (cy > -380) {
             reflectOut.push(inst);
           }
         }
       }
     }
 
-    // 5. Ocean horizon line at y = seaLevel (0)
+    // 5. Ocean horizon line at y = seaLevel (0), drawn UNCLIPPED across full width with gentle wave crest scroll
     const oceanLine = sprites['ocean_line'];
     if (oceanLine) {
       const w = Math.max(200, oceanLine.size[0]);
-      const startX = Math.floor((camX - 450) / w) * w;
-      for (let tx = startX; tx <= camX + 600; tx += w) {
-        mainOut.push({
+      const waveShift = (((elapsedSec * 12) % w) + w) % w;
+      const startX =
+        Math.floor((camX - VIRTUAL_WIDTH - waveShift) / w) * w + waveShift;
+      for (let tx = startX; tx <= camX + VIRTUAL_WIDTH + w; tx += w) {
+        oceanLineOut.push({
           entry: oceanLine,
           frame: Math.floor(tickTime * 0.15),
           x: tx + w * 0.5,
-          y: snapshot.seaLevel - 0.5,
+          y: snapshot.seaLevel,
           angleRad: 0,
           scaleX: 1,
           scaleY: 1,
@@ -1196,7 +1587,7 @@ export class WebGL2Renderer implements IRenderer {
         0.55,
         true,
         sprites,
-        mainOut,
+        foregroundOut,
         reflectOut,
         solidWorldOut,
       );
@@ -1214,7 +1605,7 @@ export class WebGL2Renderer implements IRenderer {
         0.52,
         snapshot.launchSubY <= snapshot.seaLevel + 8,
         sprites,
-        mainOut,
+        foregroundOut,
         reflectOut,
         solidWorldOut,
       );
@@ -1238,7 +1629,7 @@ export class WebGL2Renderer implements IRenderer {
         alpha,
         snapshot.tick,
         sprites,
-        mainOut,
+        foregroundOut,
         underwaterOut,
         reflectOut,
         solidWorldOut,
@@ -1253,7 +1644,7 @@ export class WebGL2Renderer implements IRenderer {
         false,
         snapshot.activeMods?.multiplayerMode ?? 'solo',
         sprites,
-        mainOut,
+        foregroundOut,
         underwaterOut,
         reflectOut,
         solidWorldOut,
@@ -1266,7 +1657,7 @@ export class WebGL2Renderer implements IRenderer {
         true,
         snapshot.activeMods?.multiplayerMode ?? 'coop2p',
         sprites,
-        mainOut,
+        foregroundOut,
         underwaterOut,
         reflectOut,
         solidWorldOut,
@@ -1286,19 +1677,19 @@ export class WebGL2Renderer implements IRenderer {
         alpha,
         snapshot.tick,
         sprites,
-        mainOut,
+        foregroundOut,
         underwaterOut,
         reflectOut,
         solidWorldOut,
       );
     }
 
-    // 10. Particles & explosions
+    // 10. Particles, muzzle flashes, wakes, wrecks & explosions
     for (const part of snapshot.particles) {
       this.collectParticleSprites(
         part,
         sprites,
-        mainOut,
+        foregroundOut,
         underwaterOut,
         reflectOut,
         solidWorldOut,
@@ -1399,8 +1790,21 @@ export class WebGL2Renderer implements IRenderer {
     }
   }
 
+  private computeEnemyGunRecoilFrame(enemy: EnemyVisualExtras): number {
+    if (typeof enemy.gunAnimFrame === 'number') {
+      return clamp(Math.floor(enemy.gunAnimFrame), 0, 5);
+    }
+    if (typeof enemy.gunRecoilTicks === 'number' && enemy.gunRecoilTicks > 0) {
+      return clamp(Math.ceil((enemy.gunRecoilTicks / 10) * 5), 1, 5);
+    }
+    if (enemy.salvoRemaining > 0 && enemy.salvoCooldown <= 5) {
+      return clamp(6 - Math.max(1, enemy.salvoCooldown), 1, 5);
+    }
+    return 0;
+  }
+
   private collectEnemySprites(
-    enemy: EnemyEntity,
+    enemyRaw: EnemyEntity,
     prevEnemy: EnemyEntity | undefined,
     alpha: number,
     tick: number,
@@ -1410,6 +1814,7 @@ export class WebGL2Renderer implements IRenderer {
     reflectOut: SpriteInstance[],
     solidWorldOut: number[],
   ): void {
+    const enemy = enemyRaw as EnemyVisualExtras;
     const canInterp =
       prevEnemy &&
       Math.hypot(enemy.x - prevEnemy.x, enemy.y - prevEnemy.y) < 120;
@@ -1431,6 +1836,7 @@ export class WebGL2Renderer implements IRenderer {
     const isSub = enemy.kind === 'Submarine' || enemy.kind === 'AceMarine';
     const targetList = isSub && ey > -18 ? underwaterOut : mainOut;
     const clipSea = !(isSub && ey > -18);
+    const gunFrame = this.computeEnemyGunRecoilFrame(enemy);
 
     const pushOrFallback = (
       spriteName: string | undefined,
@@ -1443,6 +1849,7 @@ export class WebGL2Renderer implements IRenderer {
       color: RgbaTuple,
       scaleX = 1,
       scaleY = 1,
+      depth = 0.45,
     ): void => {
       const entry = spriteName ? sprites[spriteName] : undefined;
       if (entry) {
@@ -1454,14 +1861,14 @@ export class WebGL2Renderer implements IRenderer {
           angleRad: rotRad,
           scaleX,
           scaleY,
-          depth: 0.45,
+          depth,
           flash,
           clipSea,
         };
         targetList.push(inst);
-        if (py < 4 && !isSub) {
+        if (!isSub && py < 48) {
           reflectOut.push(inst);
-        } else if (isSub && py <= 0) {
+        } else if (isSub && py < 36) {
           reflectOut.push(inst);
         }
       } else {
@@ -1480,10 +1887,11 @@ export class WebGL2Renderer implements IRenderer {
     if (enemy.kind === 'Blimp' || enemy.kind === 'SkyCarrier') {
       const isCarrier = enemy.kind === 'SkyCarrier';
       const scaleMult = 1.0;
-      const bodyName =
-        enemy.state === 'sinking' || enemy.state === 'falling'
-          ? 'blimp_die'
-          : enemy.spriteMain || 'blimp';
+      // Note: live spawning Blimps descend from space with state==='falling'; keep blimp + blimp_anim active!
+      const isSinking = enemy.state === 'sinking';
+      const bodyName = isSinking
+        ? 'blimp_die'
+        : enemy.spriteMain || 'blimp';
       pushOrFallback(
         bodyName,
         ex,
@@ -1495,9 +1903,10 @@ export class WebGL2Renderer implements IRenderer {
         this.activePalette.colors[2],
         hullTransform.scaleX * scaleMult,
         hullTransform.scaleY * scaleMult,
+        0.48,
       );
       const prop = sprites['blimp_anim'];
-      if (prop && enemy.state !== 'sinking' && enemy.state !== 'falling') {
+      if (prop && !isSinking) {
         const inst: SpriteInstance = {
           entry: prop,
           frame: tick >> 1,
@@ -1506,7 +1915,7 @@ export class WebGL2Renderer implements IRenderer {
           angleRad: hullTransform.angleRad,
           scaleX: hullTransform.scaleX * scaleMult,
           scaleY: hullTransform.scaleY * scaleMult,
-          depth: 0.42,
+          depth: 0.47,
           flash,
           clipSea: true,
         };
@@ -1514,39 +1923,48 @@ export class WebGL2Renderer implements IRenderer {
         reflectOut.push(inst);
       }
       if (isCarrier) {
-        if (enemy.state !== 'sinking' && enemy.state !== 'falling') {
+        if (!isSinking) {
           const gunName = enemy.spriteGun || 'big_boat_gun';
           pushOrFallback(
             gunName,
             ex - 90 * hullTransform.scaleX,
             ey + 74,
             enemy.gunAngleDeg * DEG_TO_RAD,
-            0,
+            gunFrame,
             26,
             7,
             this.activePalette.colors[2],
+            1,
+            1,
+            0.46,
           );
           pushOrFallback(
             gunName,
             ex + 90 * hullTransform.scaleX,
             ey + 74,
             enemy.gunAngleDeg * DEG_TO_RAD,
-            0,
+            gunFrame,
             26,
             7,
             this.activePalette.colors[2],
+            1,
+            1,
+            0.46,
           );
         }
-      } else {
+      } else if (!isSinking) {
         pushOrFallback(
           enemy.spriteGun || 'big_boat_gun',
           ex,
           ey + 68,
           enemy.gunAngleDeg * DEG_TO_RAD,
-          0,
+          gunFrame,
           24,
           6,
           this.activePalette.colors[2],
+          1,
+          1,
+          0.46,
         );
       }
       return;
@@ -1577,6 +1995,7 @@ export class WebGL2Renderer implements IRenderer {
         this.activePalette.colors[2],
         hullTransform.scaleX * scaleMult,
         hullTransform.scaleY * scaleMult,
+        0.48,
       );
 
       if (enemy.state !== 'sinking') {
@@ -1590,24 +2009,26 @@ export class WebGL2Renderer implements IRenderer {
             ex - turretSpread * hullTransform.scaleX,
             turretY,
             enemy.gunAngleDeg * DEG_TO_RAD,
-            0,
+            gunFrame,
             24,
             6,
             this.activePalette.colors[2],
             isDread ? 1.2 : 1,
             isDread ? 1.2 : 1,
+            0.46,
           );
           pushOrFallback(
             gunName,
             ex + turretSpread * hullTransform.scaleX,
             turretY,
             enemy.gunAngleDeg * DEG_TO_RAD,
-            0,
+            gunFrame,
             24,
             6,
             this.activePalette.colors[2],
             isDread ? 1.2 : 1,
             isDread ? 1.2 : 1,
+            0.46,
           );
         } else {
           pushOrFallback(
@@ -1615,10 +2036,13 @@ export class WebGL2Renderer implements IRenderer {
             ex + 3 * hullTransform.scaleX,
             ey - 14,
             enemy.gunAngleDeg * DEG_TO_RAD,
-            0,
+            gunFrame,
             14,
             4,
             this.activePalette.colors[2],
+            1,
+            1,
+            0.46,
           );
         }
       }
@@ -1644,6 +2068,7 @@ export class WebGL2Renderer implements IRenderer {
         this.activePalette.colors[2],
         hullTransform.scaleX,
         hullTransform.scaleY,
+        0.48,
       );
       if (isAce && enemy.state !== 'sinking') {
         pushOrFallback(
@@ -1651,10 +2076,13 @@ export class WebGL2Renderer implements IRenderer {
           ex,
           ey - 20,
           enemy.gunAngleDeg * DEG_TO_RAD,
-          0,
+          gunFrame,
           24,
           6,
           this.activePalette.colors[2],
+          1,
+          1,
+          0.46,
         );
       }
       return;
@@ -1670,6 +2098,9 @@ export class WebGL2Renderer implements IRenderer {
         20,
         8,
         this.activePalette.colors[2],
+        1,
+        1,
+        0.43,
       );
       return;
     }
@@ -1679,30 +2110,7 @@ export class WebGL2Renderer implements IRenderer {
     const bodyName = crash ? 'jet_body_crash' : enemy.spriteMain;
     const wingsName = crash ? 'jet_wings_crash' : enemy.spriteSecondary;
 
-    pushOrFallback(
-      bodyName,
-      ex,
-      ey,
-      angleRad,
-      0,
-      enemy.width || 22,
-      enemy.height || 14,
-      this.activePalette.colors[2],
-    );
-    if (wingsName) {
-      pushOrFallback(
-        wingsName,
-        ex,
-        ey,
-        angleRad,
-        0,
-        enemy.width || 22,
-        enemy.height || 22,
-        this.activePalette.colors[2],
-      );
-    }
-
-    // Jet / Ace thruster accent
+    // Jet / Ace thruster flame behind aircraft body
     if (enemy.kind === 'Jet' && enemy.state !== 'falling') {
       const jetBoost = sprites['fx_jetboost'];
       if (jetBoost) {
@@ -1714,31 +2122,66 @@ export class WebGL2Renderer implements IRenderer {
           angleRad,
           scaleX: 1,
           scaleY: 1,
-          depth: 0.48,
+          depth: 0.45,
           flash: 0,
           clipSea: true,
         };
         mainOut.push(inst);
         reflectOut.push(inst);
       }
-    } else if (enemy.kind === 'Ace' || enemy.kind === 'LaserAce') {
-      const aceBoost = sprites['fx_aceboost_loop'];
+    } else if (
+      (enemy.kind === 'Ace' || enemy.kind === 'LaserAce') &&
+      (enemy.boosting ?? true)
+    ) {
+      const aceBoostStart = sprites['fx_aceboost_start'];
+      const aceBoostLoop = sprites['fx_aceboost_loop'];
+      const useStart = Boolean(aceBoostStart) && enemy.aiTimer < 8;
+      const aceBoost = useStart ? aceBoostStart : aceBoostLoop;
       if (aceBoost) {
         const inst: SpriteInstance = {
           entry: aceBoost,
-          frame: tick >> 1,
+          frame: useStart ? enemy.aiTimer >> 1 : tick >> 1,
           x: ex,
           y: ey,
           angleRad,
           scaleX: 1,
           scaleY: 1,
-          depth: 0.48,
+          depth: 0.45,
           flash: 0,
           clipSea: true,
         };
         mainOut.push(inst);
         reflectOut.push(inst);
       }
+    }
+
+    pushOrFallback(
+      bodyName,
+      ex,
+      ey,
+      angleRad,
+      0,
+      enemy.width || 22,
+      enemy.height || 14,
+      this.activePalette.colors[2],
+      1,
+      1,
+      0.44,
+    );
+    if (wingsName) {
+      pushOrFallback(
+        wingsName,
+        ex,
+        ey,
+        angleRad,
+        0,
+        enemy.width || 22,
+        enemy.height || 22,
+        this.activePalette.colors[2],
+        1,
+        1,
+        0.43,
+      );
     }
 
     // LaserAce 6-frame laser_charge telegraph before beam fires
@@ -1766,7 +2209,7 @@ export class WebGL2Renderer implements IRenderer {
           clipSea: true,
         };
         mainOut.push(inst);
-        if (ey < 4) {
+        if (ey < 16) {
           reflectOut.push(inst);
         }
       } else {
@@ -1782,7 +2225,7 @@ export class WebGL2Renderer implements IRenderer {
       }
     }
 
-    // LaserAce active laser beam
+    // LaserAce active laser beam (6-frame animated projectile_Elaser)
     if (enemy.kind === 'LaserAce' && enemy.laserActive) {
       const len = Math.max(40, enemy.laserLength || 520);
       const laserAngleRad = enemy.gunAngleDeg * DEG_TO_RAD;
@@ -1792,7 +2235,7 @@ export class WebGL2Renderer implements IRenderer {
       if (elaser) {
         const inst: SpriteInstance = {
           entry: elaser,
-          frame: tick,
+          frame: tick >> 1,
           x: midX,
           y: midY,
           angleRad: laserAngleRad,
@@ -1876,17 +2319,26 @@ export class WebGL2Renderer implements IRenderer {
       }
     };
 
-    // Boost / Hover flame behind engine
+    // Boost / Hover flame behind engine (exact booststart -> boostloop transitions)
     if (p.boosting) {
-      const boostSprite =
-        p.boostAnimFrame < 4 && p.engineSpec.booststartsprite
-          ? p.engineSpec.booststartsprite
-          : p.engineSpec.boostloopsprite || 'fx_boostloop';
+      const startSpriteName = p.engineSpec.booststartsprite;
+      const startEntry = startSpriteName ? sprites[startSpriteName] : undefined;
+      const startFrameCount = startEntry
+        ? Math.max(1, startEntry.subs.length)
+        : 4;
+      const boostStep = Math.floor(p.boostAnimFrame * 0.5);
+      const useStart = Boolean(startEntry) && boostStep < startFrameCount;
+      const boostSprite = useStart
+        ? startSpriteName
+        : p.engineSpec.boostloopsprite || 'fx_boostloop';
+      const boostFrame = useStart
+        ? boostStep
+        : Math.max(0, boostStep - startFrameCount);
       const boostEntry = sprites[boostSprite];
       if (boostEntry) {
         const inst: SpriteInstance = {
           entry: boostEntry,
-          frame: p.boostAnimFrame,
+          frame: boostFrame,
           x: p.x,
           y: p.y,
           angleRad: rad,
@@ -1897,7 +2349,7 @@ export class WebGL2Renderer implements IRenderer {
           clipSea,
         };
         target.push(inst);
-        if (p.y < 10) reflectOut.push(inst);
+        if (p.y < 16) reflectOut.push(inst);
       } else {
         const tailX = p.x - Math.cos(rad) * 16;
         const tailY = p.y - Math.sin(rad) * 16;
@@ -1927,6 +2379,7 @@ export class WebGL2Renderer implements IRenderer {
           clipSea,
         };
         target.push(inst);
+        if (p.y < 16) reflectOut.push(inst);
       }
     }
 
@@ -1971,13 +2424,18 @@ export class WebGL2Renderer implements IRenderer {
         'wings_original',
       ];
 
-      pushPart(
-        p.engineSpec.sprite || engineFallbacks[p.loadout.engine],
-        22,
-        12,
-        0,
-        0.32,
-      );
+      const engineSpriteName =
+        p.engineSpec.sprite || engineFallbacks[p.loadout.engine];
+      const engineEntry = engineSpriteName
+        ? sprites[engineSpriteName]
+        : undefined;
+      // Animate multi-frame engines (6-frame spinning underwater propeller!)
+      const engineFrame =
+        engineEntry && engineEntry.subs.length > 1
+          ? Math.floor(tick * (p.boosting ? 0.65 : 0.25))
+          : 0;
+
+      pushPart(engineSpriteName, 22, 12, engineFrame, 0.32);
       pushPart(
         p.bodySpec.sprite || bodyFallbacks[p.loadout.body],
         24,
@@ -2223,18 +2681,18 @@ export class WebGL2Renderer implements IRenderer {
       if (entry) {
         const inst: SpriteInstance = {
           entry,
-          frame: tick,
+          frame: proj.kind === 'elaser' ? tick >> 1 : tick,
           x: midX,
           y: midY,
           angleRad: rad,
           scaleX: len / Math.max(1, entry.size[0]),
           scaleY: 1,
-          depth: 0.36,
+          depth: 0.25,
           flash: 0,
           clipSea,
         };
         target.push(inst);
-        if (!isUnderwater) reflectOut.push(inst);
+        reflectOut.push(inst);
       } else {
         this.pushWorldFallbackRect(
           solidWorldOut,
@@ -2269,15 +2727,27 @@ export class WebGL2Renderer implements IRenderer {
 
     const entry = sprites[spriteMap[proj.kind]];
     if (entry) {
+      const ageTicks = Math.max(0, proj.maxTtl - proj.ttl);
+      // Reference parity: projectile_bullet renders f0 (28x28 muzzle orb) ONLY on spawn tick, then locks to f1 (22x22)
+      const projFrame =
+        proj.kind === 'bullet'
+          ? ageTicks <= 1
+            ? 0
+            : 1
+          : proj.kind === 'ebullet'
+            ? (tick >> 1) + proj.id
+            : tick;
+      // Enemy projectiles sort strictly in front of player fire & explosions so incoming threats stay 100% readable
+      const projDepth = proj.owner === 'enemy' ? 0.13 : 0.24;
       const inst: SpriteInstance = {
         entry,
-        frame: tick,
+        frame: projFrame,
         x: px,
         y: py,
         angleRad: rad,
         scaleX: 1,
         scaleY: 1,
-        depth: 0.37,
+        depth: projDepth,
         flash: 0,
         clipSea,
       };
@@ -2293,6 +2763,53 @@ export class WebGL2Renderer implements IRenderer {
     }
   }
 
+  private resolveParticleDepth(part: ParticleEntity): number {
+    const kind = part.kind;
+    if (kind.startsWith('wreck_')) return 0.41;
+    if (
+      kind === 'smoke' ||
+      kind === 'smoke_long' ||
+      kind === 'poof' ||
+      kind === 'jet_trail' ||
+      kind === 'missiletrail' ||
+      kind === 'watertrail' ||
+      kind === 'boattrail' ||
+      kind === 'bigboattrail' ||
+      kind === 'planepart' ||
+      kind === 'drip' ||
+      kind === 'boosthover_fade'
+    ) {
+      // Strictly behind player (0.28..0.34) so smoke never buries the aircraft silhouette!
+      return 0.4;
+    }
+    if (kind === 'laser_fade') return 0.26;
+    if (
+      kind.includes('Flash') ||
+      kind.includes('flash') ||
+      kind === 'bigboostcircle' ||
+      kind === 'boostend' ||
+      kind === 'superboostend' ||
+      kind === 'ace_boostend'
+    ) {
+      return 0.22;
+    }
+    if (
+      kind.includes('splash') ||
+      kind === 'ebullet_fade' ||
+      kind === 'spreadfade' ||
+      kind === 'plasma_hit'
+    ) {
+      return 0.18;
+    }
+    if (part.isExplosion || kind.startsWith('explode_') || kind === 'PartFX') {
+      return 0.14;
+    }
+    if (kind === 'bullet_hit' || kind === 'player_hit' || kind === 'repair') {
+      return 0.12;
+    }
+    return clamp(0.24 + part.depth * 0.015, 0.12, 0.42);
+  }
+
   private collectParticleSprites(
     part: ParticleEntity,
     sprites: Record<string, SpriteEntry>,
@@ -2302,24 +2819,42 @@ export class WebGL2Renderer implements IRenderer {
     solidWorldOut: number[],
   ): void {
     const entry = sprites[part.spriteName];
-    const target = part.allowBelowSea ? underwaterOut : mainOut;
-    const clipSea = !part.allowBelowSea;
+    const isWreck = part.kind.startsWith('wreck_');
+    const target = part.allowBelowSea && part.y > 0 && !isWreck ? underwaterOut : mainOut;
+    const clipSea = isWreck ? !part.allowBelowSea : !(part.allowBelowSea && part.y > 0);
 
     if (entry) {
+      const rad = part.angleDeg * DEG_TO_RAD;
+      let px = part.x;
+      let py = part.y;
+      let sx = part.scaleX || 1;
+      const sy = part.scaleY || 1;
+
+      // Backward-compat laser_fade beam stretch when scaleX wasn't pre-stretched by sim
+      if (part.spriteName === 'laser_fade' && Math.abs(sx) <= 1.5) {
+        const len = 520;
+        px = part.x + Math.cos(rad) * (len * 0.5);
+        py = part.y + Math.sin(rad) * (len * 0.5);
+        sx = len / Math.max(1, entry.size[0]);
+      }
+
       const inst: SpriteInstance = {
         entry,
         frame: Math.floor(part.frame),
-        x: part.x,
-        y: part.y,
-        angleRad: part.angleDeg * DEG_TO_RAD,
-        scaleX: part.scaleX || 1,
-        scaleY: part.scaleY || 1,
-        depth: clamp(0.5 + part.depth * 0.001, 0.05, 0.95),
+        x: px,
+        y: py,
+        angleRad: rad,
+        scaleX: sx,
+        scaleY: sy,
+        depth: this.resolveParticleDepth(part),
         flash: 0,
         clipSea,
       };
       target.push(inst);
-      if (part.y < 8 && (part.isExplosion || part.kind.includes('splash'))) {
+
+      // Reflect all above-sea particles (flashes, smoke, splashes, explosions, wrecks, laser fades, sparks)
+      const reflectCutoffY = entry.center ? entry.center[1] + 24 : 32;
+      if (py < reflectCutoffY) {
         reflectOut.push(inst);
       }
     } else {
@@ -2355,32 +2890,45 @@ export class WebGL2Renderer implements IRenderer {
     ]);
 
     if (nukeEntry && nukeTex !== this.fallbackTexture && this.batchProg) {
-      const frame = Math.min(
-        Math.max(0, nukeEntry.subs.length - 1),
-        Math.floor(snapshot.player.nukeTicks * 0.5),
+      const frameCount = Math.max(1, nukeEntry.subs.length);
+      // nukeTicks counts DOWN from 60 -> 0; play 16-frame mushroom cloud FORWARD (0 -> 15)!
+      const elapsedNukeTicks = Math.max(0, 60 - snapshot.player.nukeTicks);
+      const frame = clamp(
+        Math.floor((elapsedNukeTicks / 52) * frameCount),
+        0,
+        frameCount - 1,
       );
-      const scale = Math.max(0.5, snapshot.player.nukeRadius / 180);
+      const scale = 0.9 + (frame / Math.max(1, frameCount - 1)) * 0.35;
+      const nukeInst: SpriteInstance = {
+        entry: nukeEntry,
+        frame,
+        x: snapshot.player.x,
+        y: snapshot.player.y,
+        angleRad: 0,
+        scaleX: scale,
+        scaleY: scale,
+        depth: 0.05,
+        flash: 0,
+        clipSea: false,
+      };
       this.drawSpriteBatch(
         gl,
         this.batchProg,
         nukeTex,
         worldProj,
-        [
-          {
-            entry: nukeEntry,
-            frame,
-            x: snapshot.player.x,
-            y: snapshot.player.y,
-            angleRad: 0,
-            scaleX: scale,
-            scaleY: scale,
-            depth: 0.1,
-            flash: 0,
-            clipSea: false,
-          },
-        ],
+        [nukeInst],
         false,
       );
+      if (this.batchReflectProg && snapshot.player.y < 180) {
+        this.drawSpriteBatch(
+          gl,
+          this.batchReflectProg,
+          nukeTex,
+          worldProj,
+          [nukeInst],
+          false,
+        );
+      }
       return;
     }
 
@@ -2974,22 +3522,12 @@ export class WebGL2Renderer implements IRenderer {
   private drawPausePass(gl: WebGL2RenderingContext): void {
     const pal = this.activePalette;
     const contrast = this.getMenuContrastColors(pal);
-    if (this.pauseLinesProg) {
-      gl.useProgram(this.pauseLinesProg.program);
-      gl.bindVertexArray(this.fullscreenVao);
-      this.setUniform4f(
-        gl,
-        this.pauseLinesProg,
-        'uLineColor',
-        contrast.panelDark[0],
-        contrast.panelDark[1],
-        contrast.panelDark[2],
-        0.45,
-      );
-      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-      this.frameDrawCalls++;
-      gl.bindVertexArray(null);
-    }
+    this.drawPauseLinesPass(gl, [
+      contrast.panelDark[0],
+      contrast.panelDark[1],
+      contrast.panelDark[2],
+      0.45,
+    ]);
 
     this.solidVerts.length = 0;
     this.pushSolidRect(170, 158, 260, 74, contrast.panelDark);
@@ -3202,7 +3740,7 @@ export class WebGL2Renderer implements IRenderer {
       hangarUi.loadout.body === 5 &&
       hangarUi.loadout.engine === 5;
 
-    const addPreviewPart = (name: string | undefined): void => {
+    const addPreviewPart = (name: string | undefined, frame = 0): void => {
       const entry = name ? sprites[name] : undefined;
       if (entry) {
         if (isApexCraft) {
@@ -3221,7 +3759,7 @@ export class WebGL2Renderer implements IRenderer {
           const bobY = Math.sin(elapsedSec * 2.4) * 2;
           previewSprites.push({
             entry,
-            frame: 0,
+            frame,
             x: previewCenterX - rotMidX,
             y: previewCenterY + bobY - rotMidY,
             angleRad: apexAngle,
@@ -3234,7 +3772,7 @@ export class WebGL2Renderer implements IRenderer {
         } else {
           previewSprites.push({
             entry,
-            frame: 0,
+            frame,
             x: previewX,
             y: previewY,
             angleRad: previewAngle,
@@ -3251,7 +3789,13 @@ export class WebGL2Renderer implements IRenderer {
     if (isApexCraft) {
       addPreviewPart(this.resolveApexCraftSpriteName(sprites));
     } else {
-      addPreviewPart(hangarUi.engineSpec.sprite || 'engine_original');
+      const previewEngineName = hangarUi.engineSpec.sprite || 'engine_original';
+      const previewEngineEntry = sprites[previewEngineName];
+      const previewEngineFrame =
+        previewEngineEntry && previewEngineEntry.subs.length > 1
+          ? Math.floor(elapsedSec * 18)
+          : 0;
+      addPreviewPart(previewEngineName, previewEngineFrame);
       addPreviewPart(hangarUi.bodySpec.sprite || 'body_original');
       addPreviewPart(hangarUi.weaponSpec.sprite || 'wings_original');
     }
@@ -4246,13 +4790,14 @@ export class WebGL2Renderer implements IRenderer {
 
   private drawBitmapText(
     gl: WebGL2RenderingContext,
-    font: { spec: BitmapFontSpec; tex: UploadedTexture },
+    font: ResolvedFont,
     text: string,
     x: number,
     y: number,
     scale: number,
     align: TextAlign,
     color: RgbaTuple,
+    cutoffY = VIRTUAL_HEIGHT + 100,
   ): void {
     if (!this.fontProg || text.length === 0) return;
     const verts = buildBitmapTextVertices(font.spec, text, x, y, scale, align);
@@ -4281,7 +4826,7 @@ export class WebGL2Renderer implements IRenderer {
       color[2],
       color[3],
     );
-    this.setUniform4f(gl, this.fontProg, 'cutoff', 0, VIRTUAL_HEIGHT + 100, 0, 0);
+    this.setUniform4f(gl, this.fontProg, 'cutoff', 0, cutoffY, 0, 0);
 
     gl.drawArrays(gl.TRIANGLES, 0, verts.length / 4);
     this.frameDrawCalls++;
@@ -4922,7 +5467,9 @@ export class WebGL2Renderer implements IRenderer {
     if (!ctx || !targetCtx || !this.canvas) return;
 
     const pal = this.activePalette;
-    ctx.fillStyle = rgbaToCss(pal.backcol);
+    const activeBackcol =
+      snapshot.mode === 'sfmt' ? pal.colors[3] : pal.backcol;
+    ctx.fillStyle = rgbaToCss(activeBackcol);
     ctx.fillRect(0, 0, VIRTUAL_WIDTH, VIRTUAL_HEIGHT);
 
     const seaScreenY = VIRTUAL_HEIGHT * 0.5 + (snapshot.seaLevel - camY);

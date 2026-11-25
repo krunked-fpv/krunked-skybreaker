@@ -13,6 +13,8 @@ export {
 } from './palettes';
 export {
   BATCH_FRAG,
+  BATCH_MENU_FRAG,
+  BATCH_MENU_VERT,
   BATCH_REFLECT_FRAG,
   BATCH_REFLECT_VERT,
   BATCH_VERT,
@@ -39,4 +41,17 @@ export {
   type BuiltinPixelFontData,
   type TextAlign,
 } from './pixel-font';
-export { WebGL2Renderer } from './renderer';
+export {
+  HANGAR_LAYOUT,
+  WebGL2Renderer,
+  layoutHangarDescription,
+  layoutMissionCardDescription,
+  registerDefaultHangarHudPass,
+  resolveEnemyRenderTransform,
+  wrapBitmapTextLines,
+  type HangarHudDrawContext,
+  type HangarHudPass,
+  type ResolvedFont,
+  type SpriteInstance,
+  type UploadedTexture,
+} from './renderer';
