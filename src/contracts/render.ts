@@ -4,6 +4,7 @@ import type {
   MissionProgressState,
   SimSnapshot,
 } from './sim';
+import type { Act2ModFlags, ShaderFxConfig } from './mod';
 import type {
   BodySpec,
   EngineSpec,
@@ -48,6 +49,30 @@ export interface PostShaderUniforms {
 
 export type HangarRow = 'weapon' | 'body' | 'engine' | 'palette' | 'mode' | 'launch';
 
+export type ModDeckRow =
+  | 'modprofile'
+  | 'modarsenal'
+  | 'modghost'
+  | 'moddaily'
+  | 'modshader_crt'
+  | 'modshader_bloom'
+  | 'modshader_warp'
+  | 'modshader_shock'
+  | 'modmulti'
+  | 'modp2bot'
+  | 'palettestudio'
+  | 'modback';
+
+export interface PaletteStudioState {
+  open: boolean;
+  /** 0 = backcol, 1..7 = colors[1..7] */
+  selectedSlot: number;
+  /** 0 = R, 1 = G, 2 = B */
+  selectedChannel: 0 | 1 | 2;
+  palette: PaletteDefinition;
+  savedCount: number;
+}
+
 export interface HangarUiState {
   activeRow: HangarRow;
   loadout: Loadout;
@@ -68,6 +93,16 @@ export interface HangarUiState {
   vaultSource: VaultSource;
   completedMissionsCount: number;
   totalMissionsCount: number;
+  /** Act II Hangar Mod Switcher & Palette Studio view state */
+  modDeckOpen?: boolean;
+  activeModRow?: ModDeckRow;
+  modFlags?: Act2ModFlags;
+  dailySeedId?: string;
+  dailyBestScore?: number;
+  pbGhostScore?: number;
+  paletteStudio?: PaletteStudioState | null;
+  p2Loadout?: Loadout;
+  p2PlaneName?: string;
 }
 
 export interface FrameMetrics {
@@ -88,6 +123,8 @@ export interface IRenderer {
   setPalette(paletteId: string): void;
   getPalette(): PaletteDefinition;
   listPalettes(): readonly PaletteDefinition[];
+  setShaderFx?(fx: ShaderFxConfig): void;
+  registerCustomPalette?(palette: PaletteDefinition): void;
   render(
     snapshot: SimSnapshot,
     prevSnapshot: SimSnapshot,

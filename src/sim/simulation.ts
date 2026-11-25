@@ -45,6 +45,8 @@ const ENEMY_SCORE_VALUES: Record<EnemyKind, number> = {
   AceMarine: 600,
   Missile: 10,
   Blimp: 1000,
+  Dreadnought: 1500,
+  SkyCarrier: 2000,
 };
 
 const ENEMY_DIMENSIONS: Record<EnemyKind, { w: number; h: number; r: number }> = {
@@ -58,6 +60,8 @@ const ENEMY_DIMENSIONS: Record<EnemyKind, { w: number; h: number; r: number }> =
   AceMarine: { w: 240, h: 36, r: 52 },
   Missile: { w: 24, h: 10, r: 10 },
   Blimp: { w: 550, h: 219, r: 105 },
+  Dreadnought: { w: 390, h: 66, r: 84 },
+  SkyCarrier: { w: 580, h: 220, r: 112 },
 };
 
 const COMBO_MAX = 20;

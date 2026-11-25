@@ -28,6 +28,43 @@ export const VANILLA_1TO1_PROFILE: Readonly<Vanilla1to1Profile> = Object.freeze(
   healthQuantizeBlockPx: 2,
 });
 
+export type CustomBossKind = 'Dreadnought' | 'SkyCarrier' | 'AceSquadron';
+export type MultiplayerMode = 'solo' | 'coop2p' | 'dogfight1v1';
+
+export interface ShaderFxConfig {
+  crtScanlines: boolean;
+  phosphorBloom: boolean;
+  speedWarp: boolean;
+  shockwaves: boolean;
+}
+
+export const DEFAULT_SHADER_FX: Readonly<ShaderFxConfig> = Object.freeze({
+  crtScanlines: false,
+  phosphorBloom: false,
+  speedWarp: false,
+  shockwaves: false,
+});
+
+export interface Act2ModFlags {
+  moddedEnabled: boolean;
+  arsenalBosses: boolean;
+  replayGhost: boolean;
+  dailySeed: boolean;
+  shaderFx: ShaderFxConfig;
+  multiplayerMode: MultiplayerMode;
+  p2BotEnabled: boolean;
+}
+
+export const DEFAULT_ACT2_MOD_FLAGS: Readonly<Act2ModFlags> = Object.freeze({
+  moddedEnabled: false,
+  arsenalBosses: false,
+  replayGhost: false,
+  dailySeed: false,
+  shaderFx: DEFAULT_SHADER_FX,
+  multiplayerMode: 'solo',
+  p2BotEnabled: true,
+});
+
 export interface FlightMutator {
   id: string;
   name: string;
@@ -42,7 +79,10 @@ export interface ModPackage {
   customEngines?: EngineSpec[];
   customBodies?: BodySpec[];
   customWeapons?: WeaponSpec[];
+  customBosses?: CustomBossKind[];
   customPalettes?: PaletteDefinition[];
+  shaderFx?: Partial<ShaderFxConfig>;
+  multiplayerMode?: MultiplayerMode;
 }
 
 export interface IModRegistry {
@@ -54,4 +94,10 @@ export interface IModRegistry {
   listMods(): readonly ModPackage[];
   getActiveFlightMutators(): readonly FlightMutator[];
   getCustomPalettes(): readonly PaletteDefinition[];
+  getCustomWeapons?(): readonly WeaponSpec[];
+  getCustomBodies?(): readonly BodySpec[];
+  getCustomEngines?(): readonly EngineSpec[];
+  getCustomBosses?(): readonly CustomBossKind[];
+  getEffectiveShaderFx?(): ShaderFxConfig;
+  getEffectiveMultiplayerMode?(): MultiplayerMode;
 }

@@ -1630,6 +1630,10 @@ export class WebGL2Renderer implements IRenderer {
       artillery: 'projectile_artillery_bullet',
       laser: 'projectile_laser',
       elaser: 'projectile_Elaser',
+      railslug: 'projectile_laser',
+      flakshell: 'projectile_plasmaball',
+      flakshard: 'projectile_spreadbullet',
+      lightningarc: 'projectile_laser',
     };
 
     const entry = sprites[spriteMap[proj.kind]];

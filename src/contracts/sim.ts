@@ -6,8 +6,9 @@ import type {
   WeaponSpec,
 } from './vault';
 import type { AudioCueId } from './audio';
+import type { Act2ModFlags } from './mod';
 
-export type PartIndex = 0 | 1 | 2 | 3 | 4 | 5;
+export type PartIndex = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 export type GameMode = 'normal' | 'sfmt';
 export type SimPhase = 'hangar' | 'launching' | 'playing' | 'dying' | 'gameover';
 
@@ -60,6 +61,12 @@ export interface PlayerState {
   bodySpec: BodySpec;
   weaponSpec: WeaponSpec;
   boostAnimFrame: number;
+  /** Act II Aegis shield availability */
+  shieldReady?: boolean;
+  /** Act II Aegis shield recharge ticks remaining */
+  shieldCooldown?: number;
+  /** Player slot identifier (1 = P1, 2 = P2 in Co-op/Dogfight) */
+  playerIndex?: 1 | 2;
 }
 
 export interface EnemyEntity {
@@ -96,6 +103,9 @@ export interface EnemyEntity {
   spriteGun?: string;
   laserActive: boolean;
   laserLength: number;
+  /** Optional Act II boss squadron / carrier spawn timer */
+  squadronId?: number;
+  carrierLaunchTimer?: number;
 }
 
 export type ProjectileKind =
@@ -107,7 +117,11 @@ export type ProjectileKind =
   | 'bomb'
   | 'ebullet'
   | 'elaser'
-  | 'artillery';
+  | 'artillery'
+  | 'railslug'
+  | 'flakshell'
+  | 'flakshard'
+  | 'lightningarc';
 
 export interface ProjectileEntity {
   id: number;
@@ -129,6 +143,10 @@ export interface ProjectileEntity {
   aoeRadius: number;
   fromGungine: boolean;
   beamLength?: number;
+  /** Act II Chain Lightning polyline nodes */
+  arcPoints?: readonly { x: number; y: number }[];
+  /** Act II multiplayer projectile owner (1 = P1, 2 = P2) */
+  ownerPlayer?: 1 | 2;
 }
 
 export interface ParticleEntity {
@@ -167,6 +185,38 @@ export interface ParallaxEntity {
   frame: number;
 }
 
+export interface ShockwaveEvent {
+  id: number;
+  x: number;
+  y: number;
+  radius: number;
+  maxRadius: number;
+  intensity: number;
+  age: number;
+  maxAge: number;
+}
+
+export interface GhostPose {
+  x: number;
+  y: number;
+  angleDeg: number;
+  boosting: boolean;
+  alive: boolean;
+  loadout: Loadout;
+  trail: readonly { x: number; y: number }[];
+  scoreAtTick: number;
+}
+
+export interface DogfightState {
+  p1Wins: number;
+  p2Wins: number;
+  round: number;
+  bestOf: number;
+  roundBannerTicks: number;
+  winner: 1 | 2 | null;
+  lastScorer: 1 | 2 | null;
+}
+
 export interface SimAudioEvent {
   cue: AudioCueId;
   x?: number;
@@ -202,6 +252,8 @@ export interface PilotProfile {
     totalScore: number;
     bestCombo: number;
   };
+  /** Act II optional persisted daily high scores keyed by YYYYMMDD */
+  dailyHighScores?: Record<string, number>;
 }
 
 export interface ReplayFrame {
@@ -217,6 +269,10 @@ export interface ReplayRecording {
   frames: ReplayFrame[];
   finalScore: number;
   finalTicks: number;
+  version?: number;
+  modFlags?: Act2ModFlags;
+  dailyDateId?: string | null;
+  planeName?: string;
 }
 
 export interface SimSnapshot {
@@ -253,10 +309,23 @@ export interface SimSnapshot {
   spaceLevel: number;
   autopilotEnabled: boolean;
   seed: number;
+  /** Act II screen-space shockwaves (active only when modded shaderFx.shockwaves enabled) */
+  shockwaves?: readonly ShockwaveEvent[];
+  /** Act II synchronized PB ghost silhouette */
+  ghostPose?: GhostPose | null;
+  /** Act II Player 2 state in Co-op / 1v1 Dogfight */
+  player2?: PlayerState | null;
+  /** Act II 1v1 Dogfight Arena state */
+  dogfight?: DogfightState | null;
+  /** Active Act II mod flags snapshot */
+  activeMods?: Act2ModFlags;
+  /** Daily Seed identifier (YYYYMMDD) when Daily Seed sortie active */
+  dailySeedId?: string | null;
 }
 
 export interface ISimulation {
   step(input: InputState): SimSnapshot;
+  step2P?(p1Input: InputState, p2Input: InputState): SimSnapshot;
   launch(loadout: Loadout, mode: GameMode, seed?: number): void;
   returnToHangar(): void;
   setLoadout(loadout: Loadout): void;
@@ -271,4 +340,10 @@ export interface ISimulation {
   setProfile(profile: PilotProfile): void;
   resetProfile(): void;
   unlockAll(): void;
+  setModFlags?(flags: Partial<Act2ModFlags>): void;
+  getModFlags?(): Act2ModFlags;
+  setGhostReplay?(replay: ReplayRecording | null): void;
+  getDailySeed?(date?: Date): { dateId: string; seed: number };
+  setP2Loadout?(loadout: Loadout): void;
+  getP2Loadout?(): Loadout;
 }

@@ -1,6 +1,8 @@
 import type { AudioSyncMetrics } from './audio';
-import type { FrameMetrics, PostShaderUniforms } from './render';
+import type { Act2ModFlags } from './mod';
+import type { FrameMetrics, PaletteDefinition, PostShaderUniforms } from './render';
 import type {
+  DogfightState,
   GameMode,
   InputState,
   Loadout,
@@ -36,6 +38,7 @@ export interface RauserDebugState {
     healing: boolean;
     underwater: boolean;
     inSpace: boolean;
+    shieldReady?: boolean;
   };
   enemyCount: number;
   enemyCountsByKind: Record<string, number>;
@@ -50,6 +53,15 @@ export interface RauserDebugState {
   webglErrors: number;
   consoleErrorCount: number;
   postUniforms: PostShaderUniforms;
+  /** Act II Telemetry */
+  modFlags?: Act2ModFlags;
+  modDeckOpen?: boolean;
+  paletteStudioOpen?: boolean;
+  ghostActive?: boolean;
+  dailySeedId?: string | null;
+  player2Alive?: boolean;
+  dogfight?: DogfightState | null;
+  shockwaveCount?: number;
 }
 
 export interface RauserDebugApi {
@@ -70,6 +82,17 @@ export interface RauserDebugApi {
   resetProfile(): void;
   unlockAllForTesting(): void;
   toggleDebugHud(visible?: boolean): void;
+  /** Act II Debug & Automation Seam */
+  setModFlags?(flags: Partial<Act2ModFlags>): void;
+  getModFlags?(): Act2ModFlags;
+  toggleModDeck?(open?: boolean): void;
+  togglePaletteStudio?(open?: boolean): void;
+  setCustomPalette?(palette: PaletteDefinition): void;
+  exportReplay?(): string;
+  importGhostReplay?(json: string): boolean;
+  getDailySeed?(): { dateId: string; seed: number };
+  setP2Loadout?(w: number, b: number, e: number): void;
+  setP2Input?(partial: Partial<InputState>): void;
 }
 
 declare global {

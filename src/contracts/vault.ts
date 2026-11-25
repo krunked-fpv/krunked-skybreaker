@@ -10,7 +10,9 @@ export type EnemyKind =
   | 'Submarine'
   | 'AceMarine'
   | 'Missile'
-  | 'Blimp';
+  | 'Blimp'
+  | 'Dreadnought'
+  | 'SkyCarrier';
 
 export interface EngineSpec {
   id: number;
