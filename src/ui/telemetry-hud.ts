@@ -20,7 +20,7 @@ export function formatTelemetryLines(data: TelemetryData): string[] {
     ? `${audioMetrics.interStemDriftMs.toFixed(3)}ms [${audioMetrics.source}/${audioMetrics.musicState}]`
     : 'n/a';
 
-  return [
+  const lines = [
     `VAULT: ${vaultSource} | PALETTE: ${frameMetrics.activePaletteId}`,
     `FPS: ${frameMetrics.fps.toFixed(1)} | AVG: ${frameMetrics.avgFrameDeltaMs.toFixed(2)}ms | P95: ${frameMetrics.p95FrameDeltaMs.toFixed(2)}ms | DC: ${frameMetrics.drawCalls} | GLERR: ${frameMetrics.webglErrors}`,
     `SIM: t=${snapshot.tick} phase=${snapshot.phase} mode=${snapshot.mode}${snapshot.paused ? ' [PAUSED]' : ''} craft="${p.planeName}"`,
@@ -29,6 +29,36 @@ export function formatTelemetryLines(data: TelemetryData): string[] {
     `COMBAT: enemies=${snapshot.enemies.length} diff=${snapshot.difficulty.toFixed(0)} score=${snapshot.score} combo=x${snapshot.combo}`,
     `AUDIO DRIFT: ${driftText} | CONSOLE_ERR: ${consoleErrorCount ?? 0}`,
   ];
+
+  if (snapshot.activeMods?.moddedEnabled) {
+    const mods = snapshot.activeMods;
+    const enabledTags: string[] = [];
+    if (mods.arsenalBosses) enabledTags.push('ARSENAL');
+    if (mods.replayGhost) enabledTags.push('GHOST');
+    if (mods.dailySeed) {
+      enabledTags.push(`DAILY(${snapshot.dailySeedId ?? 'ACTIVE'})`);
+    }
+    if (mods.shaderFx.crtScanlines) enabledTags.push('CRT');
+    if (mods.shaderFx.phosphorBloom) enabledTags.push('BLOOM');
+    if (mods.shaderFx.speedWarp) enabledTags.push('WARP');
+    if (mods.shaderFx.shockwaves) enabledTags.push('SHOCK');
+    const modsSummary = enabledTags.length > 0 ? enabledTags.join('+') : 'BASE';
+    const ghostStr = snapshot.ghostPose
+      ? snapshot.ghostPose.alive
+        ? `ON(${Math.floor(snapshot.ghostPose.scoreAtTick)})`
+        : 'KO'
+      : 'OFF';
+    const p2Str =
+      mods.multiplayerMode === 'solo'
+        ? 'SOLO'
+        : `${mods.multiplayerMode.toUpperCase()}[${mods.p2BotEnabled ? 'BOT' : 'HUMAN'}${snapshot.player2 ? ` hp=${Math.round(snapshot.player2.health)}` : ''}]`;
+    const swCount = snapshot.shockwaves?.length ?? 0;
+    lines.push(
+      `MODS: ${modsSummary} | GHOST=${ghostStr} | P2=${p2Str} | SW=${swCount}`,
+    );
+  }
+
+  return lines;
 }
 
 export class TelemetryHud {

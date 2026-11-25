@@ -380,17 +380,110 @@ precision highp float;
 
 uniform sampler2D colorTexture;
 uniform vec4 uniform_colors[8];
+uniform vec4 uFxFlags;       // x=crtScanlines, y=phosphorBloom, z=speedWarp, w=shockwaves
+uniform vec4 uFxParams;      // x=elapsedSec, y=playerSpeedNorm, z=0, w=0
+uniform vec4 uShockwaves[4]; // xy=uvCenter, z=radiusNorm, w=intensity
 
 in vec2 vTexCoords;
 
 out vec4 fragColor;
 
-void main() {
-  vec4 cta = texture(colorTexture, vTexCoords);
+vec3 resolveOutColor(vec2 uv) {
+  vec4 cta = texture(colorTexture, clamp(uv, vec2(0.0), vec2(1.0)));
   if (cta.rgb == vec3(1.0)) {
     cta = uniform_colors[7];
   }
-  fragColor = vec4(cta.rgb, 1.0);
+  return cta.rgb;
+}
+
+void main() {
+  if (uFxFlags.x < 0.5 && uFxFlags.y < 0.5 && uFxFlags.z < 0.5 && uFxFlags.w < 0.5) {
+    vec4 cta = texture(colorTexture, vTexCoords);
+    if (cta.rgb == vec3(1.0)) {
+      cta = uniform_colors[7];
+    }
+    fragColor = vec4(cta.rgb, 1.0);
+    return;
+  }
+
+  vec2 uv = vTexCoords;
+  float rimBoost = 0.0;
+
+  // Shockwaves (uFxFlags.w > 0.5): radial ring UV distortion + faint bright crest rim
+  if (uFxFlags.w > 0.5) {
+    vec2 aspect = vec2(600.0 / 400.0, 1.0);
+    for (int i = 0; i < 4; i++) {
+      vec4 sw = uShockwaves[i];
+      if (sw.w > 0.001) {
+        vec2 swDelta = (uv - sw.xy) * aspect;
+        float dist = length(swDelta);
+        float ringDist = abs(dist - sw.z);
+        float band = 0.045;
+        if (ringDist < band && dist > 0.0005) {
+          float wave = cos((ringDist / band) * 1.5707963);
+          wave = wave * wave;
+          vec2 dir = swDelta / dist;
+          uv -= (dir / aspect) * (wave * 0.022 * sw.w);
+          rimBoost += wave * 0.28 * sw.w;
+        }
+      }
+    }
+  }
+
+  // Speed-Warp Vignette (uFxFlags.z > 0.5): radial edge streak & contrast boost scaling with speed
+  float speedNorm = clamp(uFxParams.y, 0.0, 1.0);
+  vec2 centered = uv - vec2(0.5);
+  float edgeDist = length(centered * vec2(1.15, 1.0));
+  if (uFxFlags.z > 0.5 && speedNorm > 0.01) {
+    float warpStrength = smoothstep(0.25, 0.78, edgeDist) * speedNorm;
+    uv -= centered * (warpStrength * 0.045);
+  }
+
+  vec3 col = resolveOutColor(uv);
+  if (rimBoost > 0.001) {
+    col = mix(col, uniform_colors[7].rgb, clamp(rimBoost, 0.0, 0.65));
+  }
+
+  if (uFxFlags.z > 0.5) {
+    vec2 streakDir = centered * (0.014 * speedNorm * smoothstep(0.22, 0.75, edgeDist));
+    vec3 streakCol = resolveOutColor(uv + streakDir);
+    col = mix(col, streakCol, 0.30 * speedNorm * smoothstep(0.25, 0.75, edgeDist));
+    col = clamp((col - 0.5) * (1.0 + 0.14 * speedNorm) + 0.5, 0.0, 1.0);
+  }
+
+  // Phosphor Bloom (uFxFlags.y > 0.5): 8-tap cross+diagonal glow around uniform_colors[7]
+  if (uFxFlags.y > 0.5) {
+    vec2 px = vec2(1.0 / 600.0, 1.0 / 400.0) * 1.5;
+    vec3 glowTarget = uniform_colors[7].rgb;
+    vec3 bloomAcc = vec3(0.0);
+    vec2 offsets[8] = vec2[8](
+      vec2(1.0, 0.0),
+      vec2(-1.0, 0.0),
+      vec2(0.0, 1.0),
+      vec2(0.0, -1.0),
+      vec2(0.7071, 0.7071),
+      vec2(-0.7071, 0.7071),
+      vec2(0.7071, -0.7071),
+      vec2(-0.7071, -0.7071)
+    );
+    for (int i = 0; i < 8; i++) {
+      vec3 s = resolveOutColor(uv + offsets[i] * px);
+      float distTo7 = length(s - glowTarget);
+      float lum = dot(s, vec3(0.299, 0.587, 0.114));
+      float weight = clamp(1.0 - distTo7 * 2.2, 0.0, 1.0) * 0.70 + smoothstep(0.65, 1.0, lum) * 0.30;
+      bloomAcc += s * weight;
+    }
+    col = clamp(col + (bloomAcc / 8.0) * 0.42, 0.0, 1.0);
+  }
+
+  // CRT Scanlines (uFxFlags.x > 0.5): subtle horizontal modulation + gentle CRT edge vignette
+  if (uFxFlags.x > 0.5) {
+    float scan = 0.90 + 0.10 * sin(vTexCoords.y * 400.0 * 3.14159);
+    float vig = 1.0 - smoothstep(0.45, 0.88, edgeDist) * 0.24;
+    col *= scan * vig;
+  }
+
+  fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
 `;
 
