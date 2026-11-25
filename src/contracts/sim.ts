@@ -103,6 +103,8 @@ export interface EnemyEntity {
   spriteGun?: string;
   laserActive: boolean;
   laserLength: number;
+  /** Countdown ticks while LaserAce charges its beam before firing (renders laser_charge telegraph) */
+  laserChargeTicks?: number;
   /** Optional Act II boss squadron / carrier spawn timer */
   squadronId?: number;
   carrierLaunchTimer?: number;
@@ -284,6 +286,8 @@ export interface SimSnapshot {
   screenShake: number;
   nukeFlashTicks: number;
   launchTicks: number;
+  /** World Y coordinate of the allied launch carrier submarine while surfaced/submerging at x=0 */
+  launchSubY?: number;
   deathTicks: number;
   score: number;
   combo: number;

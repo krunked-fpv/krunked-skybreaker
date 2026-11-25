@@ -282,7 +282,9 @@ async function bootstrap(): Promise<void> {
   renderer.setPalette(hangar.getSelectedPalette().id);
 
   const audio = new AudioEngine();
-  await audio.init(vault);
+  // Start Steam audio decode asynchronously so keyboard handlers, Backquote HUD toggle,
+  // and WebGL2 rendering come online immediately without waiting for all 72 audio files.
+  void audio.init(vault);
 
   const telemetryHud = new TelemetryHud(document.body);
   telemetryHud.bindKeyboardToggle(window);
@@ -576,6 +578,7 @@ async function bootstrap(): Promise<void> {
       }
       if (snap.phase === 'gameover') {
         sim.returnToHangar();
+        hangar.setActiveRow('weapon');
         currSnapshot = sim.getSnapshot();
         prevSnapshot = currSnapshot;
         audio.playSfx('sndhangar');
@@ -588,6 +591,7 @@ async function bootstrap(): Promise<void> {
     if (snap.paused && (e.code === 'KeyH' || e.code === 'Backspace' || e.code === 'KeyX')) {
       sim.setPaused(false);
       sim.returnToHangar();
+      hangar.setActiveRow('weapon');
       currSnapshot = sim.getSnapshot();
       prevSnapshot = currSnapshot;
       audio.playSfx('sndhangar');
@@ -601,6 +605,7 @@ async function bootstrap(): Promise<void> {
         launchCurrentSortie();
       } else if (e.code === 'KeyH' || e.code === 'Backspace') {
         sim.returnToHangar();
+        hangar.setActiveRow('weapon');
         currSnapshot = sim.getSnapshot();
         prevSnapshot = currSnapshot;
         audio.playSfx('sndhangar');
