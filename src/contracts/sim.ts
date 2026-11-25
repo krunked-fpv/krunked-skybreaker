@@ -1,0 +1,274 @@
+import type {
+  BodySpec,
+  EnemyKind,
+  EngineSpec,
+  MissionSpec,
+  WeaponSpec,
+} from './vault';
+import type { AudioCueId } from './audio';
+
+export type PartIndex = 0 | 1 | 2 | 3 | 4 | 5;
+export type GameMode = 'normal' | 'sfmt';
+export type SimPhase = 'hangar' | 'launching' | 'playing' | 'dying' | 'gameover';
+
+export interface Loadout {
+  weapon: PartIndex;
+  body: PartIndex;
+  engine: PartIndex;
+}
+
+export interface InputState {
+  left: boolean;
+  right: boolean;
+  thrust: boolean;
+  fire: boolean;
+}
+
+export interface PlayerState {
+  x: number;
+  y: number;
+  prevX: number;
+  prevY: number;
+  vx: number;
+  vy: number;
+  angleDeg: number;
+  prevAngleDeg: number;
+  health: number;
+  maxHealth: number;
+  alive: boolean;
+  boosting: boolean;
+  wasBoosting: boolean;
+  firing: boolean;
+  healing: boolean;
+  healingTicks: number;
+  underwater: boolean;
+  inSpace: boolean;
+  fireCooldown: number;
+  gungineCooldown: number;
+  bombCooldown: number;
+  flashTicks: number;
+  burnTicks: number;
+  envWaterFactor: number;
+  envSpaceFactor: number;
+  nukeTriggered: boolean;
+  nukeRadius: number;
+  nukeTicks: number;
+  isUrauser: boolean;
+  loadout: Loadout;
+  planeName: string;
+  engineSpec: EngineSpec;
+  bodySpec: BodySpec;
+  weaponSpec: WeaponSpec;
+  boostAnimFrame: number;
+}
+
+export interface EnemyEntity {
+  id: number;
+  kind: EnemyKind;
+  x: number;
+  y: number;
+  prevX: number;
+  prevY: number;
+  vx: number;
+  vy: number;
+  angleDeg: number;
+  gunAngleDeg: number;
+  health: number;
+  maxHealth: number;
+  active: boolean;
+  state: 'cruise' | 'chase' | 'surfacing' | 'submerging' | 'sinking' | 'falling' | 'firing';
+  aiTimer: number;
+  fireTimer: number;
+  salvoRemaining: number;
+  salvoCooldown: number;
+  surfaceTimer: number;
+  fallFrames: number;
+  lifetime: number;
+  activationTimer: number;
+  flashTicks: number;
+  hitRadius: number;
+  width: number;
+  height: number;
+  scoreValue: number;
+  difficultyWeight: number;
+  spriteMain: string;
+  spriteSecondary?: string;
+  spriteGun?: string;
+  laserActive: boolean;
+  laserLength: number;
+}
+
+export type ProjectileKind =
+  | 'bullet'
+  | 'laser'
+  | 'spreadbullet'
+  | 'missile'
+  | 'plasmaball'
+  | 'bomb'
+  | 'ebullet'
+  | 'elaser'
+  | 'artillery';
+
+export interface ProjectileEntity {
+  id: number;
+  owner: 'player' | 'enemy';
+  kind: ProjectileKind;
+  x: number;
+  y: number;
+  prevX: number;
+  prevY: number;
+  vx: number;
+  vy: number;
+  angleDeg: number;
+  ttl: number;
+  maxTtl: number;
+  dmg: number;
+  radius: number;
+  targetId: number | null;
+  piercing: boolean;
+  aoeRadius: number;
+  fromGungine: boolean;
+  beamLength?: number;
+}
+
+export interface ParticleEntity {
+  id: number;
+  kind: string;
+  spriteName: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  angleDeg: number;
+  scaleX: number;
+  scaleY: number;
+  frame: number;
+  frameSpeed: number;
+  frameCount: number;
+  ttl: number;
+  maxTtl: number;
+  depth: number;
+  loop: boolean;
+  allowBelowSea: boolean;
+  friction: number;
+  gravity: number;
+  isExplosion: boolean;
+}
+
+export interface ParallaxEntity {
+  id: number;
+  kind: string;
+  spriteName: string;
+  x: number;
+  y: number;
+  vx: number;
+  reversed: boolean;
+  depth: number;
+  frame: number;
+}
+
+export interface SimAudioEvent {
+  cue: AudioCueId;
+  x?: number;
+  y?: number;
+  volume?: number;
+  pitch?: number;
+}
+
+export interface MissionProgressState {
+  missionId: number;
+  completed: boolean;
+  current: number;
+  target: number;
+}
+
+export interface PilotProfile {
+  version: number;
+  unlockedWeapons: PartIndex[];
+  unlockedBodies: PartIndex[];
+  unlockedEngines: PartIndex[];
+  completedMissions: number[];
+  activeMissionIds: number[];
+  highScoreNormal: number;
+  highScoreSfmt: number;
+  selectedPaletteId: string;
+  sfmtUnlocked: boolean;
+  lastLoadout: Loadout;
+  lastMode: GameMode;
+  lastSeed: number;
+  totalKills: Record<string, number>;
+  stats: {
+    sorties: number;
+    totalScore: number;
+    bestCombo: number;
+  };
+}
+
+export interface ReplayFrame {
+  tick: number;
+  mask: number; // bit0=left, bit1=right, bit2=thrust, bit3=fire
+}
+
+export interface ReplayRecording {
+  seed: number;
+  mode: GameMode;
+  loadout: Loadout;
+  profileId: string;
+  frames: ReplayFrame[];
+  finalScore: number;
+  finalTicks: number;
+}
+
+export interface SimSnapshot {
+  tick: number;
+  phase: SimPhase;
+  mode: GameMode;
+  paused: boolean;
+  hitstopTicks: number;
+  screenShake: number;
+  nukeFlashTicks: number;
+  launchTicks: number;
+  deathTicks: number;
+  score: number;
+  combo: number;
+  comboTimer: number;
+  comboMaxTimer: number;
+  comboWarning: boolean;
+  difficulty: number;
+  killsThisSortie: number;
+  killsByKind: Record<string, number>;
+  player: PlayerState;
+  enemies: readonly EnemyEntity[];
+  projectiles: readonly ProjectileEntity[];
+  particles: readonly ParticleEntity[];
+  parallax: readonly ParallaxEntity[];
+  cameraTargetX: number;
+  cameraTargetY: number;
+  audioEvents: readonly SimAudioEvent[];
+  completedMissionsThisSortie: readonly number[];
+  activeMissions: readonly MissionSpec[];
+  missionProgress: Record<number, MissionProgressState>;
+  profile: PilotProfile;
+  seaLevel: number;
+  spaceLevel: number;
+  autopilotEnabled: boolean;
+  seed: number;
+}
+
+export interface ISimulation {
+  step(input: InputState): SimSnapshot;
+  launch(loadout: Loadout, mode: GameMode, seed?: number): void;
+  returnToHangar(): void;
+  setLoadout(loadout: Loadout): void;
+  setMode(mode: GameMode): void;
+  setPaused(paused: boolean): void;
+  setAutopilot(enabled: boolean): void;
+  damagePlayer(amount: number): void;
+  spawnEnemy(kind: EnemyKind, x?: number, y?: number): EnemyEntity;
+  getSnapshot(): SimSnapshot;
+  getReplay(): ReplayRecording;
+  getProfile(): PilotProfile;
+  setProfile(profile: PilotProfile): void;
+  resetProfile(): void;
+  unlockAll(): void;
+}

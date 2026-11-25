@@ -1,0 +1,33 @@
+# Dependencies & builds
+node_modules/
+dist/
+coverage/
+
+# Local caches, logs, temp files & secrets
+.local-assets/
+.worktrees/
+*.log
+*.bak
+.tmp*
+.env
+.env.*
+
+# Clean-room IP hygiene: never commit proprietary Steam binaries or media dumps
+*.ogg
+*.wav
+*.exe
+*.dll
+*.fnt
+*.shader
+sheet1grey.png
+sheet2grey.png
+nuke.png
+characters_texture.png
+cutscenes_blended.png
+fnt*_0.png
+
+# OS & editor artifacts
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

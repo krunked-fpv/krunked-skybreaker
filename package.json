@@ -1,0 +1,23 @@
+{
+  "name": "krunked-luftrausers",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Clean-room 1:1 playable recreation of LUFTRAUSERS with read-only local Steam asset bridge and deterministic procedural fallbacks.",
+  "scripts": {
+    "dev": "vite --port 5173 --strictPort",
+    "start": "vite --port 5173",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 4173",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run tests/vault.test.ts tests/sim-parity.test.ts tests/render-contracts.test.ts tests/audio-mixer.test.ts",
+    "test:parity": "vitest run tests/e2e-parity/",
+    "audit:parity": "node --experimental-strip-types tools/parity-audit.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "typescript": "^5.8.2",
+    "vite": "^6.2.2",
+    "vitest": "^3.0.9"
+  }
+}
