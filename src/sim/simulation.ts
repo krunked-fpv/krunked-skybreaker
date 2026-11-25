@@ -4130,6 +4130,7 @@ export class Simulation implements ISimulation {
 
   private updateProjectiles(): void {
     const seaLevel = this.data.room.sealevel;
+    const spaceLevel = this.data.room.spacelevel;
     const nextList: ProjectileEntity[] = [];
     const spawnedDuringStep: ProjectileEntity[] = [];
     const isDogfight =
@@ -4365,15 +4366,17 @@ export class Simulation implements ISimulation {
 
       if (
         !consumed &&
-        proj.prevY < seaLevel &&
-        proj.y >= seaLevel &&
         (proj.kind === 'bullet' ||
           proj.kind === 'spreadbullet' ||
           proj.kind === 'ebullet' ||
           proj.kind === 'artillery' ||
           proj.kind === 'flakshard')
       ) {
-        this.spawnVisualParticle('splashS', proj.x, seaLevel);
+        if (proj.prevY < seaLevel && proj.y >= seaLevel) {
+          this.spawnVisualParticle('splashS', proj.x, seaLevel);
+        } else if (proj.prevY >= spaceLevel && proj.y < spaceLevel) {
+          this.spawnVisualParticle('poof', proj.x, spaceLevel);
+        }
       }
 
       if (!consumed && proj.ttl > 0) {
