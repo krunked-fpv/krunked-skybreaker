@@ -290,6 +290,41 @@ async function bootstrap(): Promise<void> {
 
     const snap = sim.getSnapshot();
 
+    // QA / Telemetry-HUD-gated dev shortcuts (inactive during normal vanilla play)
+    if (telemetryHud.isVisible()) {
+      if (e.code === 'F9') {
+        e.preventDefault();
+        debugApi.unlockAllForTesting();
+        return;
+      }
+      if (e.code === 'F8') {
+        e.preventDefault();
+        debugApi.toggleAutopilot(!snap.autopilotEnabled);
+        return;
+      }
+      if (e.code === 'F7') {
+        e.preventDefault();
+        debugApi.damagePlayer(8);
+        return;
+      }
+      if (e.code === 'F6') {
+        e.preventDefault();
+        debugApi.setLoadout(5, 5, 5);
+        return;
+      }
+      if (e.code === 'F4') {
+        e.preventDefault();
+        debugApi.setLoadout(0, 3, 0);
+        return;
+      }
+      if (e.code === 'F3') {
+        e.preventDefault();
+        debugApi.spawnEnemy('Boat', snap.player.x + 140, 0);
+        debugApi.spawnEnemy('Fighter', snap.player.x + 100, snap.player.y - 40);
+        return;
+      }
+    }
+
     if (e.code === 'KeyP' || e.code === 'Escape') {
       if (snap.phase === 'playing' || snap.phase === 'launching') {
         sim.setPaused(!snap.paused);
