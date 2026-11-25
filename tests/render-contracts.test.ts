@@ -1332,9 +1332,9 @@ describe('Renderer Visual & UI Regression Contracts', () => {
       expect(hullInst!.scaleY).toBe(1);
     }
 
-    // BigBoat guns (subX=3 at y=-28) are mirrored in main + reflect batches
+    // BigBoat guns (subX=3 at y=-23) are mirrored in main + reflect batches
     const bigBoatGuns = instances.filter(
-      (inst) => inst.subX === 3 && inst.y === -28,
+      (inst) => inst.subX === 3 && inst.y === -23,
     );
     expect(bigBoatGuns.map((g) => g.x)).toEqual([155, 45, 155, 45]);
 
@@ -2927,6 +2927,8 @@ describe('Renderer Visual & UI Regression Contracts', () => {
         subY: number;
         w: number;
         h: number;
+        cx: number;
+        cy: number;
         scaleX: number;
         scaleY: number;
         depth: number;
@@ -2968,6 +2970,8 @@ describe('Renderer Visual & UI Regression Contracts', () => {
             subY: data[i + 4]!,
             w: data[i + 5]!,
             h: data[i + 6]!,
+            cx: data[i + 7]!,
+            cy: data[i + 8]!,
             scaleX: data[i + 9]!,
             scaleY: data[i + 10]!,
             depth: data[i + 11]!,
@@ -3049,6 +3053,8 @@ describe('Renderer Visual & UI Regression Contracts', () => {
       fx_smoke: { name: 'fx_smoke', size: [20, 20], hull: [0, 0, 20, 20], center: [10, 10], subs: [{ x: 100, y: 1 }] },
       fx_explodebig: { name: 'fx_explodebig', size: [96, 96], hull: [0, 0, 96, 96], center: [48, 48], subs: [{ x: 105, y: 1 }] },
       fx_fire_flash: { name: 'fx_fire_flash', size: [30, 16], hull: [0, 0, 30, 16], center: [-8, 8], subs: [{ x: 110, y: 1 }] },
+      fx_subsplash: { name: 'fx_subsplash', size: [30, 8], hull: [0, 0, 30, 8], center: [15, 8], subs: [{ x: 115, y: 1 }] },
+      submarine: { name: 'submarine', size: [198, 36], hull: [0, 0, 198, 36], center: [99, 36], subs: [{ x: 75, y: 1 }] },
       projectile_bullet: { name: 'projectile_bullet', size: [28, 28], hull: [0, 0, 28, 28], center: [14, 14], subs: [{ x: 120, y: 1 }, { x: 121, y: 1 }] },
       projectile_ebullet: { name: 'projectile_ebullet', size: [28, 28], hull: [0, 0, 28, 28], center: [14, 14], subs: [{ x: 125, y: 1 }, { x: 126, y: 1 }] },
     };
@@ -3056,7 +3062,7 @@ describe('Renderer Visual & UI Regression Contracts', () => {
       name: 'nuke',
       size: [314, 356],
       hull: [0, 0, 314, 356],
-      center: [157, 178],
+      center: [0, 0], // matches normalizer default when nukesprites.json omits center
       subs: Array.from({ length: 16 }, (_, idx) => ({ x: 200 + idx, y: 2 })),
     };
     vault.textures['nukesprites'] = {
@@ -3186,6 +3192,39 @@ describe('Renderer Visual & UI Regression Contracts', () => {
           difficultyWeight: 1000,
           spriteMain: 'blimp',
           spriteGun: 'small_boat_gun',
+          laserActive: false,
+          laserLength: 0,
+        },
+        {
+          id: 3,
+          kind: 'Submarine',
+          x: 160,
+          y: 0, // surfaced -> MUST render in foregroundSprites behind fx_subsplash!
+          prevX: 160,
+          prevY: 0,
+          vx: -0.4,
+          vy: 0,
+          angleDeg: 180,
+          gunAngleDeg: -90,
+          health: 80,
+          maxHealth: 80,
+          active: true,
+          state: 'cruise',
+          aiTimer: 0,
+          fireTimer: 0,
+          salvoRemaining: 0,
+          salvoCooldown: 20,
+          surfaceTimer: 60,
+          fallFrames: 0,
+          lifetime: 0,
+          activationTimer: 0,
+          flashTicks: 0,
+          hitRadius: 44,
+          width: 198,
+          height: 36,
+          scoreValue: 300,
+          difficultyWeight: 250,
+          spriteMain: 'submarine',
           laserActive: false,
           laserLength: 0,
         },
@@ -3322,6 +3361,29 @@ describe('Renderer Visual & UI Regression Contracts', () => {
           gravity: 0,
           isExplosion: false,
         },
+        {
+          id: 13,
+          kind: 'splashSub',
+          spriteName: 'fx_subsplash',
+          x: 160,
+          y: 0,
+          vx: 0,
+          vy: 0,
+          angleDeg: 0,
+          scaleX: 1,
+          scaleY: 1,
+          frame: 0,
+          frameSpeed: 0.4,
+          frameCount: 5,
+          ttl: 12,
+          maxTtl: 12,
+          depth: -5,
+          loop: false,
+          allowBelowSea: false,
+          friction: 0,
+          gravity: 0,
+          isExplosion: false,
+        },
       ],
     });
     batches.length = 0;
@@ -3383,10 +3445,19 @@ describe('Renderer Visual & UI Regression Contracts', () => {
     expect(reflectSubs).toContain(105);
     expect(reflectSubs).toContain(90);
 
-    // Nuke plays FORWARD: at nukeTicks=58 (2 ticks in), subX = 200 (frame 0), NOT 215 (frame 15)
+    // Nuke plays FORWARD and auto-centers [0,0] center to [157, 178] on blast origin
     const nukeInsts = batches.flatMap((b) => b.instances).filter((i) => i.subX >= 200 && i.subX <= 215);
     expect(nukeInsts.length).toBe(2); // main + reflect
     expect(nukeInsts[0]!.subX).toBe(200);
+    expect(nukeInsts[0]!.cx).toBe(157);
+    expect(nukeInsts[0]!.cy).toBe(178);
+    expect(POST_WATER_FRAG).toContain('isPrimarySilhouette');
+
+    // Surfaced Submarine (subX=75) renders in foregroundSprites BEHIND fx_subsplash (subX=115), never cutting off splashes!
+    const subIdx = fgBatch!.instances.findIndex((i) => i.subX === 75);
+    const subSplashIdx = fgBatch!.instances.findIndex((i) => i.subX === 115);
+    expect(subIdx).toBeGreaterThanOrEqual(0);
+    expect(subSplashIdx).toBeGreaterThan(subIdx);
 
     // 3. HangarHudPass delegation seam works cleanly with dual-channel menuBatchProg
     const menuSpy = vi.fn();

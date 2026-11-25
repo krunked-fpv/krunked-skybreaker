@@ -312,10 +312,13 @@ void main() {
     outColor = finalColor;
   }
 
-  // Subtle flash tint during nuke detonation sequence
+  // Subtle flash tint during nuke detonation sequence (preserve razor-sharp opaque colors[1] skull silhouette!)
   if (delta.y > 0.0) {
     float flashMix = clamp(delta.y / 14.0, 0.0, 0.55);
-    outColor = mix(outColor, uniform_colors[7], flashMix);
+    bool isPrimarySilhouette = length(outColor.rgb - uniform_colors[1].rgb) < 0.015;
+    if (!isPrimarySilhouette) {
+      outColor = mix(outColor, uniform_colors[7], flashMix);
+    }
   }
 
   fragColor = outColor;
