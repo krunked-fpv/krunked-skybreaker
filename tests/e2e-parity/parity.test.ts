@@ -274,6 +274,31 @@ describe('Gate 3A: Live Steam Vault Cross-Reference & Zero-Drift Fallback Parity
     expect(fallbackVault.data.player.weaponsById.map(stripPartText)).toEqual(
       steamData.player.weaponsById.map(stripPartText),
     );
+    // Clear recognizable core part names in Skybreaker default mode (zero trademark leaks)
+    expect(fallbackVault.data.player.weaponsById.map((w) => w.name)).toEqual([
+      'standard',
+      'laser',
+      'spread',
+      'missiles',
+      'cannon',
+      'omega',
+    ]);
+    expect(fallbackVault.data.player.bodiesById.map((b) => b.name)).toEqual([
+      'standard',
+      'armor',
+      'melee',
+      'nuke',
+      'bomb',
+      'omega',
+    ]);
+    expect(fallbackVault.data.player.enginesById.map((e) => e.name)).toEqual([
+      'standard',
+      'superboost',
+      'gungine',
+      'underwater',
+      'hover',
+      'omega',
+    ]);
     expect(fallbackVault.data.projectiles).toEqual(steamData.projectiles);
     expect(fallbackVault.data.enemies).toEqual(steamData.enemies);
     expect(fallbackVault.data.enemiesSfmt).toEqual(steamData.enemiesSfmt);

@@ -490,8 +490,25 @@ function runAudit(): number {
     : [];
   const apexName = skybreakerPlanes[125]?.name ?? '';
   const uniqueSkybreakerNames = new Set(skybreakerPlanes.map((p) => p.name.trim().toLowerCase()));
+  const expectedWeaponNames = ['standard', 'laser', 'spread', 'missiles', 'cannon', 'omega'];
+  const expectedBodyNames = ['standard', 'armor', 'melee', 'nuke', 'bomb', 'omega'];
+  const expectedEngineNames = ['standard', 'superboost', 'gungine', 'underwater', 'hover', 'omega'];
+  const actualWeaponNames = Object.values(VANILLA_PLAYER_RAW.weapons)
+    .sort((a, b) => a.id - b.id)
+    .map((w) => w.name);
+  const actualBodyNames = Object.values(VANILLA_PLAYER_RAW.bodyparts)
+    .sort((a, b) => a.id - b.id)
+    .map((b) => b.name);
+  const actualEngineNames = Object.values(VANILLA_PLAYER_RAW.engines)
+    .sort((a, b) => a.id - b.id)
+    .map((e) => e.name);
+  const partNamesClearOk =
+    expectedWeaponNames.every((n, i) => actualWeaponNames[i] === n) &&
+    expectedBodyNames.every((n, i) => actualBodyNames[i] === n) &&
+    expectedEngineNames.every((n, i) => actualEngineNames[i] === n);
   const defaultBrandOk =
     defaultCopyLeaks.length === 0 &&
+    partNamesClearOk &&
     skybreakerPlanes.length === 126 &&
     apexName === 'APEX OMEGA' &&
     uniqueSkybreakerNames.size === 126;
@@ -500,10 +517,10 @@ function runAudit(): number {
     'Skybreaker defaults copy & callsigns scan',
     defaultBrandOk,
     defaultBrandOk
-      ? `0 leaks across player parts & 126 unique callsigns ([5,5,5]=${apexName})`
+      ? `0 leaks across 6W/6B/6E recognizable parts & 126 unique callsigns ([5,5,5]=${apexName})`
       : defaultCopyLeaks.length > 0
         ? `${defaultCopyLeaks.length} leak(s): ${defaultCopyLeaks.slice(0, 3).join('; ')}`
-        : `planenames=${skybreakerPlanes.length}, unique=${uniqueSkybreakerNames.size}, [5,5,5]=${apexName}`,
+        : `partNamesClearOk=${partNamesClearOk}, planenames=${skybreakerPlanes.length}, unique=${uniqueSkybreakerNames.size}, [5,5,5]=${apexName}`,
   );
 
   const fileTrademarkLeaks = scanTrademarkLeaksInFiles(process.cwd());

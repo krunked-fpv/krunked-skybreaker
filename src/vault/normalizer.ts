@@ -521,9 +521,9 @@ function formatConditionSuffix(condition: number, skybreakerPack: boolean): stri
     case 8:
       return ' WHILE BOOSTING';
     case 9:
-      return skybreakerPack ? ' WITH RECOILJET' : ' WITH GUNGINE';
+      return ' WITH GUNGINE';
     case 11:
-      return skybreakerPack ? ' WITH COREBLAST' : ' WITH NUKE BLAST';
+      return ' WITH NUKE BLAST';
     case 12:
       return ' IN A SINGLE SORTIE';
     case 13:

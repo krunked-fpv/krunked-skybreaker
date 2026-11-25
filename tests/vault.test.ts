@@ -411,6 +411,120 @@ describe('createProceduralFallbackBundle & procedural parity', () => {
     ]);
     expect(wingHashes.size).toBe(5);
 
+    // Composite 24x24 Hangar preview distinctness (engine -> body -> wings draw order):
+    // cycling WEAPON, BODY, or ENGINE must visibly transform the rendered aircraft on EVERY step!
+    const compositeCraft = (engineSprite: string, bodySprite: string, wingSprite: string): number[] => {
+      const buf = new Array<number>(24 * 24).fill(0);
+      for (const spriteName of [engineSprite, bodySprite, wingSprite]) {
+        const entry = fallback.data.atlases.sprites.sprites[spriteName]!;
+        const sub = entry.subs[0]!;
+        const [sw, sh] = entry.size;
+        expect(sw).toBe(24);
+        expect(sh).toBe(24);
+        for (let y = 0; y < 24; y++) {
+          for (let x = 0; x < 24; x++) {
+            const idx = ((sub.y + y) * spritesTex.width + (sub.x + x)) * 4;
+            if (spritesTex.rgba[idx + 3]! > 0) {
+              buf[y * 24 + x] = spritesTex.rgba[idx]!;
+            }
+          }
+        }
+      }
+      return buf;
+    };
+
+    const pixelDiffCount = (a: readonly number[], b: readonly number[]): number => {
+      let diff = 0;
+      for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) diff++;
+      }
+      return diff;
+    };
+
+    const weaponComposites = [
+      'wings_original',
+      'wings_laser',
+      'wings_spread',
+      'wings_missiles',
+      'wings_cannon',
+    ].map((w) => compositeCraft('engine_original', 'body_original', w));
+    const bodyComposites = [
+      'body_original',
+      'body_armor',
+      'body_melee',
+      'body_nuke',
+      'body_bomb',
+    ].map((b) => compositeCraft('engine_original', b, 'wings_original'));
+    const engineComposites = [
+      'engine_original',
+      'engine_superboost',
+      'engine_gungine',
+      'engine_underwater',
+      'engine_hover',
+    ].map((e) => compositeCraft(e, 'body_original', 'wings_original'));
+
+    for (const [slotLabel, composites] of [
+      ['weapon', weaponComposites],
+      ['body', bodyComposites],
+      ['engine', engineComposites],
+    ] as const) {
+      for (let i = 0; i < composites.length; i++) {
+        for (let j = i + 1; j < composites.length; j++) {
+          expect(
+            pixelDiffCount(composites[i]!, composites[j]!),
+            `Composite Hangar preview ${slotLabel} ${i} vs ${j} must visibly differ`,
+          ).toBeGreaterThanOrEqual(12);
+        }
+      }
+    }
+
+    // Complete gameplay data inventory verification in Skybreaker fallback
+    expect(fallback.data.player.weaponsById.map((w) => w.name)).toEqual([
+      'standard',
+      'laser',
+      'spread',
+      'missiles',
+      'cannon',
+      'omega',
+    ]);
+    expect(fallback.data.player.bodiesById.map((b) => b.name)).toEqual([
+      'standard',
+      'armor',
+      'melee',
+      'nuke',
+      'bomb',
+      'omega',
+    ]);
+    expect(fallback.data.player.enginesById.map((e) => e.name)).toEqual([
+      'standard',
+      'superboost',
+      'gungine',
+      'underwater',
+      'hover',
+      'omega',
+    ]);
+    expect(Object.keys(fallback.data.enemies)).toHaveLength(12);
+    expect(Object.keys(fallback.data.enemiesSfmt)).toHaveLength(12);
+    expect(Object.keys(fallback.data.projectiles)).toHaveLength(6);
+    expect(Object.keys(fallback.data.fx.generic)).toHaveLength(32);
+    expect(Object.keys(fallback.data.fx.explosions)).toHaveLength(5);
+    expect(fallback.data.parallax.stages).toHaveLength(6);
+
+    // Synchronized Skybreaker mission titles & condition descriptions match restored part names
+    const missionDescriptions = fallback.data.global.missions.map((m) => m.description);
+    const missionTitles = fallback.data.global.missions.map((m) => m.title);
+    expect(missionTitles).toContain('LASER WEAPON #1');
+    expect(missionTitles).toContain('ARMOR BODY #1');
+    expect(missionTitles).toContain('SUPERBOOST ENGINE #1');
+    expect(missionTitles).toContain('GUNGINE ENGINE #1');
+    expect(missionTitles).toContain('NUKE BODY #1');
+    expect(missionDescriptions.some((d) => d.includes('WITH GUNGINE'))).toBe(true);
+    expect(missionDescriptions.some((d) => d.includes('WITH NUKE BLAST'))).toBe(true);
+    expect(missionDescriptions.some((d) => d.includes('IN OVERDRIVE MODE'))).toBe(true);
+    expect(missionDescriptions.some((d) => d.includes('RECOILJET') || d.includes('COREBLAST'))).toBe(
+      false,
+    );
+
     // Multi-frame FX animate across frames
     expect(spriteHash('fx_explodebig', 0)).not.toBe(spriteHash('fx_explodebig', 6));
     expect(spriteHash('fx_splashB', 0)).not.toBe(spriteHash('fx_splashB', 8));

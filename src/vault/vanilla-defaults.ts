@@ -47,9 +47,9 @@ export const VANILLA_PLAYER_RAW = {
       maximumspeed: 8,
       waterproof: false,
     },
-    afterburn: {
+    superboost: {
       id: 1,
-      name: 'afterburn',
+      name: 'superboost',
       descr: 'blistering thrust output\nwide high-speed turn arc',
       sprite: 'engine_superboost',
       booststartsprite: 'fx_superbooststart',
@@ -61,17 +61,17 @@ export const VANILLA_PLAYER_RAW = {
       maximumspeed: 11,
       boostadd: 2,
     },
-    recoiljet: {
+    gungine: {
       id: 2,
-      name: 'recoiljet',
+      name: 'gungine',
       descr: 'exhaust fires cannon shells\nsurges forward on recoil',
       sprite: 'engine_gungine',
       acceleration: 5.5,
       flags: 'gun-engine',
     },
-    hydrojet: {
+    underwater: {
       id: 3,
-      name: 'hydrojet',
+      name: 'underwater',
       descr: 'sealed hull dives safely\nweaker at high altitude',
       sprite: 'engine_underwater',
       acceleration: 1.2,
@@ -80,9 +80,9 @@ export const VANILLA_PLAYER_RAW = {
       spacedmg: 0.6,
       spacedmglowhp: 0.6,
     },
-    gravdrive: {
+    hover: {
       id: 4,
-      name: 'gravdrive',
+      name: 'hover',
       descr: 'anti-gravity stabilizer\ngentle thrust, tight float',
       sprite: 'engine_hover',
       booststartsprite: 'fx_boosthover',
@@ -116,17 +116,17 @@ export const VANILLA_PLAYER_RAW = {
       impactspeedmult: 0.9,
       maxhealth: 16,
     },
-    bulwark: {
+    armor: {
       id: 1,
-      name: 'bulwark',
+      name: 'armor',
       descr: 'reinforced armor plating\nheavier flight handling',
       sprite: 'body_armor',
       speedmodifier: 0.8,
       maxhealth: 28,
     },
-    ramprow: {
+    melee: {
       id: 2,
-      name: 'ramprow',
+      name: 'melee',
       descr: 'kinetic collision shield\nlightweight fragile hull',
       sprite: 'body_melee',
       maxhealth: 11,
@@ -136,17 +136,17 @@ export const VANILLA_PLAYER_RAW = {
       impactcamshake: 0,
       meleedmg: 0,
     },
-    coreblast: {
+    nuke: {
       id: 3,
-      name: 'coreblast',
+      name: 'nuke',
       descr: 'thermobaric death blast\nincreased crash impact',
       sprite: 'body_nuke',
       impactdmgmult: 0.25,
       flags: 'nuke-on-death',
     },
-    payload: {
+    bomb: {
       id: 4,
-      name: 'payload',
+      name: 'bomb',
       descr: 'drops cluster ordnance\nreduced repair speed',
       sprite: 'body_bomb',
       healingspd: 0.12,
@@ -173,17 +173,17 @@ export const VANILLA_PLAYER_RAW = {
       spread: 1.0,
       numbullets: 1,
     },
-    pulsebeam: {
+    laser: {
       id: 1,
-      name: 'pulsebeam',
+      name: 'laser',
       descr: 'piercing energy lance\nstiffens turn rate in use',
       sprite: 'wings_laser',
       projectile: 'laser',
       interval: 1,
     },
-    scatter: {
+    spread: {
       id: 2,
-      name: 'scatter',
+      name: 'spread',
       descr: 'five-round flak burst\nstrong backward kick',
       sprite: 'wings_spread',
       projectile: 'spreadbullet',
@@ -192,18 +192,18 @@ export const VANILLA_PLAYER_RAW = {
       spread: 6.0,
       numbullets: 5,
     },
-    seeker: {
+    missiles: {
       id: 3,
-      name: 'seeker',
+      name: 'missiles',
       descr: 'locking micro-rockets\nup to four live salvos',
       sprite: 'wings_missiles',
       projectile: 'missile',
       interval: 5,
       maxbullets: 4,
     },
-    plasma: {
+    cannon: {
       id: 4,
-      name: 'plasma',
+      name: 'cannon',
       descr: 'heavy plasma mortar\nslow cycle, massive blast',
       sprite: 'wings_cannon',
       projectile: 'plasmaball',
@@ -625,9 +625,9 @@ export const VANILLA_SPAWN_COORDINATOR_SFMT_RAW = {
 
 export const VANILLA_GLOBAL_RAW = {
   customizetypes: {
-    engine: { standard: 0, afterburn: 1, recoiljet: 2, hydrojet: 3, gravdrive: 4, omega: 5 },
-    body: { standard: 0, bulwark: 1, ramprow: 2, coreblast: 3, payload: 4, omega: 5 },
-    weapon: { standard: 0, pulsebeam: 1, scatter: 2, seeker: 3, plasma: 4, omega: 5 },
+    engine: { standard: 0, superboost: 1, gungine: 2, underwater: 3, hover: 4, omega: 5 },
+    body: { standard: 0, armor: 1, melee: 2, nuke: 3, bomb: 4, omega: 5 },
+    weapon: { standard: 0, laser: 1, spread: 2, missiles: 3, cannon: 4, omega: 5 },
   },
   missions: [
     // Weapons (0..29)
@@ -768,7 +768,7 @@ export const VANILLA_GLOBAL_RAW = {
     { name: 'hailstorm', weapon: 2, body: 4, engine: 0 },
     { name: 'cluster hawk', weapon: 3, body: 4, engine: 0 },
     { name: 'meteor drop', weapon: 4, body: 4, engine: 0 },
-    // Engine 1: afterburn
+    // Engine 1: superboost
     { name: 'mach falcon', weapon: 0, body: 0, engine: 1 },
     { name: 'lightspeed', weapon: 1, body: 0, engine: 1 },
     { name: 'sonic flak', weapon: 2, body: 0, engine: 1 },
@@ -794,7 +794,7 @@ export const VANILLA_GLOBAL_RAW = {
     { name: 'stormfront', weapon: 2, body: 4, engine: 1 },
     { name: 'skyraider', weapon: 3, body: 4, engine: 1 },
     { name: 'thunderclap', weapon: 4, body: 4, engine: 1 },
-    // Engine 2: recoiljet
+    // Engine 2: gungine
     { name: 'lead zephyr', weapon: 0, body: 0, engine: 2 },
     { name: 'kickback ray', weapon: 1, body: 0, engine: 2 },
     { name: 'double barrel', weapon: 2, body: 0, engine: 2 },
@@ -820,7 +820,7 @@ export const VANILLA_GLOBAL_RAW = {
     { name: 'lead rain', weapon: 2, body: 4, engine: 2 },
     { name: 'ordnance king', weapon: 3, body: 4, engine: 2 },
     { name: 'iron deluge', weapon: 4, body: 4, engine: 2 },
-    // Engine 3: hydrojet
+    // Engine 3: underwater
     { name: 'sea skiff', weapon: 0, body: 0, engine: 3 },
     { name: 'abyssal ray', weapon: 1, body: 0, engine: 3 },
     { name: 'riptide', weapon: 2, body: 0, engine: 3 },
@@ -846,7 +846,7 @@ export const VANILLA_GLOBAL_RAW = {
     { name: 'squall line', weapon: 2, body: 4, engine: 3 },
     { name: 'albatross', weapon: 3, body: 4, engine: 3 },
     { name: 'typhoon drop', weapon: 4, body: 4, engine: 3 },
-    // Engine 4: gravdrive
+    // Engine 4: hover
     { name: 'zephyr hover', weapon: 0, body: 0, engine: 4 },
     { name: 'astral prism', weapon: 1, body: 0, engine: 4 },
     { name: 'stardust', weapon: 2, body: 0, engine: 4 },
