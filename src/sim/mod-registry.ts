@@ -13,8 +13,9 @@ import type { PaletteDefinition } from '../contracts/render';
 import type { BodySpec, EngineSpec, WeaponSpec } from '../contracts/vault';
 
 /**
- * Mod extension seam for Act II mutators and custom content.
- * Locked to VANILLA_1TO1_PROFILE by default so 1:1 vanilla physics cannot drift.
+ * KRUNKED SKYBREAKER mod extension seam for Act II mutators and custom content.
+ * Locked to VANILLA_1TO1_PROFILE (`profileId: 'vanilla-1to1'`) by default so
+ * deterministic 60Hz baseline flight physics cannot drift.
  */
 export class ModRegistry implements IModRegistry {
   readonly vanillaProfile: Readonly<Vanilla1to1Profile> = VANILLA_1TO1_PROFILE;

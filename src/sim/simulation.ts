@@ -494,14 +494,14 @@ function resolveFireCooldown(baseInterval: number, body: BodySpec): number {
 }
 
 /**
- * Deterministic 60Hz LUFTRAUSERS Simulation Core (Pure, Zero-DOM).
+ * Deterministic 60Hz KRUNKED SKYBREAKER Simulation Core (Pure, Zero-DOM).
  */
 export class Simulation implements ISimulation {
-  private readonly data: GameDataBundle;
+  private data: GameDataBundle;
   private readonly modRegistry: IModRegistry;
   private readonly rng: SeededRng;
   private readonly visualRng = new SeededRng(1);
-  private readonly missionTracker: MissionTracker;
+  private missionTracker: MissionTracker;
 
   private profile: PilotProfile;
   private phase: SimPhase = 'hangar';
@@ -726,10 +726,10 @@ export class Simulation implements ISimulation {
         effectiveLoadout.weapon,
         effectiveLoadout.body,
         effectiveLoadout.engine,
-        entry?.name ?? 'RAUSER',
+        entry?.name ?? 'SKYBREAKER',
       );
     } else if (isUrauser) {
-      planeName = entry?.name ?? 'URAUSER';
+      planeName = entry?.name ?? 'APEX OMEGA';
     } else if (
       effectiveLoadout.weapon === 5 ||
       effectiveLoadout.body === 5 ||
@@ -819,11 +819,11 @@ export class Simulation implements ISimulation {
       return clampLoadoutToVanilla(loadout);
     }
     if (loadout.weapon === 5 && loadout.body === 5 && loadout.engine === 5) {
-      const urauserUnlocked =
+      const apexOmegaUnlocked =
         this.profile.unlockedWeapons.includes(5) &&
         this.profile.unlockedBodies.includes(5) &&
         this.profile.unlockedEngines.includes(5);
-      return urauserUnlocked
+      return apexOmegaUnlocked
         ? { weapon: 5, body: 5, engine: 5 }
         : { weapon: 0, body: 0, engine: 0 };
     }
@@ -921,6 +921,48 @@ export class Simulation implements ISimulation {
 
   getModFlags(): Act2ModFlags {
     return cloneModFlags(this.modFlags);
+  }
+
+  /**
+   * Live hot-swaps the active GameDataBundle (e.g., SKYBREAKER original <-> STEAM LOCAL)
+   * while preserving current profile, loadout, mode, and modFlags cleanly.
+   */
+  setGameData(data: GameDataBundle): void {
+    this.data = data;
+    this.missionTracker = new MissionTracker(this.data.global.missions, this.profile);
+
+    const p1Loadout = this.sanitizeLoadoutForFlags(this.player.loadout);
+    this.profile.lastLoadout = { ...p1Loadout };
+    this.p2Loadout = this.sanitizeLoadoutForFlags(this.p2Loadout);
+
+    if (this.phase === 'hangar') {
+      this.player = this.buildPlayerState(p1Loadout, this.player.playerIndex);
+      if (this.player2) {
+        const p2Loadout = this.sanitizeLoadoutForFlags(this.player2.loadout);
+        this.player2 = this.buildPlayerState(p2Loadout, this.player2.playerIndex ?? 2);
+      }
+      this.difficulty = this.getSpawnCoordinator().initialDifficulty;
+    } else {
+      this.player = this.refreshPlayerLoadoutPreservePose(
+        this.player,
+        p1Loadout,
+        this.player.playerIndex,
+      );
+      if (this.player2) {
+        const p2Loadout = this.sanitizeLoadoutForFlags(this.player2.loadout);
+        this.player2 = this.refreshPlayerLoadoutPreservePose(
+          this.player2,
+          p2Loadout,
+          this.player2.playerIndex ?? 2,
+        );
+      }
+    }
+
+    this.missionTracker.refreshActiveMissions(this.player.loadout, this.profile);
+
+    if (this.ghostReplay && this.ghostRunner) {
+      this.ghostRunner = new GhostRunner(this.data, this.ghostReplay);
+    }
   }
 
   setGhostReplay(replay: ReplayRecording | null): void {
@@ -2298,7 +2340,7 @@ export class Simulation implements ISimulation {
     const isDogfight = !this.modRegistry.isVanillaLocked() && mpMode === 'dogfight1v1';
 
     if (p.isUrauser) {
-      this.fireUrauserVolley(p, muzzleX, muzzleY);
+      this.fireApexOmegaVolley(p, muzzleX, muzzleY);
       return;
     }
 
@@ -2524,7 +2566,7 @@ export class Simulation implements ISimulation {
         break;
       }
       default: {
-        // Original & Weapon 5 (non-Urauser fallback): bullet interval 3
+        // Original & Weapon 5 (non-Apex-Omega fallback): bullet interval 3
         p.fireCooldown = resolveFireCooldown(weapon.interval || 3, p.bodySpec);
         const spec = this.getProjectileSpec(weapon.projectile || 'bullet');
         const jitter = spec.degreesoffset || 3;
@@ -2660,7 +2702,7 @@ export class Simulation implements ISimulation {
     this.emitAudio('sndlaser', p.x, p.y);
   }
 
-  private fireUrauserVolley(
+  private fireApexOmegaVolley(
     p: PlayerState,
     muzzleX: number,
     muzzleY: number,
