@@ -346,6 +346,11 @@ async function bootstrap(): Promise<void> {
     sim.setModFlags(merged);
     hangar.setModFlags(merged);
     renderer.setShaderFx(merged.moddedEnabled ? merged.shaderFx : DEFAULT_SHADER_FX);
+    // When locking back to Vanilla 1:1, ensure any bonus/custom palette reverts to a pure vanilla palette
+    const resolvedPal = hangar.getSelectedPalette();
+    if (renderer.getPalette().id !== resolvedPal.id) {
+      renderer.setPalette(resolvedPal.id);
+    }
     saveStoredModFlags(merged);
     currSnapshot = sim.getSnapshot();
     prevSnapshot = currSnapshot;
