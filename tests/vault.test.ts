@@ -15,7 +15,10 @@ import {
   createProceduralFontTexture,
   createProceduralMenuTexture,
   createProceduralNukeTexture,
+  decodeImtxRgba,
+  decodePcpRgba,
   decodeTgaRgba,
+  decompressPcp,
   getKeyCI,
   isPcpBlob,
   loadVaultFromDisk,
@@ -116,6 +119,118 @@ describe('decodeTgaRgba & isPcpBlob', () => {
   });
 });
 
+describe('decodePcpRgba, decompressPcp & decodeImtxRgba', () => {
+  it('decompresses all 5 PCP\\0 opcodes and unpacks dual-nibble IMTX channels cleanly', () => {
+    // Build a synthetic 4x4 IMTX image (20-byte header + 16 pixels) with distinct lo/hi nibbles
+    // to verify literal run, 1-byte RLE, 4-byte RLE, pattern RLE, LZ backref, and R/B channel packing.
+    const width = 4;
+    const height = 4;
+    const imtxHeader = [
+      0x49, 0x4d, 0x54, 0x58, // "IMTX"
+      0x00, 0x22, // version=0, format=0x22
+      width & 0xff, width >> 8,
+      height & 0xff, height >> 8,
+      0x11, 0x01, 0x11, 0x01, // 4 channel descriptors (each & 3 === 1)
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+    // Expected 16 pixel bytes:
+    // [0..3]: 0x24, 0x24, 0x24, 0x24  (from 1-byte RLE sym=1, lc=2 => count=4)
+    // [4..11]: 0x00, 0xfe, 0x00, 0xfe, 0x00, 0xfe, 0x00, 0xfe (from 4-byte RLE sym=0, lc=0 => 2 dwords)
+    // [12..13]: 0x62, 0x62 (from 1-byte RLE escape sym=7, lc=0 => count=2)
+    // [14..15]: 0x24, 0x24 (from LZ backref dist=14, len=2)
+    const outLen = 20 + 16;
+
+    const header = new Uint8Array(44);
+    header.set([0x50, 0x43, 0x50, 0x00, 0x3f], 0);
+    // byteTable[0..6]
+    header.set([0x00, 0x24, 0xaa, 0xbb, 0xcc, 0xdd, 0xee], 5);
+    // dwordTable[0] = 0xfe00fe00 -> bytes [0x00, 0xfe, 0x00, 0xfe]
+    header.set([0x00, 0xfe, 0x00, 0xfe], 12);
+    // uncompressedSize LE
+    header[40] = outLen & 0xff;
+    header[41] = (outLen >>> 8) & 0xff;
+
+    const stream: number[] = [];
+    // 1) Literal 10 bytes: IMTX header[0..9] -> tag = ((10 - 1) << 1) | 1 = 0x13
+    stream.push(0x13, ...imtxHeader.slice(0, 10));
+    // 2) Pattern RLE (op=3, patIdx=1 -> patLen=2, varint=0 -> count=2): [0x11, 0x01] x 2 -> header[10..13]
+    stream.push((1 << 3) | (3 << 1), 0x00, 0x11, 0x01);
+    // 3) 1-byte RLE (op=1, sym=0 -> 0x00, lenCode=3 -> varint 4 => count=6): header[14..19]
+    stream.push((3 << 6) | (0 << 3) | (1 << 1), 0x04);
+    // 4) 1-byte RLE (op=1, sym=1 -> 0x24, lenCode=2 => count=4): pixels[0..3]
+    stream.push((2 << 6) | (1 << 3) | (1 << 1));
+    // 5) 4-byte RLE (op=2, sym=0 -> [0x00,0xfe,0x00,0xfe], lenCode=0 => count=2 dwords): pixels[4..11]
+    stream.push((0 << 6) | (0 << 3) | (2 << 1));
+    // 6) 1-byte RLE literal escape (op=1, sym=7, lenCode=0 => count=2): 0x62 -> pixels[12..13]
+    stream.push((0 << 6) | (7 << 3) | (1 << 1), 0x62);
+    // 7) LZ backref (op=0, highDist=0, varintDist=14, varintLen=2): copies pixels[0..1] (0x24,0x24) -> pixels[14..15]
+    stream.push(0x00, 14, 2);
+
+    const blob = new Uint8Array(header.length + stream.length);
+    blob.set(header, 0);
+    blob.set(stream, header.length);
+
+    expect(isPcpBlob(blob)).toBe(true);
+    const raw = decompressPcp(blob);
+    expect(raw.length).toBe(outLen);
+    expect(Array.from(raw.subarray(0, 20))).toEqual(imtxHeader);
+
+    const decoded = decodePcpRgba(blob);
+    expect(decoded.width).toBe(4);
+    expect(decoded.height).toBe(4);
+    expect(decoded.rgba.length).toBe(4 * 4 * 4);
+
+    // Pixel 0 = 0x24 -> lo=4 (*17=68), hi=2 (*17=34), alpha=255
+    expect(Array.from(decoded.rgba.subarray(0, 4))).toEqual([68, 68, 34, 255]);
+    // Pixel 4 = 0x00 -> transparent [0, 0, 0, 0]
+    expect(Array.from(decoded.rgba.subarray(16, 20))).toEqual([0, 0, 0, 0]);
+    // Pixel 5 = 0xfe -> lo=14 (*17=238), hi=15 (*17=255), alpha=255
+    expect(Array.from(decoded.rgba.subarray(20, 24))).toEqual([238, 238, 255, 255]);
+    // Pixel 12 = 0x62 -> lo=2 (*17=34), hi=6 (*17=102), alpha=255
+    expect(Array.from(decoded.rgba.subarray(48, 52))).toEqual([34, 34, 102, 255]);
+    // Pixel 14 (from LZ backref) = 0x24 -> [68, 68, 34, 255]
+    expect(Array.from(decoded.rgba.subarray(56, 60))).toEqual([68, 68, 34, 255]);
+
+    // Reject invalid buffers cleanly
+    expect(() => decompressPcp(new Uint8Array([0, 1, 2, 3]))).toThrow(/PCP/);
+    expect(() => decodeImtxRgba(new Uint8Array(20))).toThrow(/IMTX/);
+  });
+
+  it('decodes all real local Steam PCP\\0 textures cleanly when installed', () => {
+    const steamDir =
+      process.env.SKYBREAKER_STEAM_DIR?.trim() ||
+      process.env.LUFTRAUSERS_STEAM_DIR?.trim() ||
+      DEFAULT_STEAM_DATA_DIR;
+    if (!fs.existsSync(steamDir)) {
+      return;
+    }
+
+    const targets: ReadonlyArray<[string, number, number]> = [
+      ['gfx/textures/diffuse/sheet2grey.png', 2048, 1024],
+      ['gfx/textures/diffuse/nuke.png', 2048, 1024],
+      ['gfx/fonts/fntb_0.png', 256, 128],
+      ['gfx/fonts/fntm_0.png', 128, 64],
+      ['gfx/fonts/fntmb_0.png', 128, 128],
+      ['gfx/fonts/fnts_0.png', 128, 128],
+      ['gfx/fonts/fntxl_0.png', 256, 256],
+    ];
+
+    for (const [relPath, expW, expH] of targets) {
+      const bytes = new Uint8Array(fs.readFileSync(path.join(steamDir, relPath)));
+      expect(isPcpBlob(bytes), `${relPath} should be PCP\\0`).toBe(true);
+      const decoded = decodePcpRgba(bytes);
+      expect(decoded.width, `${relPath} width`).toBe(expW);
+      expect(decoded.height, `${relPath} height`).toBe(expH);
+      expect(decoded.rgba.length).toBe(expW * expH * 4);
+      let lit = 0;
+      for (let i = 3; i < decoded.rgba.length; i += 4) {
+        if (decoded.rgba[i]! > 0) lit++;
+      }
+      expect(lit, `${relPath} should have lit pixels`).toBeGreaterThan(1000);
+    }
+  });
+});
+
 describe('parseAngelCodeFnt & getKeyCI', () => {
   it('parses info, common, page, and char metrics accurately', () => {
     const sample = [
@@ -181,10 +296,26 @@ describe('loadVaultFromDisk (live read-only Steam bridge)', () => {
     }
     expect(nonZeroPixels).toBeGreaterThan(10000);
 
-    // PCP blobs bridged cleanly to procedural textures
-    expect(bundle.textures.menusprites?.source).toBe('procedural');
-    expect(bundle.textures.nukesprites?.source).toBe('procedural');
-    expect(bundle.textures.fntb?.source).toBe('procedural');
+    // PCP\0 blobs decoded natively at runtime into RGBA8 textures
+    expect(bundle.textures.menusprites?.source).toBe('steam-pcp');
+    expect(bundle.textures.menusprites?.width).toBe(2048);
+    expect(bundle.textures.menusprites?.height).toBe(1024);
+    expect(bundle.textures.nukesprites?.source).toBe('steam-pcp');
+    expect(bundle.textures.nukesprites?.width).toBe(2048);
+    expect(bundle.textures.nukesprites?.height).toBe(1024);
+    for (const [fname, expW, expH] of [
+      ['fntb', 256, 128],
+      ['fntm', 128, 64],
+      ['fntmb', 128, 128],
+      ['fnts', 128, 128],
+      ['fntxl', 256, 256],
+    ] as const) {
+      const ftex = bundle.textures[fname]!;
+      expect(ftex.source).toBe('steam-pcp');
+      expect(ftex.width).toBe(expW);
+      expect(ftex.height).toBe(expH);
+      expect(ftex.rgba.some((v) => v > 0)).toBe(true);
+    }
 
     // Player parts & original inheritance
     const { player } = bundle.data;
@@ -307,6 +438,7 @@ describe('createProceduralFallbackBundle & procedural parity', () => {
     }
     expect(levels.has(32)).toBe(true);
     expect(levels.has(64)).toBe(true);
+    expect(levels.has(96)).toBe(true);
     expect(levels.has(128)).toBe(true);
     expect(levels.has(160)).toBe(true);
     expect(levels.has(192)).toBe(true);
@@ -530,34 +662,116 @@ describe('createProceduralFallbackBundle & procedural parity', () => {
     expect(spriteHash('fx_splashB', 0)).not.toBe(spriteHash('fx_splashB', 8));
     expect(spriteHash('engine_underwater', 0)).not.toBe(spriteHash('engine_underwater', 3));
 
-    // Enemy silhouettes, world props & Apex Omega render rich multi-tone pixels
-    for (const key of [
-      'urauser',
-      'fighter_body',
-      'fighter_wings',
-      'jet_body',
-      'jet_wings',
-      'ace_body',
-      'ace_wings',
-      'laserace_body',
-      'laserace_wings',
-      'small_boat',
-      'big_boat',
-      'submarine',
-      'acemarine',
-      'blimp',
-      'missile',
-      'clouds',
-      'parallax_clouds',
-      'ocean_line',
-      'space_clouds',
-      'laser_charge',
-    ]) {
-      const hash = spriteHash(key, 0);
-      const uniqueLums = new Set(hash.split(',').filter((v) => v !== '0'));
-      expect(uniqueLums.size, `${key} should render visible multi-tone pixels`).toBeGreaterThanOrEqual(
-        2,
+    // Authentic silhouette palette semantics & pixel density across all major sprite groups
+    const spriteLums = (spriteName: string, frameIndex = 0): { count: number; lums: Set<number> } => {
+      const vals = spriteHash(spriteName, frameIndex)
+        .split(',')
+        .map(Number)
+        .filter((v) => v > 0);
+      return { count: vals.length, lums: new Set(vals) };
+    };
+
+    for (const [key, frameIdx, expectedLums, minPixels] of [
+      ['urauser', 0, [32], 5000],
+      ['fighter_body', 0, [64], 30],
+      ['fighter_wings', 0, [64], 40],
+      ['jet_body', 0, [64], 40],
+      ['jet_wings', 0, [64], 30],
+      ['ace_body', 0, [64], 200],
+      ['ace_wings', 0, [64], 200],
+      ['laserace_body', 0, [64], 200],
+      ['laserace_wings', 0, [64], 200],
+      ['small_boat', 0, [64], 250],
+      ['big_boat', 0, [64], 3000],
+      ['submarine', 0, [64], 1200],
+      ['acemarine', 0, [64], 1500],
+      ['blimp', 0, [64], 20000],
+      ['missile', 0, [64], 50],
+      ['fx_smoke', 0, [96], 40],
+      ['bg_boat', 0, [128], 150],
+      ['bg_blimp', 0, [128], 1000],
+      ['bg_jet_trail', 0, [192], 80],
+      ['parallax_clouds', 0, [192], 1000],
+      ['clouds', 0, [224], 15000],
+      ['ocean_line', 0, [224], 1200],
+      ['space_clouds', 0, [224], 25000],
+      ['space_clouds', 1, [64], 25000],
+      ['space_clouds', 2, [192], 25000],
+      ['laser_charge', 0, [224], 40],
+      ['projectile_bullet', 0, [160, 224], 40],
+      ['projectile_ebullet', 0, [64, 224], 60],
+    ] as const) {
+      const { count, lums } = spriteLums(key, frameIdx);
+      expect(count, `${key}[${frameIdx}] should render rich silhouette pixels`).toBeGreaterThanOrEqual(
+        minPixels,
       );
+      for (const expected of expectedLums) {
+        expect(lums.has(expected), `${key}[${frameIdx}] should include luminance ${expected}`).toBe(
+          true,
+        );
+      }
+    }
+
+    // Procedural menu atlas renders distinct, multi-state UI sprites & icons
+    const menuTex = fallback.textures.menusprites!;
+    const menuHash = (spriteName: string, frameIndex = 0): string => {
+      const entry = fallback.data.atlases.menusprites.sprites[spriteName]!;
+      expect(entry, `missing menu sprite ${spriteName}`).toBeDefined();
+      const sub = entry.subs[frameIndex]!;
+      const [sw, sh] = entry.size;
+      const out: number[] = [];
+      for (let y = 0; y < sh; y++) {
+        for (let x = 0; x < sw; x++) {
+          const idx = ((sub.y + y) * menuTex.width + (sub.x + x)) * 4;
+          out.push(menuTex.rgba[idx + 3]! > 0 ? menuTex.rgba[idx]! : 0);
+        }
+      }
+      return out.join(',');
+    };
+    expect(new Set([0, 1, 2, 3, 4].map((f) => menuHash('customize_buttons', f))).size).toBe(5);
+    expect(new Set([0, 1, 2, 3, 4].map((f) => menuHash('mission_frame', f))).size).toBe(5);
+    expect(new Set([0, 1, 2, 3, 4, 5, 6].map((f) => menuHash('customize_weapons', f))).size).toBe(7);
+    expect(new Set([0, 1, 2, 3, 4, 5, 6].map((f) => menuHash('customize_bodies', f))).size).toBe(7);
+    expect(new Set([0, 1, 2, 3, 4, 5, 6].map((f) => menuHash('customize_engines', f))).size).toBe(7);
+    expect(new Set([0, 1, 2, 3, 4, 5, 6, 7, 8].map((f) => menuHash('enemy_icons', f))).size).toBe(9);
+    expect(menuHash('projector_top', 0).split(',').some((v) => v !== '0')).toBe(true);
+    expect(menuHash('projector_btm_rope', 0).split(',').some((v) => v !== '0')).toBe(true);
+
+    // Procedural nuke atlas protects x=0/y=0 transparent border and animates all 16 frames
+    const nukeTex = fallback.textures.nukesprites!;
+    for (let x = 0; x < nukeTex.width; x++) {
+      expect(nukeTex.rgba[x * 4 + 3]).toBe(0);
+    }
+    for (let y = 0; y < nukeTex.height; y++) {
+      expect(nukeTex.rgba[y * nukeTex.width * 4 + 3]).toBe(0);
+    }
+    const nukeEntry = fallback.data.atlases.nukesprites.sprites.nuke!;
+    expect(nukeEntry.subs).toHaveLength(16);
+    let nonEmptyNukeFrames = 0;
+    for (const sub of nukeEntry.subs) {
+      let lit = 0;
+      for (let y = 0; y < nukeEntry.size[1]; y++) {
+        const ay = sub.y + y;
+        if (ay < 0 || ay >= nukeTex.height) continue;
+        for (let x = 0; x < nukeEntry.size[0]; x++) {
+          const ax = sub.x + x;
+          if (ax < 0 || ax >= nukeTex.width) continue;
+          if (nukeTex.rgba[(ay * nukeTex.width + ax) * 4 + 3]! > 0) lit++;
+        }
+      }
+      if (lit > 50) nonEmptyNukeFrames++;
+    }
+    expect(nonEmptyNukeFrames).toBe(16);
+
+    // All 5 procedural font specs pack all 95 ASCII glyphs cleanly inside [0..scaleW) x [0..scaleH)
+    for (const fname of ['fntb', 'fntm', 'fntmb', 'fnts', 'fntxl'] as const) {
+      const fspec = fallback.data.fonts[fname]!;
+      for (let code = 33; code <= 126; code++) {
+        const g = fspec.glyphs[code]!;
+        expect(g).toBeDefined();
+        expect(g.x + g.width, `${fname} char ${code} x overflow`).toBeLessThanOrEqual(fspec.scaleW);
+        expect(g.y + g.height, `${fname} char ${code} y overflow`).toBeLessThanOrEqual(fspec.scaleH);
+      }
     }
   });
 });

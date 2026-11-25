@@ -1,5 +1,11 @@
 export { sanitizeJsonCpp, parseJsonCpp } from './jsoncpp';
 export { decodeTgaRgba, isPcpBlob, type DecodedTgaImage } from './tga';
+export {
+  decompressPcp,
+  decodeImtxRgba,
+  decodePcpRgba,
+  type DecodedPcpImage,
+} from './pcp';
 export { parseAngelCodeFnt } from './font-parser';
 export {
   buildLowerKeyMap,

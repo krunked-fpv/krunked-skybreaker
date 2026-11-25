@@ -20,6 +20,7 @@ import {
   normalizeSpawnCoordinator,
   normalizeSpriteAtlas,
 } from './normalizer';
+import { decodePcpRgba } from './pcp';
 import {
   createProceduralFallbackBundle,
   createProceduralFontTexture,
@@ -80,7 +81,21 @@ function decodeTextureOrProcedural(
   bytes: Uint8Array | null,
   fallbackFn: () => DecodedTexture,
 ): DecodedTexture {
-  if (bytes && bytes.length > 0 && !isPcpBlob(bytes)) {
+  if (bytes && bytes.length > 0) {
+    if (isPcpBlob(bytes)) {
+      try {
+        const decoded = decodePcpRgba(bytes);
+        return {
+          name,
+          width: decoded.width,
+          height: decoded.height,
+          rgba: decoded.rgba,
+          source: 'steam-pcp',
+        };
+      } catch {
+        return fallbackFn();
+      }
+    }
     try {
       const decoded = decodeTgaRgba(bytes);
       return {
@@ -130,36 +145,37 @@ function buildAudioManifestFromFiles(
 }
 
 function assembleSteamVaultBundle(src: RawSteamSources): VaultAssetBundle {
+  const spritesParsed = parseJsonCpp(src.spritesRaw);
+  const menuParsed = parseJsonCpp(src.menuSpritesRaw);
+  const nukeParsed = parseJsonCpp(src.nukeSpritesRaw);
+
   const spritesTex = decodeTextureOrProcedural('sprites', src.spritesBytes, () =>
-    createProceduralSpritesTexture(
-      normalizeSpriteAtlas('sprites', parseJsonCpp(src.spritesRaw), 2048, 1024),
-    ),
+    createProceduralSpritesTexture(normalizeSpriteAtlas('sprites', spritesParsed, 2048, 1024)),
+  );
+  const menuspritesTex = decodeTextureOrProcedural('menusprites', src.menuBytes, () =>
+    createProceduralMenuTexture(normalizeSpriteAtlas('menusprites', menuParsed, 2048, 1024)),
+  );
+  const nukespritesTex = decodeTextureOrProcedural('nukesprites', src.nukeBytes, () =>
+    createProceduralNukeTexture(normalizeSpriteAtlas('nukesprites', nukeParsed, 2048, 1024)),
   );
 
   const spritesAtlas = normalizeSpriteAtlas(
     'sprites',
-    parseJsonCpp(src.spritesRaw),
+    spritesParsed,
     spritesTex.width,
     spritesTex.height,
   );
   const menuAtlas = normalizeSpriteAtlas(
     'menusprites',
-    parseJsonCpp(src.menuSpritesRaw),
-    2048,
-    1024,
+    menuParsed,
+    menuspritesTex.width,
+    menuspritesTex.height,
   );
   const nukeAtlas = normalizeSpriteAtlas(
     'nukesprites',
-    parseJsonCpp(src.nukeSpritesRaw),
-    2048,
-    1024,
-  );
-
-  const menuspritesTex = decodeTextureOrProcedural('menusprites', src.menuBytes, () =>
-    createProceduralMenuTexture(menuAtlas),
-  );
-  const nukespritesTex = decodeTextureOrProcedural('nukesprites', src.nukeBytes, () =>
-    createProceduralNukeTexture(nukeAtlas),
+    nukeParsed,
+    nukespritesTex.width,
+    nukespritesTex.height,
   );
 
   const fonts: Record<string, BitmapFontSpec> = {};

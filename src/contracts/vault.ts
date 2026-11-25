@@ -342,7 +342,7 @@ export interface DecodedTexture {
   width: number;
   height: number;
   rgba: Uint8Array;
-  source: 'steam-tga' | 'procedural';
+  source: 'steam-tga' | 'steam-pcp' | 'procedural';
 }
 
 export interface GameDataBundle {
