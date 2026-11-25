@@ -217,6 +217,9 @@ export class HangarController {
   }
 
   public moveModRow(delta: number): ModDeckRow {
+    if (!Number.isFinite(delta)) {
+      return this.getActiveModRow();
+    }
     const len = MOD_DECK_ROWS.length;
     this.activeModRowIndex =
       (((this.activeModRowIndex + Math.trunc(delta)) % len) + len) % len;
@@ -262,6 +265,17 @@ export class HangarController {
 
   public setModFlags(flags: Act2ModFlags): void {
     this.modFlagsCache = cloneModFlags(flags);
+    if (!this.modFlagsCache.moddedEnabled) {
+      const vanillaIdx = this.palettes.findIndex(
+        (p) => p.id === this.selectedPaletteId,
+      );
+      if (vanillaIdx < 0) {
+        this.selectedPaletteId = this.palettes[0]!.id;
+        this.paletteIndex = 0;
+      } else {
+        this.paletteIndex = vanillaIdx;
+      }
+    }
   }
 
   public getModFlags(): Act2ModFlags {
@@ -428,10 +442,10 @@ export class HangarController {
   }
 
   public getSelectedPalette(): PaletteDefinition {
-    const all = this.getMergedPalettes(true);
+    const all = this.getMergedPalettes(this.modFlagsCache.moddedEnabled);
     const byId = all.find((p) => p.id === this.selectedPaletteId);
     if (byId) return byId;
-    return this.palettes[this.paletteIndex] ?? this.palettes[0]!;
+    return this.palettes[0]!;
   }
 
   public setPaletteById(id: string): boolean {
@@ -456,7 +470,7 @@ export class HangarController {
     completedMissionsCount: number,
     sfmtUnlocked: boolean,
   ): void {
-    const all = this.getMergedPalettes(true);
+    const all = this.getMergedPalettes(this.modFlagsCache.moddedEnabled);
     const idx = all.findIndex((p) => p.id === paletteId);
     if (idx < 0) return;
     const target = all[idx];
@@ -714,14 +728,14 @@ export class HangarController {
     vaultSourceOverride?: VaultSource,
     act2Extras?: HangarAct2Extras,
   ): HangarUiState {
-    if (snapshot.activeMods) {
-      this.modFlagsCache = cloneModFlags(snapshot.activeMods);
+    if (act2Extras?.modFlags) {
+      this.setModFlags(act2Extras.modFlags);
+    } else if (snapshot.activeMods) {
+      this.setModFlags(snapshot.activeMods);
+    } else {
+      this.setModFlags(DEFAULT_ACT2_MOD_FLAGS);
     }
-    const effectiveModFlags = act2Extras?.modFlags
-      ? cloneModFlags(act2Extras.modFlags)
-      : snapshot.activeMods
-        ? cloneModFlags(snapshot.activeMods)
-        : cloneModFlags(this.modFlagsCache);
+    const effectiveModFlags = cloneModFlags(this.modFlagsCache);
 
     const palette = this.getSelectedPalette();
     const dailySeedId = act2Extras?.dailySeedId ?? snapshot.dailySeedId ?? undefined;

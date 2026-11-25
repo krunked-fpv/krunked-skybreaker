@@ -43,6 +43,9 @@ function clonePalette(pal: PaletteDefinition): PaletteDefinition {
 }
 
 function roundChannel(value: number): number {
+  if (!Number.isFinite(value)) {
+    return value === Infinity ? 1 : 0;
+  }
   const clamped = value < 0 ? 0 : value > 1 ? 1 : value;
   return Math.round(clamped * 1000) / 1000;
 }
@@ -104,6 +107,9 @@ export class PaletteStudioController {
   }
 
   public moveSlot(delta: number): number {
+    if (!Number.isFinite(delta)) {
+      return this.state.selectedSlot;
+    }
     const total = PALETTE_SLOT_LABELS.length;
     this.state.selectedSlot =
       (((this.state.selectedSlot + Math.trunc(delta)) % total) + total) % total;
@@ -111,6 +117,9 @@ export class PaletteStudioController {
   }
 
   public selectSlot(slot: number): number {
+    if (!Number.isFinite(slot)) {
+      return this.state.selectedSlot;
+    }
     const total = PALETTE_SLOT_LABELS.length;
     this.state.selectedSlot = (((Math.trunc(slot)) % total) + total) % total;
     return this.state.selectedSlot;
@@ -123,7 +132,8 @@ export class PaletteStudioController {
   }
 
   public getSlotColor(slot = this.state.selectedSlot): RgbaTuple {
-    const idx = Math.max(0, Math.min(7, Math.trunc(slot)));
+    const safeSlot = Number.isFinite(slot) ? slot : this.state.selectedSlot;
+    const idx = Math.max(0, Math.min(7, Math.trunc(safeSlot)));
     if (idx === 0) {
       return [...this.state.palette.backcol] as RgbaTuple;
     }
@@ -134,7 +144,8 @@ export class PaletteStudioController {
     slot: number,
     rgb: readonly [number, number, number],
   ): PaletteDefinition {
-    const idx = Math.max(0, Math.min(7, Math.trunc(slot)));
+    const safeSlot = Number.isFinite(slot) ? slot : this.state.selectedSlot;
+    const idx = Math.max(0, Math.min(7, Math.trunc(safeSlot)));
     const next: RgbaTuple = [
       roundChannel(rgb[0]),
       roundChannel(rgb[1]),
@@ -150,6 +161,9 @@ export class PaletteStudioController {
   }
 
   public stepChannel(delta: number): PaletteDefinition {
+    if (!Number.isFinite(delta)) {
+      return this.getPalette();
+    }
     const slot = this.state.selectedSlot;
     const ch = this.state.selectedChannel;
     const tuple =
