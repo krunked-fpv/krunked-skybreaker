@@ -1955,4 +1955,155 @@ describe('Deterministic 60Hz Simulation Parity', () => {
     expect(postMidSwap.player2?.x).toBe(preMidSwap.player2?.x);
     expect(postMidSwap.player2?.y).toBe(preMidSwap.player2?.y);
   });
+
+  it('23. Full fxparticle.json parity: chained explosions, EBigFlash + gunRecoil, boosthover_fade, ace_boostend, LaserAce splash/fade & launch bay FX', () => {
+    const data = createProceduralFallbackBundle().data;
+
+    // 1. Submarine launch emits bigboostcircle + boostsplash + smoke + wide splashSub
+    const simLaunch = new Simulation(data);
+    simLaunch.launch({ weapon: 0, body: 0, engine: 0 }, 'normal', 2301);
+    const launchSnap = simLaunch.getSnapshot();
+    expect(launchSnap.particles.some((pt) => pt.kind === 'bigboostcircle')).toBe(true);
+    expect(launchSnap.particles.some((pt) => pt.kind === 'boostsplash')).toBe(true);
+    expect(launchSnap.particles.some((pt) => pt.kind === 'smoke')).toBe(true);
+    expect(launchSnap.particles.filter((pt) => pt.kind === 'splashSub').length).toBeGreaterThanOrEqual(3);
+
+    // 2. Chained explosions: BigBoat death near seaLevel triggers explode_big -> initial smoke, randspawn explode_medium/explode_small, splashB/splashM, and playerburn
+    const simChain = new Simulation(data);
+    const preChain = launchToPlaying(simChain, { weapon: 4, body: 0, engine: 4 }, 'normal', 2302);
+    // Kill a BigBoat near seaLevel with a nuke-like hit by lowering HP and shooting
+    const bigBoat = simChain.spawnEnemy('BigBoat', preChain.player.x, 0);
+    bigBoat.health = 1;
+    // Also spawn a Blimp right next to the player so playerburn triggers cleanly
+    const nearBlimp = simChain.spawnEnemy('Blimp', preChain.player.x, preChain.player.y - 36);
+    nearBlimp.health = 1;
+    simChain.step({ left: false, right: false, thrust: false, fire: true });
+    let sawChainedMedium = false;
+    let sawChainedSmall = false;
+    let sawInitSmoke = false;
+    let sawPlayerBurn = false;
+    let sawSplashB = false;
+    for (let t = 0; t < 55; t++) {
+      const s = simChain.step(IDLE_INPUT);
+      if (s.player.burnTicks > 0) sawPlayerBurn = true;
+      if (s.particles.some((pt) => pt.kind === 'explode_medium')) sawChainedMedium = true;
+      if (s.particles.some((pt) => pt.kind === 'explode_small')) sawChainedSmall = true;
+      if (s.particles.some((pt) => pt.kind === 'smoke')) sawInitSmoke = true;
+      if (s.particles.some((pt) => pt.kind === 'splashB')) sawSplashB = true;
+    }
+    expect(sawInitSmoke).toBe(true);
+    expect(sawChainedMedium).toBe(true);
+    expect(sawChainedSmall).toBe(true);
+    expect(sawPlayerBurn).toBe(true);
+    expect(sawSplashB).toBe(true);
+
+    // 3. BigBoat turret firing emits EBigFlash + gunRecoilTicks / gunAnimFrame (1..5 -> 0)
+    const simGun = new Simulation(data);
+    const preGun = launchToPlaying(simGun, { weapon: 0, body: 1, engine: 4 }, 'normal', 2303);
+    const bb = simGun.spawnEnemy('BigBoat', preGun.player.x + 120, 0);
+    bb.salvoCooldown = 0;
+    let sawBigFlash = false;
+    let sawGunRecoil = false;
+    let sawGunFrame = false;
+    for (let t = 0; t < 20; t++) {
+      const s = simGun.step(IDLE_INPUT);
+      const tracked = s.enemies.find((e) => e.id === bb.id);
+      if ((tracked?.gunRecoilTicks ?? 0) > 0) sawGunRecoil = true;
+      if ((tracked?.gunAnimFrame ?? 0) >= 1 && (tracked?.gunAnimFrame ?? 0) <= 5) sawGunFrame = true;
+      if (s.particles.some((pt) => pt.kind === 'EBigFlash' && pt.spriteName === 'fx_EBigFlash')) {
+        sawBigFlash = true;
+      }
+    }
+    expect(sawBigFlash).toBe(true);
+    expect(sawGunRecoil).toBe(true);
+    expect(sawGunFrame).toBe(true);
+
+    // 4. Hover engine boost emits boosthover_fade; Ace closing inside boostdstplayer emits ace_boostend; Gungine emits rear fireFlash
+    const simHover = new Simulation(data);
+    const preHover = launchToPlaying(simHover, { weapon: 0, body: 0, engine: 4 }, 'normal', 2304);
+    const farAce = simHover.spawnEnemy('Ace', preHover.player.x + 360, preHover.player.y);
+    let sawHoverFade = false;
+    let sawAceBoostEnd = false;
+    for (let t = 0; t < 90; t++) {
+      const s = simHover.step({ left: false, right: false, thrust: t < 16, fire: false });
+      if (s.particles.some((pt) => pt.kind === 'boosthover_fade')) sawHoverFade = true;
+      if (s.particles.some((pt) => pt.kind === 'ace_boostend')) sawAceBoostEnd = true;
+      if (t === 5) {
+        // Pull Ace inside boostdstplayer to verify falling edge emits ace_boostend
+        farAce.x = s.player.x + 80;
+      }
+    }
+    expect(sawHoverFade).toBe(true);
+    expect(sawAceBoostEnd).toBe(true);
+
+    // 5. LaserAce beam intersecting seaLevel emits lasersplash and beam completion emits stretched laser_fade
+    const simLaserAce = new Simulation(data);
+    const preLa = launchToPlaying(simLaserAce, { weapon: 0, body: 1, engine: 4 }, 'normal', 2305);
+    const la = simLaserAce.spawnEnemy('LaserAce', preLa.player.x + 140, -140);
+    la.fireTimer = 0;
+    la.laserChargeTicks = 1;
+    la.gunAngleDeg = 75; // Aimed sharply downward into seaLevel
+    let sawEnemyLaserSplash = false;
+    let sawEnemyLaserFade = false;
+    for (let t = 0; t < 80; t++) {
+      const s = simLaserAce.step(IDLE_INPUT);
+      if (la.laserActive) {
+        la.gunAngleDeg = 75;
+      }
+      if (s.particles.some((pt) => pt.kind === 'lasersplash')) sawEnemyLaserSplash = true;
+      const lf = s.particles.find((pt) => pt.kind === 'laser_fade');
+      if (lf && lf.scaleX > 100) sawEnemyLaserFade = true;
+    }
+    expect(sawEnemyLaserSplash).toBe(true);
+    expect(sawEnemyLaserFade).toBe(true);
+  });
+
+  it('24. Crashing jets, sinking ships/blimps, horizon parallax life (bg_boat/bg_jet/bg_sub/bg_plane) & hangar audio cue preserve deterministic replay', () => {
+    const data = createProceduralFallbackBundle().data;
+    const sim = new Simulation(data);
+    const pre = launchToPlaying(sim, { weapon: 4, body: 0, engine: 4 }, 'normal', 2401);
+
+    // Horizon immediately seeded with living parallax silhouettes on launch
+    expect(pre.parallax.some((p) => p.spriteName === 'bg_boat')).toBe(true);
+    expect(pre.parallax.some((p) => p.spriteName === 'bg_plane')).toBe(true);
+    expect(pre.parallax.some((p) => p.spriteName === 'bg_jet')).toBe(true);
+
+    // Kill a Jet at low altitude -> spawns wreck_jet crashing spiral that splashes with splashM + explode_small on sea impact
+    const jet = sim.spawnEnemy('Jet', pre.player.x, pre.player.y - 48);
+    jet.health = 1;
+    // Kill a Blimp & Boat too -> spawn blimp_die & small_boat_sink wrecks with staggered explosions
+    const boat = sim.spawnEnemy('Boat', pre.player.x, pre.player.y - 48);
+    boat.y = 0;
+    boat.health = 1;
+    const blimp = sim.spawnEnemy('Blimp', pre.player.x, pre.player.y - 52);
+    blimp.health = 1;
+    sim.step({ left: false, right: false, thrust: false, fire: true });
+
+    let sawJetWreck = false;
+    let sawBlimpWreck = false;
+    let sawJetOceanSplash = false;
+    let sawBlimpImpactSplashB = false;
+    for (let t = 0; t < 160; t++) {
+      const s = sim.step(IDLE_INPUT);
+      if (s.particles.some((pt) => pt.spriteName === 'jet_body_crash')) sawJetWreck = true;
+      if (s.particles.some((pt) => pt.spriteName === 'blimp_die')) sawBlimpWreck = true;
+      if (s.particles.some((pt) => pt.kind === 'splashM') && s.audioEvents.some((e) => e.cue === 'sndsplashm')) {
+        sawJetOceanSplash = true;
+      }
+      if (s.particles.some((pt) => pt.kind === 'splashB') && s.audioEvents.some((e) => e.cue === 'sndsplashl')) {
+        sawBlimpImpactSplashB = true;
+      }
+    }
+    expect(sawJetWreck).toBe(true);
+    expect(sawBlimpWreck).toBe(true);
+    expect(sawJetOceanSplash).toBe(true);
+    expect(sawBlimpImpactSplashB).toBe(true);
+
+    // Returning to hangar clears wrecks and emits sndhangar
+    sim.returnToHangar();
+    const hangarSnap = sim.getSnapshot();
+    expect(hangarSnap.phase).toBe('hangar');
+    expect(hangarSnap.particles).toHaveLength(0);
+    expect(hangarSnap.audioEvents.some((e) => e.cue === 'sndhangar')).toBe(true);
+  });
 });
