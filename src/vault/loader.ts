@@ -1,4 +1,5 @@
 import type {
+  AssetPackMode,
   AudioAssetManifest,
   BitmapFontSpec,
   DecodedTexture,
@@ -248,9 +249,38 @@ export class VaultLoader implements IVaultLoader {
     }
   }
 
-  async load(): Promise<VaultAssetBundle> {
+  private isHostedPagesBlock(): boolean {
     const hostname = (globalThis as { location?: { hostname?: string } }).location?.hostname;
-    if (!this.hasCustomTransport && typeof hostname === 'string' && hostname.endsWith('.github.io')) {
+    return !this.hasCustomTransport && typeof hostname === 'string' && hostname.endsWith('.github.io');
+  }
+
+  /**
+   * Probes `/steam-vault/manifest.json` cleanly to report whether the optional
+   * local read-only Steam asset bridge is available. Always returns `false` on
+   * `*.github.io` unless a custom transport was explicitly configured.
+   */
+  async isSteamAvailable(): Promise<boolean> {
+    if (this.isHostedPagesBlock()) {
+      return false;
+    }
+    try {
+      const manifestRes = await this.fetchImpl(`${this.baseUrl}/steam-vault/manifest.json`);
+      if (!manifestRes.ok) {
+        return false;
+      }
+      const manifest = (await manifestRes.json()) as Partial<SteamManifestPayload>;
+      return Boolean(manifest?.available);
+    } catch {
+      return false;
+    }
+  }
+
+  async load(preferredMode?: AssetPackMode): Promise<VaultAssetBundle> {
+    if (preferredMode === 'skybreaker') {
+      return createProceduralFallbackBundle();
+    }
+
+    if (this.isHostedPagesBlock()) {
       return createProceduralFallbackBundle();
     }
 
@@ -365,8 +395,9 @@ function getNodeModules(): { fs: NodeFsModule; path: NodePathModule } | null {
 
 /**
  * Synchronous Node.js loader for headless Vitest parity tests and CLI audit scripts.
- * Reads strictly read-only from `steamDir` (or `LUFTRAUSERS_STEAM_DIR` or default Steam path)
- * and falls back cleanly to `createProceduralFallbackBundle()` when unavailable.
+ * Reads strictly read-only from `steamDir` (or `SKYBREAKER_STEAM_DIR`, falling back to
+ * `LUFTRAUSERS_STEAM_DIR`, then default Steam path) and falls back cleanly to
+ * `createProceduralFallbackBundle()` when unavailable.
  */
 export function loadVaultFromDisk(steamDir?: string): VaultAssetBundle {
   const mods = getNodeModules();
@@ -375,7 +406,9 @@ export function loadVaultFromDisk(steamDir?: string): VaultAssetBundle {
   }
   const { fs, path } = mods;
   const envDir =
-    typeof process !== 'undefined' ? process.env.LUFTRAUSERS_STEAM_DIR?.trim() : undefined;
+    typeof process !== 'undefined'
+      ? process.env.SKYBREAKER_STEAM_DIR?.trim() || process.env.LUFTRAUSERS_STEAM_DIR?.trim()
+      : undefined;
   const resolvedDir = steamDir?.trim() || envDir || DEFAULT_STEAM_DATA_DIR;
 
   try {

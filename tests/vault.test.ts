@@ -7,6 +7,8 @@ import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_STEAM_DATA_DIR,
+  VANILLA_GLOBAL_RAW,
+  VANILLA_PLAYER_RAW,
   VaultLoader,
   checkCleanRoomGitHygiene,
   createProceduralFallbackBundle,
@@ -23,6 +25,7 @@ import {
 import {
   createSteamBridgeMiddleware,
   resolveSafeSteamFilePath,
+  resolveSteamDataDir,
   steamBridgePlugin,
 } from '../tools/steam-bridge/vite-plugin';
 
@@ -57,7 +60,10 @@ describe('parseJsonCpp', () => {
   });
 
   it('parses all Steam res/*.json and gfx/*.json files cleanly', () => {
-    const steamDir = process.env.LUFTRAUSERS_STEAM_DIR?.trim() || DEFAULT_STEAM_DATA_DIR;
+    const steamDir =
+      process.env.SKYBREAKER_STEAM_DIR?.trim() ||
+      process.env.LUFTRAUSERS_STEAM_DIR?.trim() ||
+      DEFAULT_STEAM_DATA_DIR;
     if (!fs.existsSync(steamDir)) {
       return;
     }
@@ -315,25 +321,192 @@ describe('createProceduralFallbackBundle & procedural parity', () => {
     expect(createProceduralNukeTexture().width).toBe(2048);
     expect(createProceduralFontTexture(fallback.data.fonts.fntb!).source).toBe('procedural');
 
-    // Exact numeric parity against Steam JSONs
+    // Exact numeric gameplay balance parity against Steam JSONs (while preserving original Skybreaker IP copy)
     const steam = loadVaultFromDisk();
     if (steam.data.vaultSource === 'steam-local') {
-      expect(fallback.data.player.enginesById).toEqual(steam.data.player.enginesById);
-      expect(fallback.data.player.bodiesById).toEqual(steam.data.player.bodiesById);
-      expect(fallback.data.player.weaponsById).toEqual(steam.data.player.weaponsById);
+      const stripCopy = <T extends { name: string; descr: string }>(arr: T[]) =>
+        arr.map(({ name: _n, descr: _d, ...rest }) => rest);
+
+      expect(stripCopy(fallback.data.player.enginesById)).toEqual(
+        stripCopy(steam.data.player.enginesById),
+      );
+      expect(stripCopy(fallback.data.player.bodiesById)).toEqual(
+        stripCopy(steam.data.player.bodiesById),
+      );
+      expect(stripCopy(fallback.data.player.weaponsById)).toEqual(
+        stripCopy(steam.data.player.weaponsById),
+      );
       expect(fallback.data.projectiles).toEqual(steam.data.projectiles);
       expect(fallback.data.enemies).toEqual(steam.data.enemies);
       expect(fallback.data.enemiesSfmt).toEqual(steam.data.enemiesSfmt);
       expect(fallback.data.spawnCoordinator).toEqual(steam.data.spawnCoordinator);
       expect(fallback.data.spawnCoordinatorSfmt).toEqual(steam.data.spawnCoordinatorSfmt);
-      expect(fallback.data.global.planenames).toEqual(steam.data.global.planenames);
-      expect(fallback.data.global.missions).toEqual(steam.data.global.missions);
+      expect(
+        fallback.data.global.missions.map(({ id, component, objective, condition, val }) => ({
+          id,
+          component,
+          objective,
+          condition,
+          val,
+        })),
+      ).toEqual(
+        steam.data.global.missions.map(({ id, component, objective, condition, val }) => ({
+          id,
+          component,
+          objective,
+          condition,
+          val,
+        })),
+      );
       expect(fallback.data.fx).toEqual(steam.data.fx);
       expect(fallback.data.parallax).toEqual(steam.data.parallax);
       expect(fallback.data.room).toEqual(steam.data.room);
-      expect(Object.keys(fallback.data.atlases.sprites.sprites).sort()).toEqual(
-        Object.keys(steam.data.atlases.sprites.sprites).sort(),
+      const gameplaySpriteKeys = (keys: string[]) =>
+        keys.filter((k) => !k.endsWith('_logo')).sort();
+      expect(gameplaySpriteKeys(Object.keys(fallback.data.atlases.sprites.sprites))).toEqual(
+        gameplaySpriteKeys(Object.keys(steam.data.atlases.sprites.sprites)),
       );
+    }
+
+    // Verify upgraded procedural pixel art renders distinct silhouettes for every player part
+    const spriteHash = (spriteName: string, frameIndex = 0): string => {
+      const entry = fallback.data.atlases.sprites.sprites[spriteName]!;
+      expect(entry).toBeDefined();
+      const sub = entry.subs[frameIndex]!;
+      const [sw, sh] = entry.size;
+      const out: number[] = [];
+      for (let y = 0; y < sh; y++) {
+        for (let x = 0; x < sw; x++) {
+          const idx = ((sub.y + y) * spritesTex.width + (sub.x + x)) * 4;
+          out.push(spritesTex.rgba[idx + 3]! > 0 ? spritesTex.rgba[idx]! : 0);
+        }
+      }
+      return out.join(',');
+    };
+
+    const engineHashes = new Set([
+      spriteHash('engine_original'),
+      spriteHash('engine_superboost'),
+      spriteHash('engine_gungine'),
+      spriteHash('engine_underwater'),
+      spriteHash('engine_hover'),
+    ]);
+    expect(engineHashes.size).toBe(5);
+
+    const bodyHashes = new Set([
+      spriteHash('body_original'),
+      spriteHash('body_armor'),
+      spriteHash('body_melee'),
+      spriteHash('body_nuke'),
+      spriteHash('body_bomb'),
+    ]);
+    expect(bodyHashes.size).toBe(5);
+
+    const wingHashes = new Set([
+      spriteHash('wings_original'),
+      spriteHash('wings_laser'),
+      spriteHash('wings_spread'),
+      spriteHash('wings_missiles'),
+      spriteHash('wings_cannon'),
+    ]);
+    expect(wingHashes.size).toBe(5);
+
+    // Multi-frame FX animate across frames
+    expect(spriteHash('fx_explodebig', 0)).not.toBe(spriteHash('fx_explodebig', 6));
+    expect(spriteHash('fx_splashB', 0)).not.toBe(spriteHash('fx_splashB', 8));
+    expect(spriteHash('engine_underwater', 0)).not.toBe(spriteHash('engine_underwater', 3));
+
+    // Enemy silhouettes, world props & Apex Omega render rich multi-tone pixels
+    for (const key of [
+      'urauser',
+      'fighter_body',
+      'fighter_wings',
+      'jet_body',
+      'jet_wings',
+      'ace_body',
+      'ace_wings',
+      'laserace_body',
+      'laserace_wings',
+      'small_boat',
+      'big_boat',
+      'submarine',
+      'acemarine',
+      'blimp',
+      'missile',
+      'clouds',
+      'parallax_clouds',
+      'ocean_line',
+      'space_clouds',
+      'laser_charge',
+    ]) {
+      const hash = spriteHash(key, 0);
+      const uniqueLums = new Set(hash.split(',').filter((v) => v !== '0'));
+      expect(uniqueLums.size, `${key} should render visible multi-tone pixels`).toBeGreaterThanOrEqual(
+        2,
+      );
+    }
+  });
+});
+
+describe('Clean-room Skybreaker IP safety', () => {
+  it('contains zero trademark/verbatim Vlambeer strings and 125 + 1 unique Skybreaker callsigns', () => {
+    const forbidden = [
+      'luftrauser',
+      'rauser',
+      'urauser',
+      'kozilek',
+      'vlambeer',
+      'devolver',
+      'equiped',
+      'pinochio',
+      'bob raus',
+      'unhealthy boeing',
+    ];
+
+    const playerDump = JSON.stringify(VANILLA_PLAYER_RAW).toLowerCase();
+    for (const term of forbidden) {
+      expect(playerDump).not.toContain(term);
+    }
+
+    const planenames = VANILLA_GLOBAL_RAW.planenames;
+    expect(planenames).toHaveLength(126);
+
+    const namesLower = new Set<string>();
+    const combos = new Set<string>();
+    for (const entry of planenames) {
+      const trimmed = entry.name.trim();
+      expect(trimmed.length).toBeGreaterThan(0);
+      const lower = trimmed.toLowerCase();
+      for (const term of forbidden) {
+        expect(lower).not.toContain(term);
+      }
+      namesLower.add(lower);
+      combos.add(`${entry.weapon},${entry.body},${entry.engine}`);
+    }
+
+    expect(namesLower.size).toBe(126);
+    expect(combos.size).toBe(126);
+    expect(planenames[125]).toEqual({
+      name: 'APEX OMEGA',
+      weapon: 5,
+      body: 5,
+      engine: 5,
+    });
+
+    // Every normalized procedural fallback mission and player part description is clean
+    const fallback = createProceduralFallbackBundle();
+    const userFacingDump = JSON.stringify({
+      engines: fallback.data.player.enginesById.map((e) => ({ name: e.name, descr: e.descr })),
+      bodies: fallback.data.player.bodiesById.map((b) => ({ name: b.name, descr: b.descr })),
+      weapons: fallback.data.player.weaponsById.map((w) => ({ name: w.name, descr: w.descr })),
+      missions: fallback.data.global.missions.map((m) => ({
+        title: m.title,
+        description: m.description,
+      })),
+      planenames: fallback.data.global.planenames,
+    }).toLowerCase();
+    for (const term of forbidden) {
+      expect(userFacingDump).not.toContain(term);
     }
   });
 });
@@ -467,6 +640,96 @@ describe('Vite Steam Bridge Middleware & VaultLoader', () => {
     });
     const offlineBundle = await offlineLoader.load();
     expect(offlineBundle.data.vaultSource).toBe('procedural-fallback');
+
+    // Dual Asset Pack Toggle: 'skybreaker' NEVER fetches Steam even when bridge is live
+    let skybreakerFetchCalls = 0;
+    const trackingFetch: typeof fetch = async (input, init) => {
+      skybreakerFetchCalls++;
+      return fetchViaMiddleware(input, init);
+    };
+    const dualLoader = new VaultLoader({ fetchImpl: trackingFetch });
+    const skybreakerBundle = await dualLoader.load('skybreaker');
+    expect(skybreakerBundle.data.vaultSource).toBe('procedural-fallback');
+    expect(skybreakerBundle.textures.sprites?.source).toBe('procedural');
+    expect(skybreakerBundle.data.global.planenames[125]?.name).toBe('APEX OMEGA');
+    expect(skybreakerFetchCalls).toBe(0);
+
+    // isSteamAvailable() probes manifest cleanly
+    expect(await dualLoader.isSteamAvailable()).toBe(hasSteam);
+    expect(await offlineLoader.isSteamAvailable()).toBe(false);
+
+    // 'steam-local' loads Steam when available and falls back cleanly when unavailable
+    const steamPreferred = await dualLoader.load('steam-local');
+    if (hasSteam) {
+      expect(steamPreferred.data.vaultSource).toBe('steam-local');
+      expect(steamPreferred.textures.sprites?.source).toBe('steam-tga');
+    } else {
+      expect(steamPreferred.data.vaultSource).toBe('procedural-fallback');
+    }
+    const offlineSteamPreferred = await offlineLoader.load('steam-local');
+    expect(offlineSteamPreferred.data.vaultSource).toBe('procedural-fallback');
+
+    // Mocked Steam available check & *.github.io guard
+    const mockAvailLoader = new VaultLoader({
+      fetchImpl: async (input) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.endsWith('/steam-vault/manifest.json')) {
+          return new Response(JSON.stringify({ available: true, steamDir: 'C:\\Mock\\data' }), {
+            status: 200,
+          });
+        }
+        return new Response('Not Found', { status: 404 });
+      },
+    });
+    expect(await mockAvailLoader.isSteamAvailable()).toBe(true);
+    // Still returns procedural-fallback immediately when 'skybreaker' is requested
+    expect((await mockAvailLoader.load('skybreaker')).data.vaultSource).toBe('procedural-fallback');
+
+    const prevLocation = (globalThis as { location?: { hostname?: string } }).location;
+    try {
+      Object.defineProperty(globalThis, 'location', {
+        configurable: true,
+        writable: true,
+        value: { hostname: 'krunked.github.io' },
+      });
+      const hostedLoader = new VaultLoader();
+      expect(await hostedLoader.isSteamAvailable()).toBe(false);
+      expect((await hostedLoader.load('steam-local')).data.vaultSource).toBe(
+        'procedural-fallback',
+      );
+    } finally {
+      if (prevLocation === undefined) {
+        delete (globalThis as { location?: unknown }).location;
+      } else {
+        Object.defineProperty(globalThis, 'location', {
+          configurable: true,
+          writable: true,
+          value: prevLocation,
+        });
+      }
+    }
+
+    const prevSky = process.env.SKYBREAKER_STEAM_DIR;
+    const prevLegacy = process.env.LUFTRAUSERS_STEAM_DIR;
+    try {
+      process.env.SKYBREAKER_STEAM_DIR = 'C:\\CustomSkybreaker\\data';
+      process.env.LUFTRAUSERS_STEAM_DIR = 'C:\\LegacySteam\\data';
+      expect(resolveSteamDataDir()).toBe('C:\\CustomSkybreaker\\data');
+
+      delete process.env.SKYBREAKER_STEAM_DIR;
+      expect(resolveSteamDataDir()).toBe('C:\\LegacySteam\\data');
+
+      delete process.env.LUFTRAUSERS_STEAM_DIR;
+      expect(resolveSteamDataDir({ steamDir: 'C:\\OptionSteam\\data' })).toBe(
+        'C:\\OptionSteam\\data',
+      );
+      expect(resolveSteamDataDir()).toBe(DEFAULT_STEAM_DATA_DIR);
+    } finally {
+      if (prevSky === undefined) delete process.env.SKYBREAKER_STEAM_DIR;
+      else process.env.SKYBREAKER_STEAM_DIR = prevSky;
+      if (prevLegacy === undefined) delete process.env.LUFTRAUSERS_STEAM_DIR;
+      else process.env.LUFTRAUSERS_STEAM_DIR = prevLegacy;
+    }
   });
 });
 
