@@ -31,6 +31,7 @@ import {
   ACT2_BONUS_PALETTES,
   DEFAULT_PALETTE_ID,
   PALETTES,
+  createDefaultCustomPalette,
   getPaletteById,
   isPaletteUnlocked,
   rgbaToHex,
@@ -534,7 +535,11 @@ export class WebGL2Renderer implements IRenderer {
   }
 
   public listPalettes(): readonly PaletteDefinition[] {
-    const merged: PaletteDefinition[] = [...PALETTES, ...ACT2_BONUS_PALETTES];
+    const merged: PaletteDefinition[] = [
+      ...PALETTES,
+      ...ACT2_BONUS_PALETTES,
+      createDefaultCustomPalette(),
+    ];
     for (const p of this.customPalettes) {
       const existingIdx = merged.findIndex((existing) => existing.id === p.id);
       if (existingIdx >= 0) {
@@ -3397,6 +3402,31 @@ export class WebGL2Renderer implements IRenderer {
           ? 'SKYBREAKER'
           : 'SKYBREAKER [STEAM N/A]';
     const modeLabel = hangarUi.mode === 'sfmt' ? 'OVERDRIVE' : 'NORMAL';
+    const isAllUnlocked = Boolean(hangarUi.allUnlocked);
+    const arsenalEnabled = Boolean(
+      moddedEnabled && hangarUi.modFlags?.arsenalBosses,
+    );
+    const partCount = arsenalEnabled ? 9 : 6;
+    const weaponSlot = clamp(
+      Math.floor(hangarUi.loadout.weapon) + 1,
+      1,
+      partCount,
+    );
+    const bodySlot = clamp(Math.floor(hangarUi.loadout.body) + 1, 1, partCount);
+    const engineSlot = clamp(
+      Math.floor(hangarUi.loadout.engine) + 1,
+      1,
+      partCount,
+    );
+    const paletteCount = moddedEnabled
+      ? this.listPalettes().length
+      : PALETTES.length;
+    const paletteSlot = clamp(
+      Math.floor(hangarUi.paletteIndex) + 1,
+      1,
+      paletteCount,
+    );
+    const modeAvailable = isAllUnlocked || hangarUi.sfmtUnlocked;
 
     const activeSpecDescr =
       hangarUi.activeRow === 'weapon'
@@ -3406,13 +3436,13 @@ export class WebGL2Renderer implements IRenderer {
           : hangarUi.activeRow === 'engine'
             ? hangarUi.engineSpec.descr
             : hangarUi.activeRow === 'palette'
-              ? `ACTIVE PALETTE: ${hangarUi.paletteName}`
+              ? `ACTIVE PALETTE: ${hangarUi.paletteName} (${paletteSlot}/${paletteCount})`
               : hangarUi.activeRow === 'assets'
                 ? 'ORIGINAL SKYBREAKER ART & SYNTH\nOR LOCAL STEAM VAULT (IF OWNED)'
                 : hangarUi.activeRow === 'mode'
-                  ? hangarUi.sfmtUnlocked
+                  ? modeAvailable
                     ? 'OVERDRIVE MODE - HIGH SPEED ACE WAVE'
-                    : 'COMPLETE ALL MISSIONS TO UNLOCK OVERDRIVE'
+                    : 'COMPLETE 15 MISSIONS OR SINK A BLIMP TO UNLOCK'
                   : 'PRESS SPACE OR ENTER TO LAUNCH SORTIE';
 
     const rowDefs: {
@@ -3422,22 +3452,22 @@ export class WebGL2Renderer implements IRenderer {
     }[] = [
       {
         key: 'weapon',
-        label: 'WEAPON',
+        label: `WEAPON ${weaponSlot}/${partCount}`,
         value: hangarUi.weaponSpec.name.toUpperCase(),
       },
       {
         key: 'body',
-        label: 'BODY',
+        label: `BODY ${bodySlot}/${partCount}`,
         value: hangarUi.bodySpec.name.toUpperCase(),
       },
       {
         key: 'engine',
-        label: 'ENGINE',
+        label: `ENGINE ${engineSlot}/${partCount}`,
         value: hangarUi.engineSpec.name.toUpperCase(),
       },
       {
         key: 'palette',
-        label: 'PALETTE',
+        label: `PALETTE ${paletteSlot}/${paletteCount}`,
         value: hangarUi.paletteName.toUpperCase(),
       },
       {
@@ -3448,9 +3478,7 @@ export class WebGL2Renderer implements IRenderer {
       {
         key: 'mode',
         label: 'MODE',
-        value: hangarUi.sfmtUnlocked
-          ? modeLabel
-          : `${modeLabel} [LOCKED]`,
+        value: modeAvailable ? modeLabel : `${modeLabel} [LOCKED]`,
       },
       {
         key: 'launch',
@@ -3520,23 +3548,39 @@ export class WebGL2Renderer implements IRenderer {
         ? contrast.selectedTextInk
         : contrast.darkPanelFg;
       const prefix = isSelected ? '> ' : '  ';
+      const labelText = `${prefix}${r.label}`;
+      const valText = isSelected ? `< ${r.value} >` : r.value;
+      const labelY = ry + 4;
+      const valY = ry + (r.key === 'palette' ? 4 : 14);
+
       this.drawBitmapText(
         gl,
         smallFont,
-        `${prefix}${r.label}`,
+        labelText,
         48,
-        ry + 4,
+        labelY,
         1,
         'left',
         labelCol,
       );
+
+      // Keep value strictly inside 260px row box without colliding with left label
+      const labelW = measureBitmapText(smallFont.spec, labelText, 1).width;
+      const maxValW =
+        r.key === 'palette'
+          ? Math.max(48, 294 - (48 + labelW + 6))
+          : 246;
+      const rawValW = measureBitmapText(smallFont.spec, valText, 1).width;
+      const valScale =
+        rawValW > maxValW && rawValW > 0 ? maxValW / rawValW : 1;
+
       this.drawBitmapText(
         gl,
         smallFont,
-        isSelected ? `< ${r.value} >` : r.value,
+        valText,
         294,
-        ry + (r.key === 'palette' ? 4 : 14),
-        1,
+        valY,
+        valScale,
         'right',
         valCol,
       );
@@ -3679,13 +3723,14 @@ export class WebGL2Renderer implements IRenderer {
       pal,
       hangarUi.completedMissionsCount,
       hangarUi.sfmtUnlocked,
+      isAllUnlocked,
     )
       ? ''
       : ' [LOCKED]';
     this.drawBitmapText(
       gl,
       smallFont,
-      `HI: ${hangarUi.highScore}   MISSIONS: ${hangarUi.completedMissionsCount}/${hangarUi.totalMissionsCount}${lockedNote}`,
+      `HI: ${hangarUi.highScore}  MISSIONS: ${hangarUi.completedMissionsCount}/${hangarUi.totalMissionsCount}${lockedNote}`,
       42,
       347,
       1,
@@ -3695,7 +3740,7 @@ export class WebGL2Renderer implements IRenderer {
     this.drawBitmapText(
       gl,
       smallFont,
-      `UP/DN:ROW LT/RT:CYC TAB:MODS SPC:GO ~HUD`,
+      `LT/RT:CYC U:${isAllUnlocked ? 'ALL' : 'LOCK'} TAB:MODS SPC:GO ~HUD`,
       558,
       347,
       1,
@@ -4927,9 +4972,16 @@ export class WebGL2Renderer implements IRenderer {
       ctx.fillStyle = rgbaToCss(contrast.darkPanelFg);
       ctx.font = 'bold 16px monospace';
       ctx.fillText(planeLabel, 48, 52);
+      const fallbackPartCount =
+        hangarUi.modFlags?.moddedEnabled && hangarUi.modFlags?.arsenalBosses
+          ? 9
+          : 6;
+      const fallbackPalCount = hangarUi.modFlags?.moddedEnabled
+        ? this.listPalettes().length
+        : PALETTES.length;
       ctx.font = '12px monospace';
       ctx.fillText(
-        `W:${hangarUi.weaponSpec.name} B:${hangarUi.bodySpec.name} E:${hangarUi.engineSpec.name}`,
+        `W(${hangarUi.loadout.weapon + 1}/${fallbackPartCount}):${hangarUi.weaponSpec.name} B(${hangarUi.loadout.body + 1}/${fallbackPartCount}):${hangarUi.bodySpec.name} E(${hangarUi.loadout.engine + 1}/${fallbackPartCount}):${hangarUi.engineSpec.name}`,
         48,
         84,
       );
@@ -4941,7 +4993,7 @@ export class WebGL2Renderer implements IRenderer {
             ? 'SKYBREAKER'
             : 'SKYBREAKER [STEAM N/A]';
       ctx.fillText(
-        `PALETTE: ${hangarUi.paletteName}  ASSETS: ${fallbackAssets}  MODE: ${hangarUi.mode === 'sfmt' ? 'OVERDRIVE' : 'NORMAL'}`,
+        `PAL(${hangarUi.paletteIndex + 1}/${fallbackPalCount}): ${hangarUi.paletteName}  ASSETS: ${fallbackAssets}  MODE: ${hangarUi.mode === 'sfmt' ? 'OVERDRIVE' : 'NORMAL'}`,
         48,
         106,
       );

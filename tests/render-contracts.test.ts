@@ -41,7 +41,29 @@ import {
   resolveEnemyRenderTransform,
   wrapBitmapTextLines,
 } from '../src/render/renderer';
-import { HANGAR_ROWS, HangarController, TelemetryHud } from '../src/ui';
+import {
+  ACT2_CUSTOM_PALETTE_KEY,
+  ACT2_MODS_STORAGE_KEY,
+  ACT2_PB_GHOST_KEY,
+  HANGAR_ROWS,
+  HangarController,
+  LEGACY_ACT2_CUSTOM_PALETTE_KEY,
+  LEGACY_ACT2_MODS_STORAGE_KEY,
+  LEGACY_ACT2_PB_GHOST_KEY,
+  LEGACY_PROFILE_STORAGE_KEY,
+  PROFILE_STORAGE_KEY,
+  PROGRESSION_LOCK_STORAGE_KEY,
+  TelemetryHud,
+  computeCampaignUnlockedProfile,
+  loadProgressionLockMode,
+  loadStoredCustomPalette,
+  loadStoredModFlags,
+  loadStoredPbGhost,
+  loadStoredProfile,
+  normalizeStoredPaletteId,
+  saveProgressionLockMode,
+  type StorageLike,
+} from '../src/ui';
 
 function rgbDist(a: RgbaTuple, b: RgbaTuple): number {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
@@ -2472,5 +2494,382 @@ describe('Renderer Visual & UI Regression Contracts', () => {
 
     expect(renderer.getFrameMetrics().webglErrors).toBe(0);
     renderer.dispose();
+  });
+
+  it('cycles all 6 core weapons/bodies/engines, all 12 core palettes, and OVERDRIVE when allUnlocked is enabled while preserving default progression locks', () => {
+    // 1. Default HangarController keeps allUnlocked = false so progression lock tests stay strict
+    const lockedController = new HangarController();
+    expect(lockedController.isAllUnlocked()).toBe(false);
+
+    const freshLockedSnap = makeSnapshot({
+      phase: 'hangar',
+      profile: {
+        ...makeSnapshot().profile,
+        unlockedWeapons: [0],
+        unlockedBodies: [0],
+        unlockedEngines: [0],
+        completedMissions: [],
+        sfmtUnlocked: false,
+      },
+      player: {
+        ...makeSnapshot().player,
+        loadout: { weapon: 0, body: 0, engine: 0 },
+      },
+    });
+    expect(lockedController.cycleCurrent(1, freshLockedSnap).locked).toBe(true);
+    expect(lockedController.selectPaletteByIndex(3, freshLockedSnap).locked).toBe(true);
+    expect(lockedController.selectMode('sfmt', freshLockedSnap).locked).toBe(true);
+
+    // 2. Enabling allUnlocked unlocks all 6 vanilla parts, all 12 vanilla palettes & OVERDRIVE
+    //    while keeping completedMissionsCount strictly at real progress (0/90)
+    const freePlay = new HangarController();
+    freePlay.setAllUnlocked(true);
+    expect(freePlay.isAllUnlocked()).toBe(true);
+
+    const currentLoadout: Loadout = { weapon: 0, body: 0, engine: 0 };
+    let currentMode: 'normal' | 'sfmt' = 'normal';
+    const simStub = {
+      setLoadout: (l: Loadout) => {
+        currentLoadout.weapon = l.weapon;
+        currentLoadout.body = l.body;
+        currentLoadout.engine = l.engine;
+      },
+      setMode: (m: 'normal' | 'sfmt') => {
+        currentMode = m;
+      },
+    };
+    const makeCurrentSnap = (): SimSnapshot => ({
+      ...freshLockedSnap,
+      mode: currentMode,
+      player: {
+        ...freshLockedSnap.player,
+        loadout: { ...currentLoadout },
+      },
+    });
+
+    for (const slot of ['weapon', 'body', 'engine'] as const) {
+      freePlay.setActiveRow(slot);
+      const visited: number[] = [];
+      for (let i = 0; i < 6; i++) {
+        const res = freePlay.cycleCurrent(1, makeCurrentSnap(), simStub);
+        expect(res.changed).toBe(true);
+        expect(res.locked).toBe(false);
+        expect(res.cue).toBe('sndswap');
+        visited.push(res.loadout![slot]);
+      }
+      expect(visited).toEqual([1, 2, 3, 4, 5, 0]);
+      // Direct selectPart also succeeds for slot 5 (APEX OMEGA component)
+      const pick5 = freePlay.selectPart(slot, 5, makeCurrentSnap(), simStub);
+      expect(pick5.changed).toBe(true);
+      expect(pick5.locked).toBe(false);
+      expect(currentLoadout[slot]).toBe(5);
+    }
+
+    // Cycle all 12 core palettes in Vanilla mode
+    freePlay.setActiveRow('palette');
+    const visitedPalIds: string[] = [freePlay.getSelectedPalette().id];
+    for (let i = 0; i < PALETTES.length - 1; i++) {
+      const res = freePlay.cycleCurrent(1, makeCurrentSnap(), simStub);
+      expect(res.changed).toBe(true);
+      expect(res.locked).toBe(false);
+      expect(res.cue).toBe('sndswap');
+      visitedPalIds.push(res.paletteId!);
+    }
+    expect(visitedPalIds).toEqual(PALETTES.map((p) => p.id));
+    expect(visitedPalIds).toHaveLength(12);
+
+    // Direct selectPaletteByIndex works for every core palette (including index 11 FALLOUT)
+    for (let i = 0; i < PALETTES.length; i++) {
+      const pick = freePlay.selectPaletteByIndex(i, makeCurrentSnap());
+      expect(pick.locked).toBe(false);
+      expect(pick.paletteId).toBe(PALETTES[i]!.id);
+    }
+
+    // Toggle NORMAL <-> OVERDRIVE (sfmt) cleanly with 0 completed missions
+    freePlay.setActiveRow('mode');
+    const toOverdrive = freePlay.cycleCurrent(1, makeCurrentSnap(), simStub);
+    expect(toOverdrive.changed).toBe(true);
+    expect(toOverdrive.locked).toBe(false);
+    expect(toOverdrive.mode).toBe('sfmt');
+    expect(toOverdrive.cue).toBe('sndsfmt');
+    expect(currentMode).toBe('sfmt');
+
+    const uiState = freePlay.buildUiState(makeCurrentSnap());
+    expect(uiState.allUnlocked).toBe(true);
+    expect(uiState.sfmtUnlocked).toBe(true);
+    expect(uiState.completedMissionsCount).toBe(0);
+    expect(uiState.unlockedWeapons).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(uiState.unlockedBodies).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(uiState.unlockedEngines).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  it('renders crisp Hangar slot counters (1/6, 1/12) with zero horizontal overlap and suppresses false [LOCKED] footer in Free-Play mode', () => {
+    const mockGl = createMockWebGL2Context();
+    const createdPrograms: Array<{ id: number }> = [];
+    let currentProgram: unknown = null;
+    const fontDraws: Array<{ charCount: number; minX: number; maxX: number; minY: number; maxY: number }> = [];
+
+    mockGl.gl.createProgram = vi.fn(() => {
+      const p = { id: createdPrograms.length + 1 };
+      createdPrograms.push(p);
+      return p;
+    });
+    mockGl.gl.useProgram = vi.fn((p: unknown) => {
+      currentProgram = p;
+    });
+    mockGl.gl.bufferData = vi.fn((_target: number, data: ArrayBufferView | number) => {
+      if (!(data instanceof Float32Array) || data.length === 0) return;
+      if (currentProgram === createdPrograms[3]) {
+        let minX = Infinity;
+        let maxX = -Infinity;
+        let minY = Infinity;
+        let maxY = -Infinity;
+        for (let i = 0; i < data.length; i += 4) {
+          const x = data[i]!;
+          const y = data[i + 1]!;
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+        fontDraws.push({
+          charCount: data.length / 24,
+          minX,
+          maxX,
+          minY,
+          maxY,
+        });
+      }
+    });
+
+    const mockCanvas = {
+      width: 600,
+      height: 400,
+      style: { imageRendering: '' },
+      getContext: vi.fn((kind: string) => (kind === 'webgl2' ? mockGl.gl : null)),
+    } as unknown as HTMLCanvasElement;
+
+    const renderer = new WebGL2Renderer();
+    renderer.init(mockCanvas, createMockVaultBundle());
+
+    const controller = new HangarController({ allUnlocked: true });
+    const hangarSnap = makeSnapshot({
+      phase: 'hangar',
+      profile: {
+        ...makeSnapshot().profile,
+        completedMissions: [],
+        sfmtUnlocked: false,
+      },
+      player: {
+        ...makeSnapshot().player,
+        loadout: { weapon: 2, body: 3, engine: 4 },
+      },
+    });
+    // Select mission-gated FALLOUT palette (index 11) on a 0/90 profile in Free-Play
+    const palPick = controller.selectPaletteByIndex(11, hangarSnap);
+    expect(palPick.locked).toBe(false);
+    renderer.setPalette(palPick.paletteId!);
+    controller.setActiveRow('palette');
+
+    fontDraws.length = 0;
+    const ui = controller.buildUiState(hangarSnap);
+    renderer.render(hangarSnap, hangarSnap, 0, ui, 0.5);
+
+    const charCounts = fontDraws.map((d) => d.charCount);
+    expect(charCounts).toContain('  WEAPON 3/6'.length);
+    expect(charCounts).toContain('  BODY 4/6'.length);
+    expect(charCounts).toContain('  ENGINE 5/6'.length);
+    expect(charCounts).toContain('> PALETTE 12/12'.length);
+    expect(charCounts).toContain('< FALLOUT >'.length);
+    // Footer must NOT append ' [LOCKED]' when allUnlocked is true
+    expect(charCounts).toContain('HI: 1200  MISSIONS: 0/90'.length);
+    expect(charCounts).not.toContain('HI: 1200  MISSIONS: 0/90 [LOCKED]'.length);
+
+    // Verify palette row label ('> PALETTE 12/12') and value ('< FALLOUT >') fit inside [42..302] without overlapping
+    const palRowY = HANGAR_LAYOUT.rowStartY + 3 * HANGAR_LAYOUT.rowStep;
+    const palRowDraws = fontDraws.filter(
+      (d) =>
+        d.minX >= HANGAR_LAYOUT.rowX &&
+        d.maxX <= HANGAR_LAYOUT.rowX + HANGAR_LAYOUT.rowWidth &&
+        d.minY >= palRowY &&
+        d.maxY <= palRowY + HANGAR_LAYOUT.rowHeight,
+    );
+    expect(palRowDraws).toHaveLength(2);
+    const [palLabel, palVal] = palRowDraws[0]!.minX < palRowDraws[1]!.minX
+      ? [palRowDraws[0]!, palRowDraws[1]!]
+      : [palRowDraws[1]!, palRowDraws[0]!];
+    expect(palLabel.minX).toBeGreaterThanOrEqual(HANGAR_LAYOUT.rowX);
+    expect(palVal.maxX).toBeLessThanOrEqual(HANGAR_LAYOUT.rowX + HANGAR_LAYOUT.rowWidth);
+    expect(palLabel.maxX).toBeLessThan(palVal.minX);
+
+    expect(renderer.getFrameMetrics().webglErrors).toBe(0);
+    renderer.dispose();
+  });
+
+  it('migrates legacy krunked_luftrausers_* saves cleanly and enforces browser Free-Play default vs Campaign Locks mode', () => {
+    const store = new Map<string, string>();
+    const mockStorage: StorageLike = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        store.set(k, v);
+      },
+      removeItem: (k: string) => {
+        store.delete(k);
+      },
+    };
+
+    // 1. Brand-new browser session (empty localStorage) boots into Free-Play (all core parts + SFMT unlocked, 0/90 missions)
+    expect(loadProgressionLockMode(mockStorage)).toBe(false);
+    const freshBrowserProfile = loadStoredProfile(mockStorage);
+    expect(freshBrowserProfile.unlockedWeapons).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(freshBrowserProfile.unlockedBodies).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(freshBrowserProfile.unlockedEngines).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(freshBrowserProfile.sfmtUnlocked).toBe(true);
+    expect(freshBrowserProfile.completedMissions).toEqual([]);
+
+    // 2. Legacy krunked_luftrausers_* saves migrate seamlessly when krunked_skybreaker_* keys are absent
+    store.clear();
+    store.set(
+      LEGACY_PROFILE_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        unlockedWeapons: [0, 1],
+        unlockedBodies: [0],
+        unlockedEngines: [0],
+        completedMissions: [1, 2],
+        activeMissionIds: [3, 4, 5],
+        highScoreNormal: 42500,
+        highScoreSfmt: 88100,
+        selectedPaletteId: 'kozilek',
+        sfmtUnlocked: false,
+        lastLoadout: { weapon: 1, body: 0, engine: 0 },
+        lastMode: 'normal',
+        lastSeed: 99,
+        totalKills: { Fighter: 25 },
+        stats: { sorties: 7, totalScore: 95000, bestCombo: 14 },
+        dailyHighScores: { '20261125': 12000 },
+      }),
+    );
+    store.set(
+      LEGACY_ACT2_MODS_STORAGE_KEY,
+      JSON.stringify({
+        moddedEnabled: true,
+        arsenalBosses: true,
+        replayGhost: true,
+        dailySeed: false,
+        shaderFx: {
+          crtScanlines: true,
+          phosphorBloom: false,
+          speedWarp: false,
+          shockwaves: true,
+        },
+        multiplayerMode: 'coop2p',
+        p2BotEnabled: true,
+      }),
+    );
+    store.set(
+      LEGACY_ACT2_CUSTOM_PALETTE_KEY,
+      JSON.stringify({
+        id: 'custom_studio',
+        name: 'LEGACY NEON',
+        unlockMissionsRequired: 0,
+        backcol: [0.1, 0.1, 0.2, 1],
+        colors: [
+          [0, 0, 0, 0],
+          [1, 0.2, 0.4, 1],
+          [0.2, 1, 0.5, 1],
+          [0.2, 0.3, 0.4, 1],
+          [0.3, 0.4, 0.5, 1],
+          [1, 0.9, 0.2, 1],
+          [0.6, 0.7, 0.8, 1],
+          [1, 1, 1, 1],
+        ],
+      }),
+    );
+    store.set(
+      LEGACY_ACT2_PB_GHOST_KEY,
+      JSON.stringify({
+        version: 1,
+        seed: 777,
+        mode: 'normal',
+        profileId: 'vanilla-1to1',
+        loadout: { weapon: 1, body: 0, engine: 0 },
+        finalScore: 15500,
+        finalTicks: 120,
+        frames: [{ tick: 0, mask: 4 }],
+      }),
+    );
+
+    // Palette alias normalization
+    expect(normalizeStoredPaletteId('lanigiro')).toBe('inverted');
+    expect(normalizeStoredPaletteId('kozilek')).toBe('synthdusk');
+    expect(normalizeStoredPaletteId('sfmt')).toBe('overdrive');
+    expect(normalizeStoredPaletteId('oceanic')).toBe('oceanic');
+
+    const migratedProfile = loadStoredProfile(mockStorage);
+    expect(migratedProfile.highScoreNormal).toBe(42500);
+    expect(migratedProfile.highScoreSfmt).toBe(88100);
+    expect(migratedProfile.completedMissions).toEqual([1, 2]);
+    expect(migratedProfile.selectedPaletteId).toBe('synthdusk');
+    expect(migratedProfile.stats.sorties).toBe(7);
+    expect(migratedProfile.dailyHighScores?.['20261125']).toBe(12000);
+    // Migrated forward into new primary key
+    expect(store.get(PROFILE_STORAGE_KEY)).not.toBeUndefined();
+    // Free-play default unlocks core roster while keeping real missions
+    expect(migratedProfile.unlockedWeapons).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(migratedProfile.sfmtUnlocked).toBe(true);
+
+    const migratedMods = loadStoredModFlags(mockStorage);
+    expect(migratedMods.moddedEnabled).toBe(true);
+    expect(migratedMods.arsenalBosses).toBe(true);
+    expect(migratedMods.multiplayerMode).toBe('coop2p');
+    expect(store.get(ACT2_MODS_STORAGE_KEY)).not.toBeUndefined();
+
+    const migratedCustomPal = loadStoredCustomPalette(mockStorage);
+    expect(migratedCustomPal?.name).toBe('LEGACY NEON');
+    expect(store.get(ACT2_CUSTOM_PALETTE_KEY)).not.toBeUndefined();
+
+    const migratedGhost = loadStoredPbGhost(mockStorage);
+    expect(migratedGhost?.finalScore).toBe(15500);
+    expect(store.get(ACT2_PB_GHOST_KEY)).not.toBeUndefined();
+
+    // 3. Opting into Campaign Locks mode preserves earned progression locks only
+    saveProgressionLockMode(true, mockStorage);
+    expect(store.get(PROGRESSION_LOCK_STORAGE_KEY)).toBe('true');
+    expect(loadProgressionLockMode(mockStorage)).toBe(true);
+
+    const lockedReload = loadStoredProfile(mockStorage);
+    expect(lockedReload.unlockedWeapons).toEqual([0, 1]);
+    expect(lockedReload.unlockedBodies).toEqual([0]);
+    expect(lockedReload.sfmtUnlocked).toBe(false);
+
+    // computeCampaignUnlockedProfile derives earned unlocks strictly from completedMissions & Blimp kills
+    const earned = computeCampaignUnlockedProfile(
+      {
+        ...migratedProfile,
+        lastLoadout: { weapon: 5, body: 4, engine: 3 },
+        lastMode: 'sfmt',
+        completedMissions: [1],
+        totalKills: {},
+      },
+      [
+        {
+          id: 1,
+          component: [0, 0, 0],
+          objective: 0,
+          condition: 0,
+          val: [5, 1],
+          title: 'W1',
+          description: 'D1',
+        },
+      ],
+      false,
+    );
+    expect(earned.unlockedWeapons).toEqual([0, 1]);
+    expect(earned.unlockedBodies).toEqual([0]);
+    expect(earned.unlockedEngines).toEqual([0]);
+    expect(earned.sfmtUnlocked).toBe(false);
+    expect(earned.lastLoadout).toEqual({ weapon: 0, body: 0, engine: 0 });
+    expect(earned.lastMode).toBe('normal');
   });
 });

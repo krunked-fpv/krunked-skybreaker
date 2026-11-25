@@ -10,9 +10,7 @@ import {
   type InputState,
   type Loadout,
   type PaletteDefinition,
-  type PartIndex,
   type PilotProfile,
-  type ReplayRecording,
   type SimSnapshot,
   type SkybreakerDebugApi,
   type SkybreakerDebugState,
@@ -22,6 +20,7 @@ import {
   ACT2_BONUS_PALETTES,
   DEFAULT_PALETTE_ID,
   WebGL2Renderer,
+  isPaletteUnlocked,
   sanitizeCustomPalette,
 } from './render';
 import {
@@ -30,201 +29,34 @@ import {
   computeCoopP2BotInput,
   computeDailySeed,
   computeDogfightBotInput,
-  createDefaultProfile,
   parseReplayJson,
   serializeReplay,
 } from './sim';
-import { HangarController, TelemetryHud } from './ui';
+import {
+  HangarController,
+  TelemetryHud,
+  applyBrowserFullRosterUnlocks,
+  clampPartIndex,
+  clearStoredProfileKeys,
+  cloneStoredModFlags,
+  computeCampaignUnlockedProfile,
+  loadProgressionLockMode,
+  loadStoredAssetMode,
+  loadStoredCustomPalette,
+  loadStoredModFlags,
+  loadStoredPbGhost,
+  loadStoredProfile,
+  saveProgressionLockMode,
+  saveStoredAssetMode,
+  saveStoredCustomPalette,
+  saveStoredModFlags,
+  saveStoredPbGhost,
+  saveStoredProfile,
+} from './ui';
 import { VaultLoader } from './vault';
-
-const PROFILE_STORAGE_KEY = 'krunked_skybreaker_profile_v1';
-const ACT2_MODS_STORAGE_KEY = 'krunked_skybreaker_act2_mods_v1';
-const ACT2_CUSTOM_PALETTE_KEY = 'krunked_skybreaker_act2_custom_palette_v1';
-const ACT2_PB_GHOST_KEY = 'krunked_skybreaker_act2_pb_ghost_v1';
-const ASSET_MODE_STORAGE_KEY = 'krunked_skybreaker_asset_mode_v1';
 
 const FIXED_DT = 1 / VANILLA_1TO1_PROFILE.fixedTimestepHz;
 const MAX_SUB_STEPS = VANILLA_1TO1_PROFILE.maxSubSteps;
-
-function clampPartIndex(value: number, maxPart: number = 8): PartIndex {
-  const n = Math.floor(Number.isFinite(value) ? value : 0);
-  if (n <= 0) return 0;
-  if (n >= maxPart) return maxPart as PartIndex;
-  return n as PartIndex;
-}
-
-function cloneModFlags(flags: Act2ModFlags): Act2ModFlags {
-  return {
-    moddedEnabled: Boolean(flags.moddedEnabled),
-    arsenalBosses: Boolean(flags.arsenalBosses),
-    replayGhost: Boolean(flags.replayGhost),
-    dailySeed: Boolean(flags.dailySeed),
-    shaderFx: {
-      crtScanlines: Boolean(flags.shaderFx?.crtScanlines),
-      phosphorBloom: Boolean(flags.shaderFx?.phosphorBloom),
-      speedWarp: Boolean(flags.shaderFx?.speedWarp),
-      shockwaves: Boolean(flags.shaderFx?.shockwaves),
-    },
-    multiplayerMode:
-      flags.multiplayerMode === 'coop2p' || flags.multiplayerMode === 'dogfight1v1'
-        ? flags.multiplayerMode
-        : 'solo',
-    p2BotEnabled: flags.p2BotEnabled !== undefined ? Boolean(flags.p2BotEnabled) : true,
-  };
-}
-
-function loadStoredProfile(): PilotProfile {
-  const fallback = createDefaultProfile();
-  try {
-    const raw = window.localStorage.getItem(PROFILE_STORAGE_KEY);
-    if (!raw) return fallback;
-    const parsed = JSON.parse(raw) as Partial<PilotProfile>;
-    if (!parsed || typeof parsed !== 'object' || parsed.version !== fallback.version) {
-      return fallback;
-    }
-    return {
-      ...fallback,
-      ...parsed,
-      unlockedWeapons:
-        Array.isArray(parsed.unlockedWeapons) && parsed.unlockedWeapons.length > 0
-          ? parsed.unlockedWeapons.map((v) => clampPartIndex(v, 5))
-          : fallback.unlockedWeapons,
-      unlockedBodies:
-        Array.isArray(parsed.unlockedBodies) && parsed.unlockedBodies.length > 0
-          ? parsed.unlockedBodies.map((v) => clampPartIndex(v, 5))
-          : fallback.unlockedBodies,
-      unlockedEngines:
-        Array.isArray(parsed.unlockedEngines) && parsed.unlockedEngines.length > 0
-          ? parsed.unlockedEngines.map((v) => clampPartIndex(v, 5))
-          : fallback.unlockedEngines,
-      completedMissions: Array.isArray(parsed.completedMissions)
-        ? parsed.completedMissions.filter((n): n is number => typeof n === 'number')
-        : fallback.completedMissions,
-      activeMissionIds: Array.isArray(parsed.activeMissionIds)
-        ? parsed.activeMissionIds.filter((n): n is number => typeof n === 'number')
-        : fallback.activeMissionIds,
-      lastLoadout: parsed.lastLoadout
-        ? {
-            weapon: clampPartIndex(parsed.lastLoadout.weapon, 8),
-            body: clampPartIndex(parsed.lastLoadout.body, 8),
-            engine: clampPartIndex(parsed.lastLoadout.engine, 8),
-          }
-        : fallback.lastLoadout,
-      lastMode: parsed.lastMode === 'sfmt' ? 'sfmt' : 'normal',
-      selectedPaletteId:
-        typeof parsed.selectedPaletteId === 'string' && parsed.selectedPaletteId.length > 0
-          ? parsed.selectedPaletteId
-          : DEFAULT_PALETTE_ID,
-      totalKills:
-        parsed.totalKills && typeof parsed.totalKills === 'object'
-          ? { ...parsed.totalKills }
-          : {},
-      stats: parsed.stats
-        ? {
-            sorties: Number(parsed.stats.sorties) || 0,
-            totalScore: Number(parsed.stats.totalScore) || 0,
-            bestCombo: Number(parsed.stats.bestCombo) || 1,
-          }
-        : fallback.stats,
-      dailyHighScores:
-        parsed.dailyHighScores && typeof parsed.dailyHighScores === 'object'
-          ? { ...parsed.dailyHighScores }
-          : {},
-    };
-  } catch {
-    return fallback;
-  }
-}
-
-function saveStoredProfile(profile: PilotProfile): void {
-  try {
-    window.localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profile));
-  } catch {
-    // Ignore storage quota or privacy-mode restrictions cleanly
-  }
-}
-
-function loadStoredModFlags(): Act2ModFlags {
-  try {
-    const raw = window.localStorage.getItem(ACT2_MODS_STORAGE_KEY);
-    if (!raw) return cloneModFlags(DEFAULT_ACT2_MOD_FLAGS);
-    const parsed = JSON.parse(raw) as Partial<Act2ModFlags>;
-    if (!parsed || typeof parsed !== 'object') {
-      return cloneModFlags(DEFAULT_ACT2_MOD_FLAGS);
-    }
-    return cloneModFlags({
-      ...DEFAULT_ACT2_MOD_FLAGS,
-      ...parsed,
-      shaderFx: {
-        ...DEFAULT_SHADER_FX,
-        ...(parsed.shaderFx ?? {}),
-      },
-    });
-  } catch {
-    return cloneModFlags(DEFAULT_ACT2_MOD_FLAGS);
-  }
-}
-
-function saveStoredModFlags(flags: Act2ModFlags): void {
-  try {
-    window.localStorage.setItem(ACT2_MODS_STORAGE_KEY, JSON.stringify(flags));
-  } catch {
-    // ignore
-  }
-}
-
-function loadStoredCustomPalette(): PaletteDefinition | null {
-  try {
-    const raw = window.localStorage.getItem(ACT2_CUSTOM_PALETTE_KEY);
-    if (!raw) return null;
-    return sanitizeCustomPalette(JSON.parse(raw));
-  } catch {
-    return null;
-  }
-}
-
-function saveStoredCustomPalette(palette: PaletteDefinition): void {
-  try {
-    window.localStorage.setItem(ACT2_CUSTOM_PALETTE_KEY, JSON.stringify(palette));
-  } catch {
-    // ignore
-  }
-}
-
-function loadStoredPbGhost(): ReplayRecording | null {
-  try {
-    const raw = window.localStorage.getItem(ACT2_PB_GHOST_KEY);
-    if (!raw) return null;
-    return parseReplayJson(raw);
-  } catch {
-    return null;
-  }
-}
-
-function saveStoredPbGhost(recording: ReplayRecording): void {
-  try {
-    window.localStorage.setItem(ACT2_PB_GHOST_KEY, serializeReplay(recording));
-  } catch {
-    // ignore
-  }
-}
-
-function loadStoredAssetMode(): AssetPackMode {
-  try {
-    const raw = window.localStorage.getItem(ASSET_MODE_STORAGE_KEY);
-    return raw === 'steam-local' ? 'steam-local' : 'skybreaker';
-  } catch {
-    return 'skybreaker';
-  }
-}
-
-function saveStoredAssetMode(mode: AssetPackMode): void {
-  try {
-    window.localStorage.setItem(ASSET_MODE_STORAGE_KEY, mode);
-  } catch {
-    // ignore
-  }
-}
 
 export function exportProfileJson(profile: PilotProfile): string {
   return JSON.stringify(profile, null, 2);
@@ -267,7 +99,8 @@ async function bootstrap(): Promise<void> {
   let activeAssetMode: AssetPackMode =
     vault.data.vaultSource === 'steam-local' ? 'steam-local' : 'skybreaker';
 
-  const storedProfile = loadStoredProfile();
+  let progressionLocked = loadProgressionLockMode();
+  const storedProfile = loadStoredProfile(undefined, { progressionLocked });
   let modFlags = loadStoredModFlags();
   let pbGhostReplay = loadStoredPbGhost();
 
@@ -285,6 +118,7 @@ async function bootstrap(): Promise<void> {
     initialPaletteId: storedProfile.selectedPaletteId || DEFAULT_PALETTE_ID,
     vaultSource: vault.data.vaultSource,
     totalMissionsCount: vault.data.global.missions.length,
+    allUnlocked: !progressionLocked,
   });
   hangar.setSteamAvailable(steamAvailable);
   hangar.setAssetMode(activeAssetMode);
@@ -292,9 +126,10 @@ async function bootstrap(): Promise<void> {
   const savedCustomPalette = loadStoredCustomPalette();
   if (savedCustomPalette) {
     hangar.getPaletteStudio().setPalette(savedCustomPalette);
-    hangar.registerCustomPalette(savedCustomPalette);
-    renderer.registerCustomPalette(savedCustomPalette);
   }
+  const initialCustomPalette = hangar.getPaletteStudio().getPalette();
+  hangar.registerCustomPalette(initialCustomPalette);
+  renderer.registerCustomPalette(initialCustomPalette);
 
   sim.setModFlags(modFlags);
   hangar.setModFlags(modFlags);
@@ -365,7 +200,7 @@ async function bootstrap(): Promise<void> {
   };
 
   const applyModFlags = (partial: Partial<Act2ModFlags>): void => {
-    const merged = cloneModFlags({
+    const merged = cloneStoredModFlags({
       ...modFlags,
       ...partial,
       shaderFx: {
@@ -487,6 +322,43 @@ async function bootstrap(): Promise<void> {
     renderFrame(1);
   };
 
+  const setProgressionLockMode = (locked: boolean, playCue = true): void => {
+    progressionLocked = Boolean(locked);
+    saveProgressionLockMode(progressionLocked);
+    hangar.setAllUnlocked(!progressionLocked);
+
+    const currentProfile = sim.getProfile();
+    const nextProfile = progressionLocked
+      ? computeCampaignUnlockedProfile(
+          currentProfile,
+          vault.data.global.missions,
+          Boolean(modFlags.moddedEnabled && modFlags.arsenalBosses),
+        )
+      : applyBrowserFullRosterUnlocks(currentProfile);
+
+    sim.setProfile(nextProfile);
+    if (progressionLocked) {
+      const activePal = hangar.getSelectedPalette();
+      if (
+        !isPaletteUnlocked(
+          activePal,
+          nextProfile.completedMissions.length,
+          nextProfile.sfmtUnlocked,
+          false,
+        )
+      ) {
+        applyPaletteId(DEFAULT_PALETTE_ID);
+      }
+    }
+    currSnapshot = sim.getSnapshot();
+    prevSnapshot = currSnapshot;
+    audio.syncFromSnapshot(currSnapshot);
+    if (playCue) {
+      audio.playSfx(progressionLocked ? 'sndswap' : 'sndsfmt');
+    }
+    persistCurrentProfile();
+  };
+
   const handleHangarKeyAction = (code: string): boolean => {
     const snap = sim.getSnapshot();
 
@@ -552,6 +424,11 @@ async function bootstrap(): Promise<void> {
       const nextMode: AssetPackMode =
         activeAssetMode === 'skybreaker' ? 'steam-local' : 'skybreaker';
       void switchAssetMode(nextMode, true);
+      return true;
+    }
+
+    if (code === 'KeyU') {
+      setProgressionLockMode(!progressionLocked, true);
       return true;
     }
 
@@ -1022,7 +899,7 @@ async function bootstrap(): Promise<void> {
       webglErrors: fm.webglErrors,
       consoleErrorCount,
       postUniforms: renderer.getLastPostUniforms(),
-      modFlags: cloneModFlags(modFlags),
+      modFlags: cloneStoredModFlags(modFlags),
       modDeckOpen: hangar.isModDeckOpen(),
       paletteStudioOpen: hangar.getPaletteStudio().isOpen(),
       ghostActive: Boolean(snap.ghostPose),
@@ -1131,18 +1008,14 @@ async function bootstrap(): Promise<void> {
       return sim.getProfile();
     },
     resetProfile(): void {
-      try {
-        window.localStorage.removeItem(PROFILE_STORAGE_KEY);
-        window.localStorage.removeItem(ACT2_MODS_STORAGE_KEY);
-        window.localStorage.removeItem(ACT2_CUSTOM_PALETTE_KEY);
-        window.localStorage.removeItem(ACT2_PB_GHOST_KEY);
-      } catch {
-        // ignore
-      }
+      clearStoredProfileKeys();
       pbGhostReplay = null;
+      progressionLocked = false;
+      hangar.setAllUnlocked(true);
       sim.setGhostReplay(null);
       applyModFlags(DEFAULT_ACT2_MOD_FLAGS);
       sim.resetProfile();
+      sim.setProfile(applyBrowserFullRosterUnlocks(sim.getProfile()));
       applyPaletteId(DEFAULT_PALETTE_ID);
       currSnapshot = sim.getSnapshot();
       prevSnapshot = currSnapshot;
@@ -1151,6 +1024,9 @@ async function bootstrap(): Promise<void> {
       renderFrame(1);
     },
     unlockAllForTesting(): void {
+      progressionLocked = false;
+      saveProgressionLockMode(false);
+      hangar.setAllUnlocked(true);
       sim.unlockAll();
       currSnapshot = sim.getSnapshot();
       persistCurrentProfile();
@@ -1174,7 +1050,7 @@ async function bootstrap(): Promise<void> {
       renderFrame(1);
     },
     getModFlags(): Act2ModFlags {
-      return cloneModFlags(modFlags);
+      return cloneStoredModFlags(modFlags);
     },
     toggleModDeck(open?: boolean): void {
       hangar.toggleModDeck(open);

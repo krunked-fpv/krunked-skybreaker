@@ -89,6 +89,7 @@ export interface HangarControllerOptions {
   totalMissionsCount?: number;
   initialAssetMode?: AssetPackMode;
   steamAvailable?: boolean;
+  allUnlocked?: boolean;
 }
 
 export interface HangarCycleResult {
@@ -153,6 +154,7 @@ export class HangarController {
   private assetMode: AssetPackMode;
   private steamAvailable: boolean;
   private totalMissionsCount: number;
+  private allUnlocked: boolean;
 
   private modDeckOpen = false;
   private activeModRowIndex = 0;
@@ -183,6 +185,7 @@ export class HangarController {
     this.assetMode = options.initialAssetMode ?? 'skybreaker';
     this.steamAvailable = Boolean(options.steamAvailable);
     this.totalMissionsCount = options.totalMissionsCount ?? 90;
+    this.allUnlocked = Boolean(options.allUnlocked);
   }
 
   public getActiveRow(): HangarRow {
@@ -490,6 +493,18 @@ export class HangarController {
     this.totalMissionsCount = Math.max(1, Math.floor(count));
   }
 
+  public setAllUnlocked(enabled: boolean): void {
+    this.allUnlocked = Boolean(enabled);
+  }
+
+  public isAllUnlocked(): boolean {
+    return this.allUnlocked;
+  }
+
+  public getPaletteCount(moddedEnabled = this.modFlagsCache.moddedEnabled): number {
+    return this.getMergedPalettes(moddedEnabled).length;
+  }
+
   public syncPaletteFromProfile(
     paletteId: string,
     completedMissionsCount: number,
@@ -501,7 +516,12 @@ export class HangarController {
     const target = all[idx];
     if (
       target &&
-      isPaletteUnlocked(target, completedMissionsCount, sfmtUnlocked)
+      isPaletteUnlocked(
+        target,
+        completedMissionsCount,
+        sfmtUnlocked,
+        this.allUnlocked,
+      )
     ) {
       this.selectedPaletteId = target.id;
       this.paletteIndex = idx;
@@ -551,7 +571,9 @@ export class HangarController {
     const allowed =
       index >= 6
         ? arsenalEnabled && index <= 8
-        : unlocked.includes(index);
+        : index >= 0 &&
+          index <= 5 &&
+          (this.allUnlocked || unlocked.includes(index));
 
     if (!allowed) {
       return {
@@ -593,7 +615,7 @@ export class HangarController {
     snapshot: SimSnapshot,
     sim?: Pick<ISimulation, 'setMode'>,
   ): HangarCycleResult {
-    if (mode === 'sfmt' && !snapshot.profile.sfmtUnlocked) {
+    if (mode === 'sfmt' && !this.allUnlocked && !snapshot.profile.sfmtUnlocked) {
       return {
         changed: false,
         locked: true,
@@ -642,6 +664,7 @@ export class HangarController {
         pal,
         snapshot.profile.completedMissions.length,
         snapshot.profile.sfmtUnlocked,
+        this.allUnlocked,
       )
     ) {
       return {
@@ -765,8 +788,20 @@ export class HangarController {
       this.setModFlags(DEFAULT_ACT2_MOD_FLAGS);
     }
     const effectiveModFlags = cloneModFlags(this.modFlagsCache);
-
+    const activePalettes = this.getMergedPalettes(effectiveModFlags.moddedEnabled);
     const palette = this.getSelectedPalette();
+    const resolvedPaletteIdx = activePalettes.findIndex((p) => p.id === palette.id);
+    if (resolvedPaletteIdx >= 0) {
+      this.paletteIndex = resolvedPaletteIdx;
+    }
+
+    const arsenalEnabled = Boolean(
+      effectiveModFlags.moddedEnabled && effectiveModFlags.arsenalBosses,
+    );
+    const allUnlockedParts: readonly number[] = arsenalEnabled
+      ? [0, 1, 2, 3, 4, 5, 6, 7, 8]
+      : [0, 1, 2, 3, 4, 5];
+
     const dailySeedId = act2Extras?.dailySeedId ?? snapshot.dailySeedId ?? undefined;
     const dailyBestScore =
       act2Extras?.dailyBestScore ??
@@ -786,14 +821,21 @@ export class HangarController {
       engineSpec: snapshot.player.engineSpec,
       activeMissions: snapshot.activeMissions,
       missionProgress: snapshot.missionProgress,
-      unlockedWeapons: snapshot.profile.unlockedWeapons,
-      unlockedBodies: snapshot.profile.unlockedBodies,
-      unlockedEngines: snapshot.profile.unlockedEngines,
+      unlockedWeapons: this.allUnlocked
+        ? allUnlockedParts
+        : snapshot.profile.unlockedWeapons,
+      unlockedBodies: this.allUnlocked
+        ? allUnlockedParts
+        : snapshot.profile.unlockedBodies,
+      unlockedEngines: this.allUnlocked
+        ? allUnlockedParts
+        : snapshot.profile.unlockedEngines,
       highScore:
         snapshot.mode === 'sfmt'
           ? snapshot.profile.highScoreSfmt
           : snapshot.profile.highScoreNormal,
-      sfmtUnlocked: snapshot.profile.sfmtUnlocked,
+      sfmtUnlocked: this.allUnlocked || snapshot.profile.sfmtUnlocked,
+      allUnlocked: this.allUnlocked,
       vaultSource: vaultSourceOverride ?? this.vaultSource,
       assetMode: this.assetMode,
       steamAvailable: this.steamAvailable,
@@ -831,6 +873,8 @@ export class HangarController {
       }
     };
     for (const p of ACT2_BONUS_PALETTES) upsert(p);
+    // Always expose Live Palette Studio slot as the 17th palette in Modded mode
+    upsert(this.paletteStudio.getPalette());
     for (const p of this.customPalettes) upsert(p);
     return merged;
   }
@@ -860,7 +904,9 @@ export class HangarController {
       const candidate = ((((current + dir * step) % partCount) + partCount) %
         partCount) as PartIndex;
       const isAvailable =
-        candidate >= 6 ? arsenalEnabled : unlocked.includes(candidate);
+        candidate >= 6
+          ? arsenalEnabled
+          : this.allUnlocked || unlocked.includes(candidate);
       if (isAvailable) {
         const nextLoadout: Loadout = {
           ...snapshot.player.loadout,
@@ -904,7 +950,10 @@ export class HangarController {
     for (let step = 1; step < len; step++) {
       const idx = (((currentIdx + dir * step) % len) + len) % len;
       const candidate = list[idx];
-      if (candidate && isPaletteUnlocked(candidate, completed, sfmt)) {
+      if (
+        candidate &&
+        isPaletteUnlocked(candidate, completed, sfmt, this.allUnlocked)
+      ) {
         this.paletteIndex = idx;
         this.selectedPaletteId = candidate.id;
         return {

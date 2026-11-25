@@ -417,7 +417,11 @@ export function isPaletteUnlocked(
   palette: PaletteDefinition,
   completedMissionsCount: number,
   sfmtUnlocked = false,
+  allUnlocked = false,
 ): boolean {
+  if (allUnlocked) {
+    return true;
+  }
   if (palette.id === 'overdrive' && sfmtUnlocked) {
     return true;
   }
