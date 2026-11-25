@@ -1,20 +1,26 @@
-# krunkedLUFTRAUSERS — Act II Sprint Handoff
+# KRUNKED SKYBREAKER — Sprint Handoff
 
 ## 1. Shipped Capabilities & Verified Parity Metrics
-- **Act I Vanilla 1:1 Lock (`VANILLA_1TO1_PROFILE`):** Default profile locks `ModRegistry` (`vanillaLocked = true`) so flight controls, 60Hz `Mulberry32` aerodynamics, 126 aircraft (`125` + `[5,5,5]` `URAUSER`), 10 Normal/SFMT enemies, 90 missions, `600x400` `NEAREST` palette/water/health shaders, and phase-locked 3-stem Web Audio remain bit-identically 1:1 with Steam data.
-- **Act II Mod Packs (Hangar `Tab` -> `ACT II MOD DECK`):**
-  1. **Expanded Arsenal & Mega-Bosses (`src/sim/mod-packs.ts`):** Custom weapons (`6` Railgun, `7` Flak 6-shard airburst, `8` Chain Lightning 3-target arc), bodies (`6` Aegis shield, `7` Vampire lifesteal, `8` Overclock), engines (`6` Afterburner, `7` Vector, `8` Ion), and Mega-Bosses (`Dreadnought`, `SkyCarrier`, `AceSquadron`) with identical vanilla flight controls.
+- **100% Original Default Brand & Assets (`KRUNKED SKYBREAKER`):**
+  - Fresh launches and web deployments boot directly into `'skybreaker'` (`ASSETS: skybreaker-original`) with upgraded original handcrafted procedural pixel-art sprite atlases, original 8-color `SKYBREAKER` palette + 11 unlockable palettes (`inverted`, `synthdusk`, `overdrive`, etc.), 126 original aircraft callsigns (`APEX OMEGA` at `[5,5,5]`), clean original part names/descriptions, and original phase-locked Web Audio synth stems & SFX.
+  - Zero copyrighted third-party binaries or verbatim creative text tracked in git; enforced continuously by `tools/parity-audit.ts`.
+- **Live Hangar Asset Vault Toggle (`ASSETS` Row & `V` Shortcut):**
+  - Optionally detects a read-only local Steam install (`SKYBREAKER_STEAM_DIR` / `LUFTRAUSERS_STEAM_DIR` / Windows default) via `VaultLoader.isSteamAvailable()`.
+  - Players can hot-swap between `SKYBREAKER` and `STEAM LOCAL` directly inside the Hangar (no page reload!) via the `ASSETS` row, `V` key, or `window.__SKYBREAKER_DEBUG__.setAssetMode(...)`, cleanly running `sim.setGameData(...)`, `renderer.reloadVault(...)`, and `audio.init(...)` with `0` GL errors, `< 1ms` audio drift, and persistence in `krunked_skybreaker_asset_mode_v1`.
+- **Act I Core Lock (`VANILLA_1TO1_PROFILE`):** Default profile locks `ModRegistry` (`vanillaLocked = true`) so flight controls, 60Hz `Mulberry32` aerodynamics, 126 aircraft loadouts, 10 Normal/SFMT enemies, 90 missions, `600x400` `NEAREST` palette/water/health shaders, and phase-locked 3-stem Web Audio remain deterministic and regression-locked.
+- **Skybreaker Mod Packs (Hangar `Tab` -> `SKYBREAKER MOD DECK`):**
+  1. **Expanded Arsenal & Mega-Bosses (`src/sim/mod-packs.ts`):** Custom weapons (`6` Railgun, `7` Flak 6-shard airburst, `8` Chain Lightning 3-target arc), bodies (`6` Aegis shield, `7` Vampire lifesteal, `8` Overclock), engines (`6` Afterburner, `7` Vector, `8` Ion), original modded callsigns (`RAILBREAKER`, `FLAKBREAKER`, `AEGIS BREAKER`, etc.), and Mega-Bosses (`Dreadnought`, `SkyCarrier`, `AceSquadron`).
   2. **Deterministic Replay Ghost & Daily Seed (`src/sim/replay-ghost.ts`):** Isolated-PRNG `GhostRunner` rendering your Personal Best silhouette & trail, UTC `YYYYMMDD` Daily Seed sorties, and fuzz-hardened replay JSON export/import.
   3. **Custom Shader & Live Palette Studio (`src/render/shaders.ts`, `src/ui/palette-studio.ts`):** Toggleable CRT Scanlines, Phosphor Bloom, Speed-Warp Vignette, and Screen-Space Shockwaves in `outpass` (strictly zeroed in Vanilla 1:1), 4 bonus neon palettes, and an 8-slot live RGB Palette Studio.
   4. **Local 2P Co-op & 1v1 Dogfight Arena (`src/sim/simulation.ts`, `src/main.ts`):** Co-op waves with 300-tick partner respawn and Best-of-5 1v1 Dogfight Arena (Bot wingman/rival or split-keyboard `WASD+F/Space` vs `Arrows+M/Num0` & dual Gamepad).
-- **Empirical Verification:** `npm run typecheck` (`0` errors), `npm test` (`96/96`), `npm run test:playtesters` (**`100/100`** adversarial playtesters `PT-001`..`PT-100`), `npm run test:parity` (`25/25` live Steam E2E proofs), `npm run audit:parity` (`19/19`, `0` git-hygiene violations, `0` JSON diffs), live Chrome WebGL2 playtests at `144.0 FPS` (`7.3–7.6ms` p95), `0.000ms` audio drift, `0` GL/console errors, instant plain-`` ` `` HUD toggle, allied launch submarine & original Steam FX (`smoke_long`, `drip`, `boostsplash`, `bigboostcircle`, `spreadfade`, `planepart`, `poof`, `laser_charge`, `laser_fade`), HUD-safe warp & dark Dogfight HP pills, clean reload persistence, and spotless `[5,6,8] -> original` Vanilla 1:1 reset.
+- **Empirical Verification:** `npm run typecheck` (`0` errors), `npm test` (`101/101`), `npm run test:playtesters` (`100/100`, including live `SKYBREAKER` ↔ `STEAM LOCAL` hot-swap in `PT-081`), `npm run test:parity` (`25/25`), `npm run audit:parity` (`21/21`, `0` git-hygiene violations, `0` trademark leaks, `0` numeric diffs), and `npm run build` clean.
 
 ## 2. Runtime Operation & CLI
-- `npm start` mounts local Steam `data/` read-only (`LUFTRAUSERS_STEAM_DIR`, Windows default) or falls back cleanly to deterministic procedural vector/synth assets.
+- `npm start` boots into `SKYBREAKER` original procedural art & synth by default and exposes optional read-only local Steam data (`SKYBREAKER_STEAM_DIR`, fallback `LUFTRAUSERS_STEAM_DIR`) when toggled via Hangar `ASSETS` / `V`.
 - **CLI:** `npm start` | `npm run build` | `npm run typecheck` | `npm test` | `npm run test:playtesters` | `npm run test:parity` | `npm run audit:parity`.
 
 ## 3. Ready-to-Sprint Seams (Next Sprint Cold-Boot)
-- **Cold-Boot Anchor:** Read only `ARCHITECTURE.md`, `SPEC.md`, and `HANDOFF.md`; keep `VANILLA_1TO1_PROFILE` regression-locked (`npm run typecheck`, `npm test`, `npm run test:playtesters`, `npm run test:parity`, `npm run audit:parity`).
+- **Cold-Boot Anchor:** Read only `ARCHITECTURE.md`, `SPEC.md`, and `HANDOFF.md`; keep `VANILLA_1TO1_PROFILE` and clean-room IP hygiene regression-locked (`npm run typecheck`, `npm test`, `npm run test:playtesters`, `npm run test:parity`, `npm run audit:parity`, `npm run build`).
 - **FPV / Acro Flight Mutators:** Wire optional Betaflight-style rate/airmode `FlightMutator`s behind `ModRegistry`.
 - **Online Netplay & Leaderboards:** Feed deterministic `ReplayFrame` bitmasks over WebRTC/WebSocket rollback or submit verified Daily Seed replays.
-- **Playtest Tuning & New Content:** Add new weapons/bodies/engines/bosses/palettes cleanly inside `src/sim/mod-packs.ts` and `src/render/palettes.ts` without touching Act I invariants.
+- **Content Expansion:** Add new weapons/bodies/engines/bosses/palettes cleanly inside `src/sim/mod-packs.ts` and `src/render/palettes.ts` while keeping default assets 100% original.

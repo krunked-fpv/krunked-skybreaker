@@ -49,6 +49,144 @@ const FORBIDDEN_FILENAMES = new Set<string>([
 const FORBIDDEN_PATH_PATTERN =
   /(^|[\\/])(steamapps[\\/]common[\\/]luftrausers|data[\\/](res|gfx|bgm|sfx)[\\/])/i;
 
+const TRADEMARK_SCAN_FILES = [
+  'src/vault/vanilla-defaults.ts',
+  'src/render/palettes.ts',
+  'src/render/renderer.ts',
+  'src/sim/mod-packs.ts',
+  'index.html',
+  'package.json',
+] as const;
+
+const FORBIDDEN_TRADEMARK_TERMS: ReadonlyArray<{ label: string; regex: RegExp }> = [
+  { label: 'luftrauser', regex: /luftrauser/i },
+  { label: 'urauser', regex: /urauser/i },
+  { label: 'kozilek', regex: /kozilek/i },
+  { label: 'vlambeer', regex: /vlambeer/i },
+  { label: 'devolver', regex: /devolver/i },
+  { label: 'equiped', regex: /\bequiped\b/i },
+  { label: 'bob raus', regex: /bob\s+raus/i },
+  { label: 'unhealthy boeing', regex: /unhealthy\s+boeing/i },
+];
+
+/**
+ * Lines allowed strictly for optional read-only Steam bridge compatibility keys
+ * (never user-facing text, branding, descriptions, or callsigns).
+ */
+function isSteamBridgeCompatLine(relPath: string, line: string): boolean {
+  const trimmed = line.trim();
+  if (relPath === 'src/vault/vanilla-defaults.ts') {
+    // Steam OGG stem manifest IDs ('luftrauser_bass1', 'luftrauser__urauser', etc.)
+    if (/^'luftrauser_[a-z0-9_]+',?$/i.test(trimmed)) {
+      return true;
+    }
+    // Steam sprites.json internal apex chassis atlas entry lookup key
+    if (/^\{\s*name:\s*'urauser',\s*size:/i.test(trimmed)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function scanTrademarkLeaksInFiles(rootDir: string): string[] {
+  const leaks: string[] = [];
+  for (const relPath of TRADEMARK_SCAN_FILES) {
+    const fullPath = path.join(rootDir, relPath);
+    if (!fs.existsSync(fullPath)) {
+      leaks.push(`${relPath}: missing file`);
+      continue;
+    }
+    const lines = fs.readFileSync(fullPath, 'utf8').split(/\r?\n/);
+    for (let idx = 0; idx < lines.length; idx++) {
+      const line = lines[idx] ?? '';
+      if (isSteamBridgeCompatLine(relPath, line)) {
+        continue;
+      }
+      for (const term of FORBIDDEN_TRADEMARK_TERMS) {
+        if (term.regex.test(line)) {
+          leaks.push(`${relPath}:${idx + 1} (${term.label})`);
+        }
+      }
+    }
+  }
+  return leaks;
+}
+
+function scanDefaultCopyForTrademarkLeaks(): string[] {
+  const leaks: string[] = [];
+  const checkValue = (label: string, text: unknown): void => {
+    if (typeof text !== 'string') return;
+    for (const term of FORBIDDEN_TRADEMARK_TERMS) {
+      if (term.regex.test(text)) {
+        leaks.push(`${label} matched "${term.label}": ${JSON.stringify(text)}`);
+      }
+    }
+  };
+
+  const player = asObject(VANILLA_PLAYER_RAW);
+  for (const cat of ['engines', 'bodyparts', 'weapons'] as const) {
+    const group = asObject(player[cat]);
+    for (const [key, rawEntry] of Object.entries(group)) {
+      const entry = asObject(rawEntry);
+      checkValue(`player.${cat}.${key}.name`, entry.name);
+      checkValue(`player.${cat}.${key}.descr`, entry.descr);
+    }
+  }
+
+  const globalObj = asObject(VANILLA_GLOBAL_RAW);
+  const planenames = Array.isArray(globalObj.planenames)
+    ? (globalObj.planenames as JsonObject[])
+    : [];
+  for (let i = 0; i < planenames.length; i++) {
+    checkValue(`global.planenames[${i}].name`, planenames[i]?.name);
+  }
+  return leaks;
+}
+
+function normalizePlayerCategoryNumericById(
+  categoryObj: JsonObject,
+): Record<string, Record<string, unknown>> {
+  const entries = Object.values(categoryObj).map((v) => asObject(canonicalizeLower(v)));
+  const baseEntry = entries.find((e) => e.id === 0) ?? {};
+  const byId: Record<string, Record<string, unknown>> = {};
+  for (const entry of entries) {
+    const id = String(entry.id ?? '');
+    const merged: Record<string, unknown> = { ...baseEntry, ...entry };
+    delete merged.name;
+    delete merged.descr;
+    byId[id] = merged;
+  }
+  return byId;
+}
+
+function normalizePlayerNumericParity(rawPlayer: JsonObject): Record<string, unknown> {
+  const settings = asObject(canonicalizeLower(rawPlayer.settings));
+  return {
+    settings: {
+      canshoot: settings.canshoot,
+      meleedmg: settings.meleedmg,
+      waterrotationforcedegrees: settings.waterrotationforcedegrees,
+    },
+    enginesById: normalizePlayerCategoryNumericById(asObject(rawPlayer.engines)),
+    bodiesById: normalizePlayerCategoryNumericById(asObject(rawPlayer.bodyparts)),
+    weaponsById: normalizePlayerCategoryNumericById(asObject(rawPlayer.weapons)),
+  };
+}
+
+function normalizeGlobalNumericParity(rawGlobal: JsonObject): Record<string, unknown> {
+  const planenames = Array.isArray(rawGlobal.planenames)
+    ? (rawGlobal.planenames as JsonObject[]).map((p) => ({
+        weapon: p.weapon,
+        body: p.body,
+        engine: p.engine,
+      }))
+    : [];
+  const missions = Array.isArray(rawGlobal.missions)
+    ? canonicalizeLower(rawGlobal.missions)
+    : [];
+  return { planenames, missions };
+}
+
 interface AuditCheckResult {
   category: string;
   name: string;
@@ -345,10 +483,46 @@ function runAudit(): number {
     );
   }
 
+  // 1b. Strict IP & Trademark Hygiene Scan across default data, palettes, UI & shell
+  const defaultCopyLeaks = scanDefaultCopyForTrademarkLeaks();
+  const skybreakerPlanes = Array.isArray(VANILLA_GLOBAL_RAW.planenames)
+    ? VANILLA_GLOBAL_RAW.planenames
+    : [];
+  const apexName = skybreakerPlanes[125]?.name ?? '';
+  const uniqueSkybreakerNames = new Set(skybreakerPlanes.map((p) => p.name.trim().toLowerCase()));
+  const defaultBrandOk =
+    defaultCopyLeaks.length === 0 &&
+    skybreakerPlanes.length === 126 &&
+    apexName === 'APEX OMEGA' &&
+    uniqueSkybreakerNames.size === 126;
+  record(
+    'IP HYGIENE',
+    'Skybreaker defaults copy & callsigns scan',
+    defaultBrandOk,
+    defaultBrandOk
+      ? `0 leaks across player parts & 126 unique callsigns ([5,5,5]=${apexName})`
+      : defaultCopyLeaks.length > 0
+        ? `${defaultCopyLeaks.length} leak(s): ${defaultCopyLeaks.slice(0, 3).join('; ')}`
+        : `planenames=${skybreakerPlanes.length}, unique=${uniqueSkybreakerNames.size}, [5,5,5]=${apexName}`,
+  );
+
+  const fileTrademarkLeaks = scanTrademarkLeaksInFiles(process.cwd());
+  record(
+    'IP HYGIENE',
+    'Source/UI/shell trademark scan (6 files)',
+    fileTrademarkLeaks.length === 0,
+    fileTrademarkLeaks.length === 0
+      ? `0 leaks across ${TRADEMARK_SCAN_FILES.length} guarded files`
+      : `${fileTrademarkLeaks.length} leak(s): ${fileTrademarkLeaks.slice(0, 4).join(', ')}`,
+  );
+
   // ---------------------------------------------------------------------------
   // 2. Live Steam Data Verification (strictly read-only)
   // ---------------------------------------------------------------------------
-  const steamDir = process.env.LUFTRAUSERS_STEAM_DIR?.trim() || DEFAULT_STEAM_DATA_DIR;
+  const steamDir =
+    process.env.SKYBREAKER_STEAM_DIR?.trim() ||
+    process.env.LUFTRAUSERS_STEAM_DIR?.trim() ||
+    DEFAULT_STEAM_DATA_DIR;
   const steamAvailable = fs.existsSync(steamDir) && fs.statSync(steamDir).isDirectory();
   record(
     'STEAM VAULT',
@@ -423,16 +597,16 @@ function runAudit(): number {
       );
 
       const playerDiffs = diffValues(
-        canonicalizeLower(playerRaw),
-        canonicalizeLower(VANILLA_PLAYER_RAW),
+        normalizePlayerNumericParity(playerRaw),
+        normalizePlayerNumericParity(VANILLA_PLAYER_RAW as unknown as JsonObject),
         'player',
       );
       record(
         'FALLBACK PARITY',
-        'player.json vs vanilla-defaults.ts',
+        'player.json physics/tuning vs defaults',
         playerDiffs.length === 0,
         playerDiffs.length === 0
-          ? '0 field diffs'
+          ? '0 numeric/tuning diffs (original Skybreaker names/copy skipped)'
           : `${playerDiffs.length} diff(s): ${playerDiffs.slice(0, 3).join('; ')}`,
       );
 
@@ -467,16 +641,16 @@ function runAudit(): number {
       );
 
       const globalDiffs = diffValues(
-        canonicalizeLower(globalRaw),
-        canonicalizeLower(VANILLA_GLOBAL_RAW),
+        normalizeGlobalNumericParity(globalRaw),
+        normalizeGlobalNumericParity(VANILLA_GLOBAL_RAW as unknown as JsonObject),
         'global',
       );
       record(
         'FALLBACK PARITY',
-        'global.json vs vanilla-defaults.ts',
+        'global.json slots/missions vs defaults',
         globalDiffs.length === 0,
         globalDiffs.length === 0
-          ? '0 field diffs'
+          ? '0 slot/mission diffs (126 loadouts + 90 missions; Skybreaker callsigns original)'
           : `${globalDiffs.length} diff(s): ${globalDiffs.slice(0, 3).join('; ')}`,
       );
 
@@ -736,7 +910,7 @@ function runAudit(): number {
   const line = '='.repeat(86);
   const divider = '-'.repeat(86);
   console.log(line);
-  console.log(' krunkedLUFTRAUSERS — ADVERSARIAL 1:1 PARITY & CLEAN-ROOM AUDIT SCORECARD');
+  console.log(' KRUNKED SKYBREAKER — PARITY & CLEAN-ROOM IP AUDIT SCORECARD');
   console.log(line);
   console.log(
     `${'STATUS'.padEnd(8)} ${'CATEGORY'.padEnd(17)} ${'CHECK'.padEnd(44)} DETAIL`,

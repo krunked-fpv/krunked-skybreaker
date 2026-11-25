@@ -231,7 +231,17 @@ function assertSnapshotFinite(snap: SimSnapshot): void {
 const steamVault = loadVaultFromDisk();
 const fallbackVault = createProceduralFallbackBundle();
 const steamData: GameDataBundle = steamVault.data;
-const steamDir = process.env.LUFTRAUSERS_STEAM_DIR?.trim() || DEFAULT_STEAM_DATA_DIR;
+const steamDir =
+  process.env.SKYBREAKER_STEAM_DIR?.trim() ||
+  process.env.LUFTRAUSERS_STEAM_DIR?.trim() ||
+  DEFAULT_STEAM_DATA_DIR;
+
+function stripPartText<T extends { name: string; descr: string }>(
+  spec: T,
+): Omit<T, 'name' | 'descr'> {
+  const { name: _name, descr: _descr, ...rest } = spec;
+  return rest;
+}
 
 function readRawSteamRes<T>(filename: string): T {
   const fullPath = path.join(steamDir, 'res', filename);
@@ -249,24 +259,89 @@ describe('Gate 3A: Live Steam Vault Cross-Reference & Zero-Drift Fallback Parity
     expect(fallbackVault.data.vaultSource).toBe('procedural-fallback');
     expect(fallbackVault.data.steamDir).toBeNull();
 
-    // Zero stat drift across every gameplay schema
-    expect(fallbackVault.data.player).toEqual(steamData.player);
+    // Zero numeric/tuning stat drift across every gameplay schema (while Skybreaker names/copy remain 100% original)
+    expect(fallbackVault.data.player.settings.canshoot).toBe(steamData.player.settings.canshoot);
+    expect(fallbackVault.data.player.settings.meleedmg).toBe(steamData.player.settings.meleedmg);
+    expect(fallbackVault.data.player.settings.waterrotationforcedegrees).toBe(
+      steamData.player.settings.waterrotationforcedegrees,
+    );
+    expect(fallbackVault.data.player.enginesById.map(stripPartText)).toEqual(
+      steamData.player.enginesById.map(stripPartText),
+    );
+    expect(fallbackVault.data.player.bodiesById.map(stripPartText)).toEqual(
+      steamData.player.bodiesById.map(stripPartText),
+    );
+    expect(fallbackVault.data.player.weaponsById.map(stripPartText)).toEqual(
+      steamData.player.weaponsById.map(stripPartText),
+    );
     expect(fallbackVault.data.projectiles).toEqual(steamData.projectiles);
     expect(fallbackVault.data.enemies).toEqual(steamData.enemies);
     expect(fallbackVault.data.enemiesSfmt).toEqual(steamData.enemiesSfmt);
     expect(fallbackVault.data.spawnCoordinator).toEqual(steamData.spawnCoordinator);
     expect(fallbackVault.data.spawnCoordinatorSfmt).toEqual(steamData.spawnCoordinatorSfmt);
-    expect(fallbackVault.data.global).toEqual(steamData.global);
+    expect(
+      fallbackVault.data.global.planenames.map(({ weapon, body, engine }) => ({
+        weapon,
+        body,
+        engine,
+      })),
+    ).toEqual(
+      steamData.global.planenames.map(({ weapon, body, engine }) => ({
+        weapon,
+        body,
+        engine,
+      })),
+    );
+    expect(fallbackVault.data.global.planenames[125]).toEqual({
+      name: 'APEX OMEGA',
+      weapon: 5,
+      body: 5,
+      engine: 5,
+    });
+    expect(
+      fallbackVault.data.global.missions.map(({ id, component, objective, condition, val }) => ({
+        id,
+        component,
+        objective,
+        condition,
+        val,
+      })),
+    ).toEqual(
+      steamData.global.missions.map(({ id, component, objective, condition, val }) => ({
+        id,
+        component,
+        objective,
+        condition,
+        val,
+      })),
+    );
     expect(fallbackVault.data.fx).toEqual(steamData.fx);
     expect(fallbackVault.data.parallax).toEqual(steamData.parallax);
     expect(fallbackVault.data.room).toEqual(steamData.room);
 
-    // Atlas sprite keys & audio inventories align 1:1
+    // Atlas sprite keys & audio inventories align 1:1 (except rebranded logo/emblem sprite keys)
+    const REBRANDED_ATLAS_KEYS: Record<string, string> = {
+      luftrausers_logo: 'skybreaker_logo',
+      devolver_logo: 'brand_emblem',
+      vlambeer_logo: 'studio_logo',
+    };
+    const normalizeAtlasKeys = (keys: string[]): string[] =>
+      keys.map((k) => REBRANDED_ATLAS_KEYS[k] ?? k).sort();
+
+    expect(fallbackVault.data.atlases.sprites.sprites['skybreaker_logo']).toBeDefined();
+    expect(fallbackVault.data.atlases.sprites.sprites['luftrausers_logo']).toBeUndefined();
+    expect(fallbackVault.data.atlases.menusprites.sprites['skybreaker_logo']).toBeDefined();
+    expect(fallbackVault.data.atlases.menusprites.sprites['brand_emblem']).toBeDefined();
+    expect(fallbackVault.data.atlases.menusprites.sprites['studio_logo']).toBeDefined();
+    expect(fallbackVault.data.atlases.menusprites.sprites['luftrausers_logo']).toBeUndefined();
+    expect(fallbackVault.data.atlases.menusprites.sprites['devolver_logo']).toBeUndefined();
+    expect(fallbackVault.data.atlases.menusprites.sprites['vlambeer_logo']).toBeUndefined();
+
     expect(Object.keys(fallbackVault.data.atlases.sprites.sprites).sort()).toEqual(
-      Object.keys(steamData.atlases.sprites.sprites).sort(),
+      normalizeAtlasKeys(Object.keys(steamData.atlases.sprites.sprites)),
     );
     expect(Object.keys(fallbackVault.data.atlases.menusprites.sprites).sort()).toEqual(
-      Object.keys(steamData.atlases.menusprites.sprites).sort(),
+      normalizeAtlasKeys(Object.keys(steamData.atlases.menusprites.sprites)),
     );
     expect(Object.keys(fallbackVault.data.atlases.nukesprites.sprites).sort()).toEqual(
       Object.keys(steamData.atlases.nukesprites.sprites).sort(),
@@ -1202,15 +1277,15 @@ describe('Gate 3B: Renderer / Shader & Audio Stem Parity Proofs', () => {
     expect(ids.size).toBe(12);
     for (const required of [
       'original',
-      'lanigiro',
+      'inverted',
       'classic',
       'gameboy',
       'virtual',
       'oceanic',
-      'kozilek',
+      'synthdusk',
       'sunset',
       'amber',
-      'sfmt',
+      'overdrive',
       'noir',
       'toxic',
     ]) {
