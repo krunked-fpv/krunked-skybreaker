@@ -1,4 +1,5 @@
 export type VaultSource = 'steam-local' | 'procedural-fallback';
+export type AssetPackMode = 'skybreaker' | 'steam-local';
 
 export type EnemyKind =
   | 'Fighter'
@@ -378,5 +379,6 @@ export interface VaultAssetBundle {
 }
 
 export interface IVaultLoader {
-  load(): Promise<VaultAssetBundle>;
+  load(preferredMode?: AssetPackMode): Promise<VaultAssetBundle>;
+  isSteamAvailable?(): Promise<boolean>;
 }

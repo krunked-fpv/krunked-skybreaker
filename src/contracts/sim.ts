@@ -2,6 +2,7 @@ import type {
   BodySpec,
   EnemyKind,
   EngineSpec,
+  GameDataBundle,
   MissionSpec,
   WeaponSpec,
 } from './vault';
@@ -350,4 +351,5 @@ export interface ISimulation {
   getDailySeed?(date?: Date): { dateId: string; seed: number };
   setP2Loadout?(loadout: Loadout): void;
   getP2Loadout?(): Loadout;
+  setGameData?(data: GameDataBundle): void;
 }

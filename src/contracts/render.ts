@@ -6,6 +6,7 @@ import type {
 } from './sim';
 import type { Act2ModFlags, ShaderFxConfig } from './mod';
 import type {
+  AssetPackMode,
   BodySpec,
   EngineSpec,
   MissionSpec,
@@ -47,7 +48,14 @@ export interface PostShaderUniforms {
   uniform_colors: RgbaTuple[];
 }
 
-export type HangarRow = 'weapon' | 'body' | 'engine' | 'palette' | 'mode' | 'launch';
+export type HangarRow =
+  | 'weapon'
+  | 'body'
+  | 'engine'
+  | 'palette'
+  | 'assets'
+  | 'mode'
+  | 'launch';
 
 export type ModDeckRow =
   | 'modprofile'
@@ -91,6 +99,8 @@ export interface HangarUiState {
   highScore: number;
   sfmtUnlocked: boolean;
   vaultSource: VaultSource;
+  assetMode?: AssetPackMode;
+  steamAvailable?: boolean;
   completedMissionsCount: number;
   totalMissionsCount: number;
   /** Act II Hangar Mod Switcher & Palette Studio view state */
@@ -125,6 +135,7 @@ export interface IRenderer {
   listPalettes(): readonly PaletteDefinition[];
   setShaderFx?(fx: ShaderFxConfig): void;
   registerCustomPalette?(palette: PaletteDefinition): void;
+  reloadVault?(vault: VaultAssetBundle): void;
   render(
     snapshot: SimSnapshot,
     prevSnapshot: SimSnapshot,

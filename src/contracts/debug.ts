@@ -9,10 +9,12 @@ import type {
   PilotProfile,
   SimPhase,
 } from './sim';
-import type { EnemyKind, VaultSource } from './vault';
+import type { AssetPackMode, EnemyKind, VaultSource } from './vault';
 
-export interface RauserDebugState {
+export interface SkybreakerDebugState {
   vaultSource: VaultSource;
+  assetMode?: AssetPackMode;
+  steamAvailable?: boolean;
   phase: SimPhase;
   mode: GameMode;
   paused: boolean;
@@ -64,8 +66,10 @@ export interface RauserDebugState {
   shockwaveCount?: number;
 }
 
-export interface RauserDebugApi {
-  getState(): RauserDebugState;
+export type RauserDebugState = SkybreakerDebugState;
+
+export interface SkybreakerDebugApi {
+  getState(): SkybreakerDebugState;
   setLoadout(w: number, b: number, e: number): void;
   setPalette(id: string): void;
   setMode(mode: GameMode): void;
@@ -82,6 +86,10 @@ export interface RauserDebugApi {
   resetProfile(): void;
   unlockAllForTesting(): void;
   toggleDebugHud(visible?: boolean): void;
+  /** Asset pack toggle (Skybreaker procedural vs optional local Steam vault) */
+  setAssetMode?(mode: AssetPackMode): Promise<void>;
+  getAssetMode?(): AssetPackMode;
+  isSteamAvailable?(): boolean;
   /** Act II Debug & Automation Seam */
   setModFlags?(flags: Partial<Act2ModFlags>): void;
   getModFlags?(): Act2ModFlags;
@@ -95,8 +103,11 @@ export interface RauserDebugApi {
   setP2Input?(partial: Partial<InputState>): void;
 }
 
+export type RauserDebugApi = SkybreakerDebugApi;
+
 declare global {
   interface Window {
+    __SKYBREAKER_DEBUG__?: SkybreakerDebugApi;
     __RAUSER_DEBUG__?: RauserDebugApi;
   }
 }
