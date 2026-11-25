@@ -2372,4 +2372,105 @@ describe('Renderer Visual & UI Regression Contracts', () => {
 
     renderer.dispose();
   });
+
+  it('scales and centers the 416x300 APEX OMEGA [5,5,5] Hangar preview strictly inside the preview stage box [318..558] x [68..164]', () => {
+    const mockGl = createMockWebGL2Context();
+    const instanceBatches: Float32Array[] = [];
+    mockGl.gl.bufferSubData = vi.fn(
+      (_target: number, _offset: number, data: ArrayBufferView) => {
+        if (data instanceof Float32Array) {
+          instanceBatches.push(new Float32Array(data));
+        }
+      },
+    );
+
+    const mockCanvas = {
+      width: 600,
+      height: 400,
+      style: { imageRendering: '' },
+      getContext: vi.fn((kind: string) => (kind === 'webgl2' ? mockGl.gl : null)),
+    } as unknown as HTMLCanvasElement;
+
+    const vault = createMockVaultBundle();
+    vault.data.atlases.sprites.sprites['apex_omega'] = {
+      name: 'apex_omega',
+      size: [416, 300],
+      hull: [50, 50, 366, 250],
+      center: [208, 88],
+      subs: [{ x: 123, y: 0 }],
+    };
+
+    const renderer = new WebGL2Renderer();
+    renderer.init(mockCanvas, vault);
+    const controller = new HangarController();
+    const apexSnap = makeSnapshot({
+      phase: 'hangar',
+      player: {
+        ...makeSnapshot().player,
+        loadout: { weapon: 5, body: 5, engine: 5 },
+        planeName: 'APEX OMEGA',
+      },
+    });
+    const hangarUi = controller.buildUiState(apexSnap);
+
+    for (const elapsedSec of [0, 0.7, 1.4, 2.3, 3.8]) {
+      instanceBatches.length = 0;
+      renderer.render(apexSnap, apexSnap, 0, hangarUi, elapsedSec);
+
+      let apexInst: {
+        x: number;
+        y: number;
+        angle: number;
+        w: number;
+        h: number;
+        cx: number;
+        cy: number;
+        sx: number;
+        sy: number;
+      } | null = null;
+      for (const batch of instanceBatches) {
+        for (let i = 0; i < batch.length; i += 13) {
+          if (batch[i + 3] === 123 && batch[i + 5] === 416 && batch[i + 6] === 300) {
+            apexInst = {
+              x: batch[i]!,
+              y: batch[i + 1]!,
+              angle: batch[i + 2]!,
+              w: batch[i + 5]!,
+              h: batch[i + 6]!,
+              cx: batch[i + 7]!,
+              cy: batch[i + 8]!,
+              sx: batch[i + 9]!,
+              sy: batch[i + 10]!,
+            };
+          }
+        }
+      }
+
+      expect(apexInst).not.toBeNull();
+      expect(apexInst!.sx).toBeLessThanOrEqual(0.3);
+      expect(apexInst!.sy).toBeLessThanOrEqual(0.3);
+
+      // Verify all 4 transformed quad corners stay strictly inside preview stage [318..558] x [68..164]
+      const c = Math.cos(apexInst!.angle);
+      const s = Math.sin(apexInst!.angle);
+      for (const [u, v] of [
+        [0, 0],
+        [1, 0],
+        [0, 1],
+        [1, 1],
+      ] as const) {
+        const lx = (u * apexInst!.w - apexInst!.cx) * apexInst!.sx;
+        const ly = (v * apexInst!.h - apexInst!.cy) * apexInst!.sy;
+        const px = Math.floor(lx * c - ly * s + apexInst!.x + 0.5);
+        const py = Math.floor(lx * s + ly * c + apexInst!.y + 0.5);
+        expect(px).toBeGreaterThanOrEqual(318);
+        expect(px).toBeLessThanOrEqual(558);
+        expect(py).toBeGreaterThanOrEqual(68);
+        expect(py).toBeLessThanOrEqual(164);
+      }
+    }
+
+    expect(renderer.getFrameMetrics().webglErrors).toBe(0);
+    renderer.dispose();
+  });
 });
