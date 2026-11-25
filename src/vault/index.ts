@@ -28,3 +28,7 @@ export {
   checkCleanRoomGitHygiene,
   type VaultLoaderOptions,
 } from './loader';
+export {
+  VANILLA_PLAYER_RAW,
+  VANILLA_GLOBAL_RAW,
+} from './vanilla-defaults';

@@ -167,8 +167,8 @@ function normalizeWeaponEntry(raw: unknown, base: WeaponSpec): WeaponSpec {
 
 const DEFAULT_ENGINE_BASE: EngineSpec = {
   id: 0,
-  name: 'original',
-  descr: 'well-balanced engine',
+  name: 'standard',
+  descr: 'tuned all-role turbojet',
   sprite: 'engine_original',
   booststartsprite: 'fx_booststart',
   boostloopsprite: 'fx_boostloop',
@@ -203,8 +203,8 @@ const DEFAULT_ENGINE_BASE: EngineSpec = {
 
 const DEFAULT_WEAPON_BASE: WeaponSpec = {
   id: 0,
-  name: 'original',
-  descr: 'versatile machinegun',
+  name: 'standard',
+  descr: 'rapid twin autocannon',
   sprite: 'wings_original',
   projectile: 'bullet',
   interval: 3,
@@ -215,17 +215,34 @@ const DEFAULT_WEAPON_BASE: WeaponSpec = {
   flags: '',
 };
 
+function resolveBasePartEntry(rawParts: UnknownRecord): { keyLower: string; raw: unknown } {
+  for (const [key, value] of Object.entries(rawParts)) {
+    const kl = key.toLowerCase();
+    if (kl === 'original' || kl === 'standard') {
+      return { keyLower: kl, raw: value };
+    }
+  }
+  for (const [key, value] of Object.entries(rawParts)) {
+    const m = buildLowerKeyMap(value);
+    if (readNumber(m, 'id', -1) === 0) {
+      return { keyLower: key.toLowerCase(), raw: value };
+    }
+  }
+  return { keyLower: '', raw: {} };
+}
+
 /**
- * Normalizes `player.json`, inheriting all omitted fields from `"original"` (`id: 0`)
- * for engines `1..5`, bodyparts `1..5`, and weapons `1..5`, and populating sorted `*ById` arrays.
+ * Normalizes `player.json` (both Skybreaker `standard` and Steam `original` schemas),
+ * inheriting all omitted fields from the `id: 0` base part for `1..5`, and populating
+ * sorted `*ById` arrays.
  */
 export function normalizePlayerData(raw: unknown): PlayerDataSpec {
   const root = buildLowerKeyMap(raw);
   const rawSettings = buildLowerKeyMap(root.get('settings'));
   const settings: PlayerSettingsSpec = {
-    body: readString(rawSettings, 'body', 'original'),
-    engine: readString(rawSettings, 'engine', 'original'),
-    weapon: readString(rawSettings, 'weapon', 'original'),
+    body: readString(rawSettings, 'body', 'standard'),
+    engine: readString(rawSettings, 'engine', 'standard'),
+    weapon: readString(rawSettings, 'weapon', 'standard'),
     canshoot: readBoolean(rawSettings, 'canshoot', true),
     meleedmg: readNumber(rawSettings, 'meleedmg', 10000),
     waterrotationforcedegrees: readNumber(rawSettings, 'waterrotationforcedegrees', 3),
@@ -233,8 +250,8 @@ export function normalizePlayerData(raw: unknown): PlayerDataSpec {
 
   const defaultBodyBase: BodySpec = {
     id: 0,
-    name: 'original',
-    descr: 'good all-round body',
+    name: 'standard',
+    descr: 'balanced combat airframe',
     sprite: 'body_original',
     speedmodifier: 1.0,
     healingspd: 0.16,
@@ -255,35 +272,34 @@ export function normalizePlayerData(raw: unknown): PlayerDataSpec {
   const rawBodies = asRecord(root.get('bodyparts'));
   const rawWeapons = asRecord(root.get('weapons'));
 
-  const originalEngine = normalizeEngineEntry(
-    getKeyCI(rawEngines, 'original', {}),
-    DEFAULT_ENGINE_BASE,
-  );
+  const baseEngineLookup = resolveBasePartEntry(rawEngines);
+  const baseEngine = normalizeEngineEntry(baseEngineLookup.raw, DEFAULT_ENGINE_BASE);
   const engines: Record<string, EngineSpec> = {};
   for (const [key, entry] of Object.entries(rawEngines)) {
     engines[key] =
-      key.toLowerCase() === 'original'
-        ? originalEngine
-        : normalizeEngineEntry(entry, originalEngine);
+      key.toLowerCase() === baseEngineLookup.keyLower
+        ? baseEngine
+        : normalizeEngineEntry(entry, baseEngine);
   }
 
-  const originalBody = normalizeBodyEntry(getKeyCI(rawBodies, 'original', {}), defaultBodyBase);
+  const baseBodyLookup = resolveBasePartEntry(rawBodies);
+  const baseBody = normalizeBodyEntry(baseBodyLookup.raw, defaultBodyBase);
   const bodyparts: Record<string, BodySpec> = {};
   for (const [key, entry] of Object.entries(rawBodies)) {
     bodyparts[key] =
-      key.toLowerCase() === 'original' ? originalBody : normalizeBodyEntry(entry, originalBody);
+      key.toLowerCase() === baseBodyLookup.keyLower
+        ? baseBody
+        : normalizeBodyEntry(entry, baseBody);
   }
 
-  const originalWeapon = normalizeWeaponEntry(
-    getKeyCI(rawWeapons, 'original', {}),
-    DEFAULT_WEAPON_BASE,
-  );
+  const baseWeaponLookup = resolveBasePartEntry(rawWeapons);
+  const baseWeapon = normalizeWeaponEntry(baseWeaponLookup.raw, DEFAULT_WEAPON_BASE);
   const weapons: Record<string, WeaponSpec> = {};
   for (const [key, entry] of Object.entries(rawWeapons)) {
     weapons[key] =
-      key.toLowerCase() === 'original'
-        ? originalWeapon
-        : normalizeWeaponEntry(entry, originalWeapon);
+      key.toLowerCase() === baseWeaponLookup.keyLower
+        ? baseWeapon
+        : normalizeWeaponEntry(entry, baseWeapon);
   }
 
   const enginesById = Object.values(engines).sort((a, b) => a.id - b.id);
@@ -486,7 +502,7 @@ const ENEMY_SINGULAR_LABELS: Record<number, string> = {
   9: 'BLIMP',
 };
 
-function formatConditionSuffix(condition: number): string {
+function formatConditionSuffix(condition: number, skybreakerPack: boolean): string {
   switch (condition) {
     case 1:
       return ' AT MAX COMBO';
@@ -505,16 +521,37 @@ function formatConditionSuffix(condition: number): string {
     case 8:
       return ' WHILE BOOSTING';
     case 9:
-      return ' WITH GUNGINE';
+      return skybreakerPack ? ' WITH RECOILJET' : ' WITH GUNGINE';
     case 11:
-      return ' WITH NUKE BLAST';
+      return skybreakerPack ? ' WITH COREBLAST' : ' WITH NUKE BLAST';
     case 12:
       return ' IN A SINGLE SORTIE';
     case 13:
-      return ' IN SFMT MODE';
+      return skybreakerPack ? ' IN OVERDRIVE MODE' : ' IN SFMT MODE';
     default:
       return '';
   }
+}
+
+function buildPartNameTable(customizetypes: {
+  weapon: Record<string, number>;
+  body: Record<string, number>;
+  engine: Record<string, number>;
+}): readonly (readonly string[])[] {
+  const mapToRow = (map: Record<string, number>, fallback: readonly string[]): string[] => {
+    const row = [...fallback];
+    for (const [name, id] of Object.entries(map)) {
+      if (id >= 0 && id < 12) {
+        row[id] = name.toUpperCase();
+      }
+    }
+    return row;
+  };
+  return [
+    mapToRow(customizetypes.weapon, PART_NAMES_BY_CATEGORY[0]!),
+    mapToRow(customizetypes.body, PART_NAMES_BY_CATEGORY[1]!),
+    mapToRow(customizetypes.engine, PART_NAMES_BY_CATEGORY[2]!),
+  ];
 }
 
 function buildMissionText(
@@ -522,10 +559,12 @@ function buildMissionText(
   objective: number,
   condition: number,
   val: [number, number],
+  partNamesByCategory: readonly (readonly string[])[],
+  skybreakerPack: boolean,
 ): { title: string; description: string } {
   const [cat, part, idx] = component;
   const catLabel = PART_CATEGORY_LABELS[cat] ?? 'PART';
-  const partName = PART_NAMES_BY_CATEGORY[cat]?.[part] ?? `PART ${part}`;
+  const partName = partNamesByCategory[cat]?.[part] ?? `PART ${part}`;
   const title = `${partName} ${catLabel} #${idx + 1}`;
 
   const count = val[0];
@@ -534,7 +573,7 @@ function buildMissionText(
     count === 1
       ? (ENEMY_SINGULAR_LABELS[enemyType] ?? 'ENEMY')
       : (ENEMY_PLURAL_LABELS[enemyType] ?? 'ENEMIES');
-  const suffix = formatConditionSuffix(condition);
+  const suffix = formatConditionSuffix(condition, skybreakerPack);
 
   let description: string;
   switch (objective) {
@@ -595,6 +634,9 @@ export function normalizeGlobalData(raw: unknown): GlobalDataSpec {
     weapon: toNumMap(rawCustomize.get('weapon')),
   };
 
+  const skybreakerPack = 'standard' in customizetypes.engine;
+  const partNamesByCategory = buildPartNameTable(customizetypes);
+
   const rawMissions = Array.isArray(m.get('missions')) ? (m.get('missions') as unknown[]) : [];
   const missions: MissionSpec[] = rawMissions.map((entry, id) => {
     const em = buildLowerKeyMap(entry);
@@ -613,7 +655,14 @@ export function normalizeGlobalData(raw: unknown): GlobalDataSpec {
       typeof valRaw[1] === 'number' ? valRaw[1] : 0,
     ];
 
-    const fallbackText = buildMissionText(component, objective, condition, val);
+    const fallbackText = buildMissionText(
+      component,
+      objective,
+      condition,
+      val,
+      partNamesByCategory,
+      skybreakerPack,
+    );
     const title = readString(em, 'title', fallbackText.title);
     const description = readString(em, 'description', fallbackText.description);
 
@@ -632,7 +681,7 @@ export function normalizeGlobalData(raw: unknown): GlobalDataSpec {
   const planenames: PlaneNameEntry[] = rawPlanes.map((entry) => {
     const pm = buildLowerKeyMap(entry);
     return {
-      name: readString(pm, 'name', 'original'),
+      name: readString(pm, 'name', skybreakerPack ? 'skybreaker' : 'original'),
       weapon: readNumber(pm, 'weapon', 0),
       body: readNumber(pm, 'body', 0),
       engine: readNumber(pm, 'engine', 0),

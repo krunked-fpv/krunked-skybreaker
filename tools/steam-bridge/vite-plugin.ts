@@ -21,9 +21,10 @@ export interface SteamBridgeOptions {
 }
 
 export function resolveSteamDataDir(options?: SteamBridgeOptions): string {
-  const envDir = process.env.LUFTRAUSERS_STEAM_DIR?.trim();
+  const skybreakerEnv = process.env.SKYBREAKER_STEAM_DIR?.trim();
+  const legacyEnv = process.env.LUFTRAUSERS_STEAM_DIR?.trim();
   const optDir = options?.steamDir?.trim();
-  return envDir || optDir || DEFAULT_STEAM_DATA_DIR;
+  return skybreakerEnv || legacyEnv || optDir || DEFAULT_STEAM_DATA_DIR;
 }
 
 function listDirFiles(dirPath: string): string[] {
