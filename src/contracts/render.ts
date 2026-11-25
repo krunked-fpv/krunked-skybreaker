@@ -98,6 +98,7 @@ export interface HangarUiState {
   unlockedEngines: readonly number[];
   highScore: number;
   sfmtUnlocked: boolean;
+  allUnlocked?: boolean;
   vaultSource: VaultSource;
   assetMode?: AssetPackMode;
   steamAvailable?: boolean;

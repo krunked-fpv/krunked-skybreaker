@@ -1146,4 +1146,111 @@ describe('WebGL2Renderer Act II Visuals & Shader FX Pipeline', () => {
     expect(modLine).toContain('P2=COOP2P[BOT]');
     expect(modLine).toContain('SW=1');
   });
+
+  it('cycles all 9 weapons/bodies/engines and all 17 palettes (12 core + 4 bonus + Custom Studio) immediately when allUnlocked + Modded Arsenal are enabled', () => {
+    const hangar = new HangarController({ allUnlocked: true });
+    const moddedFlags: Act2ModFlags = {
+      ...DEFAULT_ACT2_MOD_FLAGS,
+      moddedEnabled: true,
+      arsenalBosses: true,
+    };
+    hangar.setModFlags(moddedFlags);
+
+    const currentLoadout: Loadout = { weapon: 0, body: 0, engine: 0 };
+    const simStub = {
+      setLoadout: (l: Loadout) => {
+        currentLoadout.weapon = l.weapon;
+        currentLoadout.body = l.body;
+        currentLoadout.engine = l.engine;
+      },
+      setMode: vi.fn(),
+    };
+    const makeModSnap = (): SimSnapshot =>
+      makeSnapshot({
+        phase: 'hangar',
+        activeMods: moddedFlags,
+        profile: {
+          ...makeSnapshot().profile,
+          unlockedWeapons: [0],
+          unlockedBodies: [0],
+          unlockedEngines: [0],
+          completedMissions: [],
+          sfmtUnlocked: false,
+        },
+        player: {
+          ...makeSnapshot().player,
+          loadout: { ...currentLoadout },
+        },
+      });
+
+    // All 9 weapons, 9 bodies, and 9 engines cycle cleanly on a fresh 0-mission profile
+    for (const slot of ['weapon', 'body', 'engine'] as const) {
+      hangar.setActiveRow(slot);
+      const visited: number[] = [];
+      for (let i = 0; i < 9; i++) {
+        const res = hangar.cycleCurrent(1, makeModSnap(), simStub);
+        expect(res.changed).toBe(true);
+        expect(res.locked).toBe(false);
+        expect(res.cue).toBe('sndswap');
+        visited.push(res.loadout![slot]);
+      }
+      expect(visited).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 0]);
+    }
+
+    // All 17 palettes (12 core + 4 Act II bonus + Custom Studio) cycle immediately without opening Palette Studio first
+    expect(hangar.getPaletteCount(true)).toBe(17);
+    expect(hangar.getPaletteCount(false)).toBe(12);
+    hangar.setActiveRow('palette');
+    const expectedIds = [
+      ...PALETTES.map((p) => p.id),
+      ...ACT2_BONUS_PALETTES.map((p) => p.id),
+      CUSTOM_PALETTE_ID,
+    ];
+    expect(expectedIds).toHaveLength(17);
+
+    const visitedPalIds: string[] = [hangar.getSelectedPalette().id];
+    for (let i = 0; i < 16; i++) {
+      const res = hangar.cycleCurrent(1, makeModSnap(), simStub);
+      expect(res.changed).toBe(true);
+      expect(res.locked).toBe(false);
+      expect(res.cue).toBe('sndswap');
+      visitedPalIds.push(res.paletteId!);
+    }
+    expect(visitedPalIds).toEqual(expectedIds);
+
+    // One more step wraps cleanly back to index 0 ('original')
+    const wrapRes = hangar.cycleCurrent(1, makeModSnap(), simStub);
+    expect(wrapRes.paletteId).toBe('original');
+    expect(wrapRes.paletteIndex).toBe(0);
+
+    // Renderer lists all 17 palettes and displays 9/9 & 17/17 counters cleanly with 0 GL errors
+    const mockGl = createTrackingMockWebGL2();
+    const mockCanvas = {
+      width: 600,
+      height: 400,
+      style: { imageRendering: '' },
+      getContext: vi.fn((kind: string) => (kind === 'webgl2' ? mockGl.gl : null)),
+    } as unknown as HTMLCanvasElement;
+    const renderer = new WebGL2Renderer();
+    renderer.init(mockCanvas, createMockVaultBundle());
+    expect(renderer.listPalettes()).toHaveLength(17);
+
+    currentLoadout.weapon = 8;
+    currentLoadout.body = 8;
+    currentLoadout.engine = 8;
+    const snap9 = makeModSnap();
+    const pick17 = hangar.selectPaletteByIndex(16, snap9);
+    expect(pick17.locked).toBe(false);
+    expect(pick17.paletteId).toBe(CUSTOM_PALETTE_ID);
+    renderer.setPalette(CUSTOM_PALETTE_ID);
+
+    mockGl.fontTextsLens.length = 0;
+    renderer.render(snap9, snap9, 0, hangar.buildUiState(snap9), 0.5);
+    expect(mockGl.fontTextsLens).toContain('  WEAPON 9/9'.length);
+    expect(mockGl.fontTextsLens).toContain('  BODY 9/9'.length);
+    expect(mockGl.fontTextsLens).toContain('  ENGINE 9/9'.length);
+    expect(mockGl.fontTextsLens).toContain('> PALETTE 17/17'.length);
+    expect(renderer.getFrameMetrics().webglErrors).toBe(0);
+    renderer.dispose();
+  });
 });
