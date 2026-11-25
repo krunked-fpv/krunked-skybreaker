@@ -540,6 +540,28 @@ describe('createProceduralFontTexture narrow glyph & control-char rasterization'
     expect(lowerLit).toBe(true);
   });
 
+  it("retains full vertical stem for '1' (49) in a narrow 2x7 glyph box", () => {
+    const font: Parameters<typeof createProceduralFontTexture>[0] = {
+      name: 'test_one',
+      face: 'Test',
+      size: 10,
+      lineHeight: 10,
+      base: 8,
+      scaleW: 16,
+      scaleH: 16,
+      pageFile: 'test_one_0.png',
+      glyphs: {
+        49: { id: 49, x: 1, y: 2, width: 2, height: 7, xoffset: 0, yoffset: 0, xadvance: 3 },
+      },
+    };
+    const tex = createProceduralFontTexture(font);
+
+    for (let gy = 0; gy < 7; gy++) {
+      const rowLit = isLit(tex, 1, 2 + gy) || isLit(tex, 2, 2 + gy);
+      expect(rowLit).toBe(true);
+    }
+  });
+
   it('produces zero lit pixels for control code 10 (newline)', () => {
     const font: Parameters<typeof createProceduralFontTexture>[0] = {
       name: 'test_newline',

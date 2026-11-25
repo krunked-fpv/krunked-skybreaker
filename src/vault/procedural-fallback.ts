@@ -626,6 +626,33 @@ export function createProceduralNukeTexture(atlas?: SpriteAtlasSpec): DecodedTex
 }
 
 /**
+ * Resolves the inclusive source coordinate range `[start, end]` for a destination pixel.
+ * Downsampled axes (`destSize < span`) use bin-OR coverage so thin 1px stems are never skipped;
+ * upsampled or 1:1 axes preserve crisp endpoint-inclusive point sampling.
+ */
+function resolveAxisSampleRange(
+  destIndex: number,
+  destSize: number,
+  minSrc: number,
+  maxSrc: number,
+): [number, number] {
+  const span = maxSrc - minSrc + 1;
+  if (destSize < span) {
+    const startOffset = Math.floor((destIndex * span) / destSize);
+    const endOffset = Math.max(
+      startOffset,
+      Math.ceil(((destIndex + 1) * span) / destSize) - 1,
+    );
+    return [minSrc + startOffset, minSrc + endOffset];
+  }
+  const src =
+    destSize <= 1
+      ? minSrc
+      : minSrc + Math.round((destIndex / (destSize - 1)) * (maxSrc - minSrc));
+  return [src, src];
+}
+
+/**
  * Generates a crisp RGBA8 procedural bitmap font texture matching every glyph box
  * in `font.glyphs` (used both in procedural fallback mode and when Steam's `fnt*_0.png`
  * files are `PCP\0` blobs).
@@ -661,17 +688,20 @@ export function createProceduralFontTexture(font: BitmapFontSpec): DecodedTextur
     }
 
     for (let gy = 0; gy < glyph.height; gy++) {
-      const srcRow =
-        glyph.height <= 1
-          ? minRow
-          : minRow + Math.round((gy / (glyph.height - 1)) * (maxRow - minRow));
-      const rowBits = bitmap[srcRow] ?? 0;
+      const [rStart, rEnd] = resolveAxisSampleRange(gy, glyph.height, minRow, maxRow);
       for (let gx = 0; gx < glyph.width; gx++) {
-        const srcCol =
-          glyph.width <= 1
-            ? minCol
-            : minCol + Math.round((gx / (glyph.width - 1)) * (maxCol - minCol));
-        if ((rowBits & (1 << (4 - srcCol))) !== 0) {
+        const [cStart, cEnd] = resolveAxisSampleRange(gx, glyph.width, minCol, maxCol);
+        let lit = false;
+        for (let r = rStart; r <= rEnd && !lit; r++) {
+          const rowBits = bitmap[r] ?? 0;
+          for (let c = cStart; c <= cEnd; c++) {
+            if ((rowBits & (1 << (4 - c))) !== 0) {
+              lit = true;
+              break;
+            }
+          }
+        }
+        if (lit) {
           setPixel(rgba, width, height, glyph.x + gx, glyph.y + gy, 255, 255, 255, 255);
         }
       }
