@@ -1,8 +1,17 @@
 import type { AudioCueId } from '../contracts/audio';
-import type { IModRegistry } from '../contracts/mod';
+import {
+  DEFAULT_ACT2_MOD_FLAGS,
+  DEFAULT_SHADER_FX,
+  type Act2ModFlags,
+  type CustomBossKind,
+  type IModRegistry,
+  type MultiplayerMode,
+} from '../contracts/mod';
 import type {
+  DogfightState,
   EnemyEntity,
   GameMode,
+  GhostPose,
   InputState,
   ISimulation,
   Loadout,
@@ -14,6 +23,7 @@ import type {
   ProjectileEntity,
   ReplayFrame,
   ReplayRecording,
+  ShockwaveEvent,
   SimAudioEvent,
   SimPhase,
   SimSnapshot,
@@ -28,11 +38,17 @@ import type {
   SpawnCoordinatorSpec,
   WeaponSpec,
 } from '../contracts/vault';
-import { computeAutopilotInput } from './autopilot';
+import {
+  computeAutopilotInput,
+  computeCoopP2BotInput,
+  computeDogfightBotInput,
+} from './autopilot';
 import { clamp, distPointToBoxSq, distPointToSegmentSq, shortestAngleDiffDeg } from './math';
 import { type KillSource, MissionTracker } from './missions';
+import { registerAct2ModPacks, resolveModdedPlaneName } from './mod-packs';
 import { ModRegistry } from './mod-registry';
 import { SeededRng } from './prng';
+import { computeDailySeed, GhostRunner } from './replay-ghost';
 
 const ENEMY_SCORE_VALUES: Record<EnemyKind, number> = {
   Fighter: 20,
@@ -64,6 +80,95 @@ const ENEMY_DIMENSIONS: Record<EnemyKind, { w: number; h: number; r: number }> =
   SkyCarrier: { w: 580, h: 220, r: 112 },
 };
 
+const BASE_BOSS_TEMPLATE: EnemySpec = {
+  key: 'dreadnought',
+  name: 'Dreadnought',
+  sprite: 'big_boat',
+  spritegun: 'big_boat_gun',
+  difficultyweight: 800,
+  health: 500,
+  initvelocity: 0.55,
+  velocityvariance: 0.25,
+  gravity: 0,
+  friction: 0,
+  constantforce: 0,
+  environmentaldmg: 0,
+  environmentalyforce: 0,
+  reaction: 0,
+  reactionvariance: 0,
+  turnvariance: 0,
+  turnspeedvariance: 0,
+  minspeed: 0.3,
+  maxspeed: 0.8,
+  initmaxspeed: 0.8,
+  minspeedvariance: 0,
+  maxspeedvariance: 0,
+  speed: 0.55,
+  maxvspeed: 0,
+  vspeedthrottler: 0,
+  constantplayerchaseforce: 0,
+  turndistance: 0,
+  turndistancerand: 0,
+  fireinterval: 4,
+  fireintervalrand: 0,
+  minfiredist: 0,
+  bulletspeed: 12,
+  boostdstplayer: 0,
+  boostdstspeed: 0,
+  airethinktimer: 0,
+  airethinktimerrand: 0,
+  reactionseaheighta: 0,
+  reactionseaheightb: 0,
+  reactionspaceheightoffseta: 0,
+  reactionspaceheightoffsetb: 0,
+  reactionchangea: 0,
+  reactionchangeb: 0,
+  initbulletspersalvo: 24,
+  bulletspersalvo: 24,
+  bulletfireinterval: 2,
+  firesalvotimer: 85,
+  firesalvotimerrand: 25,
+  salvofirelimiterperboatmultiplier: 0,
+  gunrotationspeed: 3,
+  surfacetimer: 0,
+  sinkingtimer: 0,
+  sinkingspeed: 0,
+  firstacelaunchinterval: 0,
+  acelaunchinterval: 150,
+  projectilefireinterval: 150,
+  lifetime: 0,
+  activationtimer: 0,
+  damageonhit: 10,
+  spawnceilingoffset: 220,
+  spawnfallspeed: 2,
+  fallnumframes: 300,
+};
+
+const ACT2_BOSS_SPECS: Partial<Record<EnemyKind, EnemySpec>> = {
+  Dreadnought: BASE_BOSS_TEMPLATE,
+  SkyCarrier: {
+    ...BASE_BOSS_TEMPLATE,
+    key: 'skycarrier',
+    name: 'SkyCarrier',
+    sprite: 'blimp',
+    spritegun: 'big_boat_gun',
+    difficultyweight: 1000,
+    health: 750,
+    initvelocity: 0.45,
+    speed: 0.45,
+    bulletspeed: 11,
+    initbulletspersalvo: 16,
+    bulletspersalvo: 16,
+    bulletfireinterval: 3,
+    firesalvotimer: 75,
+    firesalvotimerrand: 20,
+    gunrotationspeed: 2,
+    spawnceilingoffset: 220,
+    spawnfallspeed: 2,
+    fallnumframes: 300,
+  },
+};
+
 const COMBO_MAX = 20;
 const COMBO_MAX_TIMER = 180;
 const COMBO_WARNING_THRESHOLD = 60;
@@ -75,6 +180,30 @@ const BOMB_AOE_RADIUS = 48;
 const DEATH_TICKS_DURATION = 90;
 const LAUNCH_TICKS_DURATION = 18;
 const LAUNCH_INITIAL_VY = -9.5;
+const RAILGUN_SPEED = 38;
+const RAILGUN_DMG = 28;
+const RAILGUN_TTL = 24;
+const FLAK_SHELL_SPEED = 14;
+const FLAK_SHELL_TTL = 18;
+const FLAK_SHELL_DMG = 8;
+const FLAK_PROXIMITY_PX = 48;
+const FLAK_SHARD_COUNT = 6;
+const FLAK_SHARD_SPEED = 18;
+const FLAK_SHARD_DMG = 6;
+const FLAK_SHARD_TTL = 18;
+const LIGHTNING_RANGE_PX = 260;
+const LIGHTNING_CONE_DEG = 38;
+const LIGHTNING_CHAIN_PX = 160;
+const LIGHTNING_MAX_TARGETS = 3;
+const LIGHTNING_DMG = 14;
+const LIGHTNING_VISUAL_TTL = 5; // Decrements once on spawn tick so snapshot ttl starts at 4
+const AEGIS_SHIELD_COOLDOWN_TICKS = 300;
+const VAMPIRE_LIFESTEAL_HP = 2.5;
+const COOP_RESPAWN_TICKS = 300;
+const DOGFIGHT_ROUND_BANNER_TICKS = 75;
+const DOGFIGHT_BEST_OF = 5;
+const DOGFIGHT_WINS_NEEDED = 3;
+const MAX_ACTIVE_SHOCKWAVES = 4;
 
 export function encodeInputMask(input: InputState): number {
   return (
@@ -135,6 +264,31 @@ function cloneProfile(p: PilotProfile): PilotProfile {
     lastSeed: p.lastSeed,
     totalKills: { ...p.totalKills },
     stats: { ...p.stats },
+    ...(p.dailyHighScores ? { dailyHighScores: { ...p.dailyHighScores } } : {}),
+  };
+}
+
+function cloneModFlags(flags: Act2ModFlags): Act2ModFlags {
+  return {
+    moddedEnabled: flags.moddedEnabled,
+    arsenalBosses: flags.arsenalBosses,
+    replayGhost: flags.replayGhost,
+    dailySeed: flags.dailySeed,
+    shaderFx: { ...flags.shaderFx },
+    multiplayerMode: flags.multiplayerMode,
+    p2BotEnabled: flags.p2BotEnabled,
+  };
+}
+
+function clampPartToVanilla(part: PartIndex): PartIndex {
+  return part > 5 ? 0 : part;
+}
+
+function clampLoadoutToVanilla(loadout: Loadout): Loadout {
+  return {
+    weapon: clampPartToVanilla(loadout.weapon),
+    body: clampPartToVanilla(loadout.body),
+    engine: clampPartToVanilla(loadout.engine),
   };
 }
 
@@ -142,7 +296,10 @@ function resolvePartSpec<T extends { id: number }>(
   byId: readonly T[],
   map: Record<string, T>,
   id: number,
+  extra: readonly T[] = [],
 ): T {
+  const fromExtra = extra.find((item) => item.id === id);
+  if (fromExtra) return fromExtra;
   const direct = byId[id];
   if (direct && direct.id === id) return direct;
   const fromArray = byId.find((item) => item.id === id);
@@ -162,6 +319,8 @@ function getEnemySpec(
     (s) => s.key.toLowerCase() === key || s.name.toLowerCase() === key,
   );
   if (found) return found;
+  const bossFallback = ACT2_BOSS_SPECS[kind];
+  if (bossFallback) return bossFallback;
   return Object.values(map)[0]!;
 }
 
@@ -170,7 +329,8 @@ function isBoatLike(kind: EnemyKind): boolean {
     kind === 'Boat' ||
     kind === 'BigBoat' ||
     kind === 'Submarine' ||
-    kind === 'AceMarine'
+    kind === 'AceMarine' ||
+    kind === 'Dreadnought'
   );
 }
 
@@ -241,6 +401,32 @@ function isAoeHittingEnemy(
   return dx * dx + dy * dy <= r * r;
 }
 
+function isWithinFlakProximity(px: number, py: number, enemy: EnemyEntity): boolean {
+  if (enemy.width > enemy.height * 1.8) {
+    return (
+      distPointToBoxSq(
+        px,
+        py,
+        enemy.x,
+        enemy.y,
+        enemy.width * 0.48,
+        enemy.height * 0.55,
+      ) <
+      FLAK_PROXIMITY_PX * FLAK_PROXIMITY_PX
+    );
+  }
+  const dx = px - enemy.x;
+  const dy = py - enemy.y;
+  return dx * dx + dy * dy < FLAK_PROXIMITY_PX * FLAK_PROXIMITY_PX;
+}
+
+function resolveFireCooldown(baseInterval: number, body: BodySpec): number {
+  const raw = body.flags.includes('body-overclock')
+    ? Math.round(baseInterval * 0.75)
+    : baseInterval;
+  return Math.max(1, raw);
+}
+
 /**
  * Deterministic 60Hz LUFTRAUSERS Simulation Core (Pure, Zero-DOM).
  */
@@ -287,13 +473,29 @@ export class Simulation implements ISimulation {
 
   private nextEntityId = 1;
   private player: PlayerState;
+  private player2: PlayerState | null = null;
+  private p2Loadout: Loadout = { weapon: 0, body: 0, engine: 0 };
+  private p1RespawnTicks = 0;
+  private p2RespawnTicks = 0;
+  private dogfight: DogfightState | null = null;
+  private dogfightRamGrace = 0;
+
   private enemies: EnemyEntity[] = [];
   private projectiles: ProjectileEntity[] = [];
   private particles: ParticleEntity[] = [];
   private parallax: ParallaxEntity[] = [];
+  private shockwaves: ShockwaveEvent[] = [];
   private audioEvents: SimAudioEvent[] = [];
   private replayFrames: ReplayFrame[] = [];
   private enemyRamGrace = new Map<number, number>();
+  private piercingHitIds = new Map<number, Set<number>>();
+
+  private modFlags: Act2ModFlags = cloneModFlags(DEFAULT_ACT2_MOD_FLAGS);
+  private ghostReplay: ReplayRecording | null = null;
+  private ghostRunner: GhostRunner | null = null;
+  private dailySeedId: string | null = null;
+  private nextBossDifficulty = 160;
+  private bossWaveIndex = 0;
 
   private cameraTargetX = 0;
   private cameraTargetY = -120;
@@ -311,8 +513,35 @@ export class Simulation implements ISimulation {
     this.mode = this.profile.lastMode;
     this.difficulty = this.getSpawnCoordinator().initialDifficulty;
 
+    if (!this.modRegistry.isVanillaLocked()) {
+      const customWeapons = this.modRegistry.getCustomWeapons?.() ?? [];
+      const customBodies = this.modRegistry.getCustomBodies?.() ?? [];
+      const customEngines = this.modRegistry.getCustomEngines?.() ?? [];
+      const customBosses = this.modRegistry.getCustomBosses?.() ?? [];
+      this.modFlags = {
+        moddedEnabled: true,
+        arsenalBosses:
+          customWeapons.length > 0 ||
+          customBodies.length > 0 ||
+          customEngines.length > 0 ||
+          customBosses.length > 0,
+        replayGhost: false,
+        dailySeed: false,
+        shaderFx: this.modRegistry.getEffectiveShaderFx?.() ?? { ...DEFAULT_SHADER_FX },
+        multiplayerMode: this.modRegistry.getEffectiveMultiplayerMode?.() ?? 'solo',
+        p2BotEnabled: true,
+      };
+    }
+
     this.missionTracker = new MissionTracker(this.data.global.missions, this.profile);
     this.player = this.buildPlayerState(this.profile.lastLoadout);
+  }
+
+  private getEffectiveMultiplayerMode(): MultiplayerMode {
+    if (this.modRegistry.isVanillaLocked()) {
+      return 'solo';
+    }
+    return this.modRegistry.getEffectiveMultiplayerMode?.() ?? this.modFlags.multiplayerMode;
   }
 
   private getSpawnCoordinator(): SpawnCoordinatorSpec {
@@ -332,40 +561,64 @@ export class Simulation implements ISimulation {
     planeName: string;
     isUrauser: boolean;
     maxHealth: number;
+    sanitizedLoadout: Loadout;
   } {
+    const modded = !this.modRegistry.isVanillaLocked();
+    const effectiveLoadout = modded ? { ...loadout } : clampLoadoutToVanilla(loadout);
+    const customWeapons = modded ? (this.modRegistry.getCustomWeapons?.() ?? []) : [];
+    const customBodies = modded ? (this.modRegistry.getCustomBodies?.() ?? []) : [];
+    const customEngines = modded ? (this.modRegistry.getCustomEngines?.() ?? []) : [];
+
     const weaponSpec = resolvePartSpec(
       this.data.player.weaponsById,
       this.data.player.weapons,
-      loadout.weapon,
+      effectiveLoadout.weapon,
+      customWeapons,
     );
     const rawBodySpec = resolvePartSpec(
       this.data.player.bodiesById,
       this.data.player.bodyparts,
-      loadout.body,
+      effectiveLoadout.body,
+      customBodies,
     );
     const engineSpec = resolvePartSpec(
       this.data.player.enginesById,
       this.data.player.engines,
-      loadout.engine,
+      effectiveLoadout.engine,
+      customEngines,
     );
 
     const isUrauser =
-      loadout.weapon === 5 && loadout.body === 5 && loadout.engine === 5;
+      effectiveLoadout.weapon === 5 &&
+      effectiveLoadout.body === 5 &&
+      effectiveLoadout.engine === 5;
 
     const entry = this.data.global.planenames.find(
       (p) =>
-        p.weapon === loadout.weapon &&
-        p.body === loadout.body &&
-        p.engine === loadout.engine,
+        p.weapon === effectiveLoadout.weapon &&
+        p.body === effectiveLoadout.body &&
+        p.engine === effectiveLoadout.engine,
     );
 
     let planeName: string;
-    if (isUrauser) {
+    if (
+      modded &&
+      (effectiveLoadout.weapon >= 6 ||
+        effectiveLoadout.body >= 6 ||
+        effectiveLoadout.engine >= 6)
+    ) {
+      planeName = resolveModdedPlaneName(
+        effectiveLoadout.weapon,
+        effectiveLoadout.body,
+        effectiveLoadout.engine,
+        entry?.name ?? 'RAUSER',
+      );
+    } else if (isUrauser) {
       planeName = entry?.name ?? 'URAUSER';
     } else if (
-      loadout.weapon === 5 ||
-      loadout.body === 5 ||
-      loadout.engine === 5
+      effectiveLoadout.weapon === 5 ||
+      effectiveLoadout.body === 5 ||
+      effectiveLoadout.engine === 5
     ) {
       planeName = '???';
     } else {
@@ -384,13 +637,17 @@ export class Simulation implements ISimulation {
       planeName,
       isUrauser,
       maxHealth,
+      sanitizedLoadout: effectiveLoadout,
     };
   }
 
-  private buildPlayerState(loadout: Loadout): PlayerState {
+  private buildPlayerState(loadout: Loadout, playerIndex?: 1 | 2): PlayerState {
     const resolved = this.resolveAircraft(loadout);
     const seaLevel = this.data.room.sealevel;
-    return {
+    const modded = !this.modRegistry.isVanillaLocked();
+    const hasAegis = modded && resolved.bodySpec.flags.includes('body-aegis-shield');
+
+    const state: PlayerState = {
       x: 0,
       y: seaLevel - 32,
       prevX: 0,
@@ -420,24 +677,124 @@ export class Simulation implements ISimulation {
       nukeRadius: 0,
       nukeTicks: 0,
       isUrauser: resolved.isUrauser,
-      loadout: { ...loadout },
+      loadout: { ...resolved.sanitizedLoadout },
       planeName: resolved.planeName,
       engineSpec: resolved.engineSpec,
       bodySpec: resolved.bodySpec,
       weaponSpec: resolved.weaponSpec,
       boostAnimFrame: 0,
     };
+
+    if (hasAegis) {
+      state.shieldReady = true;
+      state.shieldCooldown = 0;
+    }
+    if (playerIndex !== undefined) {
+      state.playerIndex = playerIndex;
+    }
+    return state;
+  }
+
+  setModFlags(flags: Partial<Act2ModFlags>): void {
+    const nextFlags: Act2ModFlags = {
+      ...this.modFlags,
+      ...flags,
+      shaderFx: {
+        ...this.modFlags.shaderFx,
+        ...(flags.shaderFx ?? {}),
+      },
+    };
+    this.modFlags = nextFlags;
+    registerAct2ModPacks(this.modRegistry, this.modFlags);
+
+    if (!this.modFlags.moddedEnabled) {
+      this.profile.lastLoadout = clampLoadoutToVanilla(this.profile.lastLoadout);
+      this.p2Loadout = clampLoadoutToVanilla(this.p2Loadout);
+      this.shockwaves = [];
+      this.player2 = null;
+      this.dogfight = null;
+      this.dailySeedId = null;
+      this.p1RespawnTicks = 0;
+      this.p2RespawnTicks = 0;
+      if (this.phase === 'hangar') {
+        this.player = this.buildPlayerState(this.profile.lastLoadout);
+      } else {
+        const clamped = clampLoadoutToVanilla(this.player.loadout);
+        if (
+          clamped.weapon !== this.player.loadout.weapon ||
+          clamped.body !== this.player.loadout.body ||
+          clamped.engine !== this.player.loadout.engine
+        ) {
+          this.player = this.buildPlayerState(clamped);
+        }
+      }
+      this.missionTracker.refreshActiveMissions(this.player.loadout, this.profile);
+    } else {
+      if (this.modFlags.replayGhost && this.ghostReplay && !this.ghostRunner) {
+        this.ghostRunner = new GhostRunner(this.data, this.ghostReplay);
+      }
+      if (this.phase === 'hangar') {
+        this.player = this.buildPlayerState(this.profile.lastLoadout);
+      }
+    }
+  }
+
+  getModFlags(): Act2ModFlags {
+    return cloneModFlags(this.modFlags);
+  }
+
+  setGhostReplay(replay: ReplayRecording | null): void {
+    this.ghostReplay = replay;
+    this.ghostRunner = replay ? new GhostRunner(this.data, replay) : null;
+  }
+
+  getDailySeed(date?: Date): { dateId: string; seed: number } {
+    return computeDailySeed(date);
+  }
+
+  setP2Loadout(loadout: Loadout): void {
+    this.p2Loadout = this.modRegistry.isVanillaLocked()
+      ? clampLoadoutToVanilla(loadout)
+      : { ...loadout };
+    if (this.player2) {
+      const idx = this.player2.playerIndex ?? 2;
+      const prevX = this.player2.x;
+      const prevY = this.player2.y;
+      const prevAngle = this.player2.angleDeg;
+      this.player2 = this.buildPlayerState(this.p2Loadout, idx);
+      this.player2.x = prevX;
+      this.player2.prevX = prevX;
+      this.player2.y = prevY;
+      this.player2.prevY = prevY;
+      this.player2.angleDeg = prevAngle;
+      this.player2.prevAngleDeg = prevAngle;
+    }
+  }
+
+  getP2Loadout(): Loadout {
+    return { ...this.p2Loadout };
   }
 
   launch(loadout: Loadout, mode: GameMode, seed?: number): void {
+    const modded = !this.modRegistry.isVanillaLocked();
+    const effectiveLoadout = modded ? { ...loadout } : clampLoadoutToVanilla(loadout);
+    const mpMode = this.getEffectiveMultiplayerMode();
+
     this.mode = mode;
-    if (seed !== undefined) {
-      this.seed = seed >>> 0;
+    if (modded && this.modFlags.dailySeed) {
+      const daily = computeDailySeed();
+      this.dailySeedId = daily.dateId;
+      this.seed = seed !== undefined ? seed >>> 0 : daily.seed;
+    } else {
+      this.dailySeedId = null;
+      if (seed !== undefined) {
+        this.seed = seed >>> 0;
+      }
     }
     this.rng.setSeed(this.seed);
     this.paused = false;
 
-    this.profile.lastLoadout = { ...loadout };
+    this.profile.lastLoadout = { ...effectiveLoadout };
     this.profile.lastMode = mode;
     this.profile.lastSeed = this.seed;
 
@@ -456,6 +813,8 @@ export class Simulation implements ISimulation {
     this.difficultyTimer = 0;
     this.spawnTimer = 15;
     this.parallaxTimer = 45;
+    this.nextBossDifficulty = 160;
+    this.bossWaveIndex = 0;
 
     this.killsThisSortie = 0;
     this.killsByKind = {};
@@ -474,27 +833,111 @@ export class Simulation implements ISimulation {
     this.projectiles = [];
     this.particles = [];
     this.parallax = [];
+    this.shockwaves = [];
     this.audioEvents = [];
     this.replayFrames = [];
     this.enemyRamGrace.clear();
+    this.piercingHitIds.clear();
+    this.p1RespawnTicks = 0;
+    this.p2RespawnTicks = 0;
+    this.dogfightRamGrace = 0;
 
-    this.player = this.buildPlayerState(loadout);
-    this.phase = 'launching';
-    this.cameraTargetX = this.player.x;
-    this.cameraTargetY = clamp(
-      this.player.y - 40,
-      this.data.room.spacelevel + 160,
-      this.data.room.sealevel + 60,
-    );
+    if (mpMode === 'dogfight1v1') {
+      this.player = this.buildPlayerState(effectiveLoadout, 1);
+      this.player2 = this.buildPlayerState(this.p2Loadout, 2);
+      this.dogfight = {
+        p1Wins: 0,
+        p2Wins: 0,
+        round: 1,
+        bestOf: DOGFIGHT_BEST_OF,
+        roundBannerTicks: 0,
+        winner: null,
+        lastScorer: null,
+      };
+      this.resetDogfightRoundState();
+      this.launchTicks = 0;
+      this.phase = 'playing';
+      this.cameraTargetX = 0;
+      this.cameraTargetY = -260;
+    } else if (mpMode === 'coop2p') {
+      const seaLevel = this.data.room.sealevel;
+      this.player = this.buildPlayerState(effectiveLoadout, 1);
+      this.player.x = -70;
+      this.player.prevX = -70;
+      this.player.y = seaLevel - 32;
+      this.player.prevY = seaLevel - 32;
 
-    this.missionTracker.startSortie(loadout, this.profile);
+      this.player2 = this.buildPlayerState(this.p2Loadout, 2);
+      this.player2.x = 70;
+      this.player2.prevX = 70;
+      this.player2.y = seaLevel - 32;
+      this.player2.prevY = seaLevel - 32;
 
-    this.emitAudio('sndlaunch', this.player.x, this.player.y);
-    this.emitAudio('sndsplashl', 0, this.data.room.sealevel);
-    if (mode === 'sfmt') {
+      this.dogfight = null;
+      this.phase = 'launching';
+      this.cameraTargetX = 0;
+      this.cameraTargetY = clamp(
+        this.player.y - 40,
+        this.data.room.spacelevel + 160,
+        seaLevel + 60,
+      );
+      this.emitAudio('sndlaunch', this.player.x, this.player.y);
+      this.emitAudio('sndsplashl', 0, seaLevel);
+      this.spawnParticle('splashB', -70, seaLevel);
+      this.spawnParticle('splashB', 70, seaLevel);
+    } else {
+      this.player = this.buildPlayerState(effectiveLoadout);
+      this.player2 = null;
+      this.dogfight = null;
+      this.phase = 'launching';
+      this.cameraTargetX = this.player.x;
+      this.cameraTargetY = clamp(
+        this.player.y - 40,
+        this.data.room.spacelevel + 160,
+        this.data.room.sealevel + 60,
+      );
+      this.emitAudio('sndlaunch', this.player.x, this.player.y);
+      this.emitAudio('sndsplashl', 0, this.data.room.sealevel);
+      if (mode === 'sfmt') {
+        this.emitAudio('sndsfmt');
+      }
+      this.spawnParticle('splashB', 0, this.data.room.sealevel);
+    }
+
+    this.missionTracker.startSortie(effectiveLoadout, this.profile);
+    if (mpMode === 'dogfight1v1' && mode === 'sfmt') {
+      this.emitAudio('sndsfmt');
+    } else if (mpMode === 'coop2p' && mode === 'sfmt') {
       this.emitAudio('sndsfmt');
     }
-    this.spawnParticle('splashB', 0, this.data.room.sealevel);
+  }
+
+  private resetDogfightRoundState(): void {
+    const p1Loadout = this.player.loadout;
+    const p2Loadout = this.player2?.loadout ?? this.p2Loadout;
+    this.player = this.buildPlayerState(p1Loadout, 1);
+    this.player.x = -220;
+    this.player.prevX = -220;
+    this.player.y = -260;
+    this.player.prevY = -260;
+    this.player.vx = 0;
+    this.player.vy = 0;
+    this.player.angleDeg = 0;
+    this.player.prevAngleDeg = 0;
+
+    this.player2 = this.buildPlayerState(p2Loadout, 2);
+    this.player2.x = 220;
+    this.player2.prevX = 220;
+    this.player2.y = -260;
+    this.player2.prevY = -260;
+    this.player2.vx = 0;
+    this.player2.vy = 0;
+    this.player2.angleDeg = 180;
+    this.player2.prevAngleDeg = 180;
+
+    this.projectiles = [];
+    this.piercingHitIds.clear();
+    this.dogfightRamGrace = 0;
   }
 
   returnToHangar(): void {
@@ -508,15 +951,24 @@ export class Simulation implements ISimulation {
     this.enemies = [];
     this.projectiles = [];
     this.particles = [];
+    this.shockwaves = [];
     this.audioEvents = [];
+    this.piercingHitIds.clear();
+    this.player2 = null;
+    this.dogfight = null;
+    this.p1RespawnTicks = 0;
+    this.p2RespawnTicks = 0;
     this.player = this.buildPlayerState(this.player.loadout);
     this.missionTracker.refreshActiveMissions(this.player.loadout, this.profile);
   }
 
   setLoadout(loadout: Loadout): void {
-    this.profile.lastLoadout = { ...loadout };
-    this.player = this.buildPlayerState(loadout);
-    this.missionTracker.refreshActiveMissions(loadout, this.profile);
+    const effective = this.modRegistry.isVanillaLocked()
+      ? clampLoadoutToVanilla(loadout)
+      : { ...loadout };
+    this.profile.lastLoadout = { ...effective };
+    this.player = this.buildPlayerState(effective);
+    this.missionTracker.refreshActiveMissions(effective, this.profile);
   }
 
   setMode(mode: GameMode): void {
@@ -534,7 +986,7 @@ export class Simulation implements ISimulation {
 
   damagePlayer(amount: number): void {
     if (!this.player.alive || amount <= 0) return;
-    this.applyDamageToPlayer(amount, true);
+    this.applyDamageToTargetPlayer(this.player, amount, true);
   }
 
   spawnEnemy(kind: EnemyKind, x?: number, y?: number): EnemyEntity {
@@ -551,12 +1003,14 @@ export class Simulation implements ISimulation {
     let ey: number;
     if (y !== undefined) {
       ey = y;
-    } else if (kind === 'Boat' || kind === 'BigBoat') {
+    } else if (kind === 'Boat' || kind === 'BigBoat' || kind === 'Dreadnought') {
       ey = seaLevel;
     } else if (kind === 'Submarine' || kind === 'AceMarine') {
       ey = seaLevel + 24;
     } else if (kind === 'Blimp') {
       ey = spaceLevel + (spec.spawnceilingoffset ?? -200);
+    } else if (kind === 'SkyCarrier') {
+      ey = spaceLevel + (spec.spawnceilingoffset ?? 220);
     } else if (kind === 'Missile') {
       ey = seaLevel;
     } else {
@@ -577,6 +1031,7 @@ export class Simulation implements ISimulation {
     let fireTimer = 30;
     let salvoCooldown = 30;
     let salvoRemaining = 0;
+    let carrierLaunchTimer: number | undefined;
 
     if (kind === 'Fighter') {
       const spd = spec.initvelocity || 8;
@@ -602,6 +1057,12 @@ export class Simulation implements ISimulation {
       salvoCooldown =
         (spec.firesalvotimer || 60) +
         this.rng.range(0, spec.firesalvotimerrand || 60);
+    } else if (kind === 'Dreadnought') {
+      const spd = spec.initvelocity || 0.55;
+      vx = dirToPlayer * spd;
+      angleDeg = dirToPlayer > 0 ? 0 : 180;
+      salvoCooldown = spec.firesalvotimer || 60;
+      this.emitAudio('sndacespawn', ex, ey);
     } else if (kind === 'Submarine' || kind === 'AceMarine') {
       vx = dirToPlayer * 0.4;
       vy = spec.initvelocity || -0.5;
@@ -622,6 +1083,23 @@ export class Simulation implements ISimulation {
       fallFrames =
         ey < spaceLevel ? (spec.fallnumframes || 300) : 0;
       salvoCooldown = (spec.firesalvotimer || 50) + this.rng.range(0, spec.firesalvotimerrand || 30);
+    } else if (kind === 'SkyCarrier') {
+      const spd = spec.initvelocity || 0.45;
+      vx = dirToPlayer * spd;
+      angleDeg = dirToPlayer > 0 ? 0 : 180;
+      const targetAlt = -480;
+      if (ey < targetAlt) {
+        const fallSpeed = spec.spawnfallspeed || 2;
+        state = 'falling';
+        fallFrames = Math.max(1, Math.ceil((targetAlt - ey) / fallSpeed));
+        vy = fallSpeed;
+      } else {
+        state = 'cruise';
+        fallFrames = 0;
+      }
+      salvoCooldown = spec.firesalvotimer || 75;
+      carrierLaunchTimer = 150;
+      this.emitAudio('sndacespawn', ex, ey);
     }
 
     const gunAngleDeg =
@@ -661,13 +1139,199 @@ export class Simulation implements ISimulation {
       spriteGun: spec.spritegun,
       laserActive: false,
       laserLength: 0,
+      ...(carrierLaunchTimer !== undefined ? { carrierLaunchTimer } : {}),
     };
 
     this.enemies.push(entity);
     return entity;
   }
 
+  /**
+   * Spawns a 3-Ace V-formation squadron sharing a `squadronId`.
+   */
+  spawnAceSquadron(centerX?: number, centerY?: number): EnemyEntity[] {
+    const seaLevel = this.data.room.sealevel;
+    const spaceLevel = this.data.room.spacelevel;
+    const side = this.rng.chance(0.5) ? 1 : -1;
+    const cx =
+      centerX !== undefined
+        ? centerX
+        : this.player.x + side * this.rng.range(380, 460);
+    const cy =
+      centerY !== undefined
+        ? centerY
+        : clamp(this.player.y + this.rng.range(-120, 120), spaceLevel + 160, seaLevel - 140);
+    const dirToPlayer = cx <= this.player.x ? 1 : -1;
+    const squadronId = this.nextEntityId++;
+
+    const offsets: readonly [number, number][] = [
+      [0, 0],
+      [-56 * dirToPlayer, -38],
+      [-56 * dirToPlayer, 38],
+    ];
+
+    const spawned: EnemyEntity[] = [];
+    for (const [ox, oy] of offsets) {
+      const ace = this.spawnEnemy('Ace', cx + ox, clamp(cy + oy, spaceLevel + 100, seaLevel - 80));
+      ace.squadronId = squadronId;
+      spawned.push(ace);
+    }
+    return spawned;
+  }
+
   step(input: InputState): SimSnapshot {
+    const mpMode = this.getEffectiveMultiplayerMode();
+    if (!this.modRegistry.isVanillaLocked() && mpMode !== 'solo') {
+      let autoP2Input: InputState = { left: false, right: false, thrust: false, fire: false };
+      if (this.modFlags.p2BotEnabled && this.phase === 'playing' && this.player2?.alive) {
+        if (mpMode === 'dogfight1v1') {
+          if (!this.dogfight || this.dogfight.roundBannerTicks <= 0) {
+            autoP2Input = computeDogfightBotInput(
+              this.player2,
+              this.player,
+              this.data.room.sealevel,
+              this.data.room.spacelevel,
+              this.projectiles,
+            );
+          }
+        } else {
+          autoP2Input = computeCoopP2BotInput(this.getSnapshot());
+        }
+      }
+      return this.step2P(input, autoP2Input);
+    }
+
+    return this.stepSinglePlayerInternal(input);
+  }
+
+  step2P(p1Input: InputState, p2Input: InputState): SimSnapshot {
+    const mpMode = this.getEffectiveMultiplayerMode();
+    if (this.modRegistry.isVanillaLocked() || mpMode === 'solo') {
+      return this.stepSinglePlayerInternal(p1Input);
+    }
+
+    this.audioEvents = [];
+
+    if (this.paused || this.phase === 'hangar' || this.phase === 'gameover') {
+      return this.getSnapshot();
+    }
+
+    const effectiveP1Input: InputState =
+      this.phase === 'playing'
+        ? this.autopilotEnabled
+          ? computeAutopilotInput(this.getSnapshot())
+          : p1Input
+        : { left: false, right: false, thrust: false, fire: false };
+    const effectiveP2Input: InputState =
+      this.phase === 'playing'
+        ? p2Input
+        : { left: false, right: false, thrust: false, fire: false };
+
+    this.tick++;
+    this.replayFrames.push({
+      tick: this.tick,
+      mask: encodeInputMask(effectiveP1Input),
+    });
+
+    if (this.nukeFlashTicks > 0) this.nukeFlashTicks--;
+    if (this.screenShake > 0) {
+      this.screenShake = Math.max(0, this.screenShake * 0.85 - 0.1);
+    }
+    this.updateShockwaves();
+
+    if (mpMode === 'dogfight1v1' && this.dogfight && this.dogfight.roundBannerTicks > 0) {
+      this.dogfight.roundBannerTicks--;
+      if (this.hitstopTicks > 0) {
+        this.hitstopTicks--;
+      }
+      this.updateParticles();
+      if (this.dogfight.roundBannerTicks === 0) {
+        if (this.dogfight.winner !== null) {
+          this.phase = 'gameover';
+          this.finalizeSortieStats();
+        } else {
+          this.dogfight.round++;
+          this.resetDogfightRoundState();
+        }
+      }
+      this.lastFirePressed = effectiveP1Input.fire;
+      return this.getSnapshot();
+    }
+
+    if (this.hitstopTicks > 0) {
+      this.hitstopTicks--;
+      return this.getSnapshot();
+    }
+
+    if (this.phase === 'launching') {
+      this.updateLaunchingSequenceFor(this.player, false);
+      if (this.player2) {
+        this.updateLaunchingSequenceFor(this.player2, true);
+      }
+    } else if (this.phase === 'playing') {
+      if (mpMode === 'dogfight1v1') {
+        this.stepDogfightCombat(effectiveP1Input, effectiveP2Input);
+      } else {
+        this.stepCoopCombat(effectiveP1Input, effectiveP2Input);
+      }
+    } else if (this.phase === 'dying') {
+      this.updateDyingSequence();
+    }
+
+    if (mpMode === 'coop2p') {
+      this.updateEnemies();
+      this.updateProjectiles();
+      if (this.phase === 'playing') {
+        if (this.player.alive) {
+          this.checkPlayerEnemyCollisionsFor(this.player, 1);
+        }
+        if (this.player2?.alive) {
+          this.checkPlayerEnemyCollisionsFor(this.player2, 2);
+        }
+      }
+    } else {
+      // dogfight1v1: still advance projectiles & check PvP hits if actively fighting
+      if (this.phase === 'playing' && (!this.dogfight || this.dogfight.roundBannerTicks === 0)) {
+        this.updateProjectiles();
+        this.checkDogfightCollisions();
+        this.resolveDogfightKnockouts();
+      }
+    }
+
+    this.updateParticles();
+
+    // Cleanup inactive enemies & decremented collision grace counters
+    this.enemies = this.enemies.filter((e) => e.active);
+    for (const [eid, grace] of this.enemyRamGrace.entries()) {
+      if (grace <= 1) {
+        this.enemyRamGrace.delete(eid);
+      } else {
+        this.enemyRamGrace.set(eid, grace - 1);
+      }
+    }
+    if (this.dogfightRamGrace > 0) {
+      this.dogfightRamGrace--;
+    }
+
+    this.updateMultiplayerCamera();
+
+    if (this.phase === 'playing' || this.phase === 'dying') {
+      const completed = this.missionTracker.onScoreAndCombo(
+        this.score,
+        this.combo,
+        this.player.loadout,
+        this.profile,
+      );
+      if (completed.length > 0) {
+        this.emitAudio('sndpopup');
+      }
+    }
+
+    this.lastFirePressed = effectiveP1Input.fire;
+    return this.getSnapshot();
+  }
+
+  private stepSinglePlayerInternal(input: InputState): SimSnapshot {
     this.audioEvents = [];
 
     if (this.paused || this.phase === 'hangar' || this.phase === 'gameover') {
@@ -691,6 +1355,9 @@ export class Simulation implements ISimulation {
     if (this.screenShake > 0) {
       this.screenShake = Math.max(0, this.screenShake * 0.85 - 0.1);
     }
+    if (!this.modRegistry.isVanillaLocked()) {
+      this.updateShockwaves();
+    }
 
     if (this.hitstopTicks > 0) {
       this.hitstopTicks--;
@@ -698,11 +1365,11 @@ export class Simulation implements ISimulation {
     }
 
     if (this.phase === 'launching') {
-      this.updateLaunchingSequence();
+      this.updateLaunchingSequenceFor(this.player, true);
     } else if (this.phase === 'playing') {
-      this.updatePlayerAerodynamics(effectiveInput);
-      this.updatePlayerWeapons(effectiveInput);
-      this.updatePlayerHealing(effectiveInput);
+      this.updatePlayerAerodynamics(this.player, effectiveInput);
+      this.updatePlayerWeapons(this.player, effectiveInput, true);
+      this.updatePlayerHealing(this.player, effectiveInput);
       this.updateComboTimer();
       this.updateSpawnDirector();
       this.updateParallax();
@@ -713,7 +1380,7 @@ export class Simulation implements ISimulation {
     this.updateEnemies();
     this.updateProjectiles();
     if (this.phase === 'playing' && this.player.alive) {
-      this.checkPlayerEnemyCollisions();
+      this.checkPlayerEnemyCollisionsFor(this.player, 1);
     }
     this.updateParticles();
 
@@ -751,8 +1418,205 @@ export class Simulation implements ISimulation {
     return this.getSnapshot();
   }
 
-  private updateLaunchingSequence(): void {
-    const p = this.player;
+  private stepCoopCombat(p1Input: InputState, p2Input: InputState): void {
+    const p1 = this.player;
+    const p2 = this.player2;
+
+    if (p1.alive) {
+      this.updatePlayerAerodynamics(p1, p1Input);
+      this.updatePlayerWeapons(p1, p1Input, true);
+      this.updatePlayerHealing(p1, p1Input);
+    } else if (p2?.alive) {
+      if (this.p1RespawnTicks > 0) {
+        this.p1RespawnTicks--;
+      }
+      if (this.p1RespawnTicks <= 0) {
+        this.respawnCoopPlayer(p1, p2, -48);
+      }
+    }
+
+    if (p2) {
+      if (p2.alive) {
+        this.updatePlayerAerodynamics(p2, p2Input);
+        this.updatePlayerWeapons(p2, p2Input, false);
+        this.updatePlayerHealing(p2, p2Input);
+      } else if (p1.alive) {
+        if (this.p2RespawnTicks > 0) {
+          this.p2RespawnTicks--;
+        }
+        if (this.p2RespawnTicks <= 0) {
+          this.respawnCoopPlayer(p2, p1, 48);
+        }
+      }
+    }
+
+    if (!p1.alive && (!p2 || !p2.alive)) {
+      this.enterDyingPhase();
+      return;
+    }
+
+    this.updateComboTimer();
+    this.updateSpawnDirector();
+    this.updateParallax();
+  }
+
+  private respawnCoopPlayer(
+    deadPlayer: PlayerState,
+    partner: PlayerState,
+    offsetX: number,
+  ): void {
+    const seaLevel = this.data.room.sealevel;
+    const spaceLevel = this.data.room.spacelevel;
+    const rx = partner.x + offsetX;
+    const ry = clamp(partner.y - 32, spaceLevel + 180, seaLevel - 60);
+
+    deadPlayer.x = rx;
+    deadPlayer.prevX = rx;
+    deadPlayer.y = ry;
+    deadPlayer.prevY = ry;
+    deadPlayer.vx = 0;
+    deadPlayer.vy = -4;
+    deadPlayer.angleDeg = -90;
+    deadPlayer.prevAngleDeg = -90;
+    deadPlayer.health = deadPlayer.maxHealth;
+    deadPlayer.alive = true;
+    deadPlayer.boosting = false;
+    deadPlayer.wasBoosting = false;
+    deadPlayer.firing = false;
+    deadPlayer.healing = false;
+    deadPlayer.healingTicks = 0;
+    deadPlayer.underwater = false;
+    deadPlayer.inSpace = false;
+    deadPlayer.fireCooldown = 0;
+    deadPlayer.gungineCooldown = 0;
+    deadPlayer.bombCooldown = 0;
+    deadPlayer.flashTicks = 30;
+    deadPlayer.burnTicks = 0;
+    deadPlayer.envWaterFactor = 0;
+    deadPlayer.envSpaceFactor = 0;
+    deadPlayer.nukeTriggered = false;
+    deadPlayer.nukeRadius = 0;
+    deadPlayer.nukeTicks = 0;
+    if (deadPlayer.bodySpec.flags.includes('body-aegis-shield')) {
+      deadPlayer.shieldReady = true;
+      deadPlayer.shieldCooldown = 0;
+    }
+    this.emitAudio('sndlaunch', rx, ry);
+  }
+
+  private stepDogfightCombat(p1Input: InputState, p2Input: InputState): void {
+    const p1 = this.player;
+    const p2 = this.player2;
+    if (!p2 || !this.dogfight) return;
+
+    // Catch external KOs (e.g., debug damagePlayer) before advancing round combat
+    if (!p1.alive || !p2.alive) {
+      this.resolveDogfightKnockouts();
+      return;
+    }
+
+    this.updatePlayerAerodynamics(p1, p1Input);
+    this.updatePlayerWeapons(p1, p1Input, true);
+    this.updatePlayerHealing(p1, p1Input);
+
+    this.updatePlayerAerodynamics(p2, p2Input);
+    this.updatePlayerWeapons(p2, p2Input, false);
+    this.updatePlayerHealing(p2, p2Input);
+  }
+
+  private checkDogfightCollisions(): void {
+    const p1 = this.player;
+    const p2 = this.player2;
+    if (!p2 || !p1.alive || !p2.alive || this.dogfightRamGrace > 0) return;
+
+    const dist = Math.hypot(p1.x - p2.x, p1.y - p2.y);
+    if (dist <= 20) {
+      this.dogfightRamGrace = 12;
+      const p1Melee = p1.bodySpec.id === 2 || p1.bodySpec.impactrecvdmgmult === 0;
+      const p2Melee = p2.bodySpec.id === 2 || p2.bodySpec.impactrecvdmgmult === 0;
+      const p1Speed = Math.hypot(p1.vx, p1.vy);
+      const p2Speed = Math.hypot(p2.vx, p2.vy);
+      const p1Deal = Math.max(8, p1Speed * 2.5);
+      const p2Deal = Math.max(8, p2Speed * 2.5);
+
+      if (!p1Melee) {
+        this.applyDamageToTargetPlayer(p1, p2Deal * Math.max(0.2, p1.bodySpec.impactrecvdmgmult * 2), true);
+      }
+      if (!p2Melee) {
+        this.applyDamageToTargetPlayer(p2, p1Deal * Math.max(0.2, p2.bodySpec.impactrecvdmgmult * 2), true);
+      }
+    }
+  }
+
+  private resolveDogfightKnockouts(): void {
+    if (!this.dogfight || !this.player2 || this.dogfight.roundBannerTicks > 0) return;
+    const p1Alive = this.player.alive;
+    const p2Alive = this.player2.alive;
+    if (p1Alive && p2Alive) return;
+
+    if (!p1Alive && !p2Alive) {
+      // Simultaneous KO tie round: reset cleanly without awarding win or freezing
+      this.dogfight.lastScorer = null;
+      this.dogfight.roundBannerTicks = DOGFIGHT_ROUND_BANNER_TICKS;
+      this.hitstopTicks = Math.max(this.hitstopTicks, 6);
+      this.screenShake = Math.max(this.screenShake, 10);
+      this.emitShockwave(this.player.x, this.player.y, 120, 1.0, 22);
+      this.emitShockwave(this.player2.x, this.player2.y, 120, 1.0, 22);
+      return;
+    }
+
+    if (p1Alive && !p2Alive) {
+      this.dogfight.p1Wins++;
+      this.dogfight.lastScorer = 1;
+      this.score += 500;
+      this.dogfight.roundBannerTicks = DOGFIGHT_ROUND_BANNER_TICKS;
+      this.hitstopTicks = Math.max(this.hitstopTicks, 6);
+      this.screenShake = Math.max(this.screenShake, 10);
+      this.emitShockwave(this.player2.x, this.player2.y, 140, 1.0, 22);
+      if (this.dogfight.p1Wins >= DOGFIGHT_WINS_NEEDED) {
+        this.dogfight.winner = 1;
+      }
+      return;
+    }
+
+    this.dogfight.p2Wins++;
+    this.dogfight.lastScorer = 2;
+    this.dogfight.roundBannerTicks = DOGFIGHT_ROUND_BANNER_TICKS;
+    this.hitstopTicks = Math.max(this.hitstopTicks, 6);
+    this.screenShake = Math.max(this.screenShake, 10);
+    this.emitShockwave(this.player.x, this.player.y, 140, 1.0, 22);
+    if (this.dogfight.p2Wins >= DOGFIGHT_WINS_NEEDED) {
+      this.dogfight.winner = 2;
+    }
+  }
+
+  private updateMultiplayerCamera(): void {
+    const seaLevel = this.data.room.sealevel;
+    const spaceLevel = this.data.room.spacelevel;
+    const p1 = this.player;
+    const p2 = this.player2;
+
+    if (!p2) {
+      this.cameraTargetX = p1.x + p1.vx * 14;
+      this.cameraTargetY = clamp(p1.y + p1.vy * 10, spaceLevel + 160, seaLevel + 80);
+      return;
+    }
+
+    if (p1.alive && p2.alive) {
+      const midX = (p1.x + p2.x) * 0.5;
+      const midY = (p1.y + p2.y) * 0.5;
+      this.cameraTargetX = midX + (p1.vx + p2.vx) * 5;
+      this.cameraTargetY = clamp(midY, spaceLevel + 160, seaLevel + 80);
+    } else if (p2.alive) {
+      this.cameraTargetX = p2.x + p2.vx * 14;
+      this.cameraTargetY = clamp(p2.y + p2.vy * 10, spaceLevel + 160, seaLevel + 80);
+    } else {
+      this.cameraTargetX = p1.x + p1.vx * 14;
+      this.cameraTargetY = clamp(p1.y + p1.vy * 10, spaceLevel + 160, seaLevel + 80);
+    }
+  }
+
+  private updateLaunchingSequenceFor(p: PlayerState, advancePhase: boolean): void {
     p.prevX = p.x;
     p.prevY = p.y;
     p.prevAngleDeg = p.angleDeg;
@@ -765,16 +1629,17 @@ export class Simulation implements ISimulation {
     p.x += p.vx;
     p.y += p.vy;
 
-    if (this.launchTicks > 0) {
-      this.launchTicks--;
-    }
-    if (this.launchTicks <= 0) {
-      this.phase = 'playing';
+    if (advancePhase) {
+      if (this.launchTicks > 0) {
+        this.launchTicks--;
+      }
+      if (this.launchTicks <= 0) {
+        this.phase = 'playing';
+      }
     }
   }
 
-  private updatePlayerAerodynamics(input: InputState): void {
-    const p = this.player;
+  private updatePlayerAerodynamics(p: PlayerState, input: InputState): void {
     const engine = p.engineSpec;
     const body = p.bodySpec;
     const weapon = p.weaponSpec;
@@ -877,6 +1742,7 @@ export class Simulation implements ISimulation {
             piercing: false,
             aoeRadius: 0,
             fromGungine: true,
+            ...(p.playerIndex !== undefined ? { ownerPlayer: p.playerIndex } : {}),
           });
           this.emitAudio('sndgungine', p.x, p.y);
         }
@@ -935,7 +1801,7 @@ export class Simulation implements ISimulation {
             ? engine.waterdmglowhp
             : engine.waterdmg;
         if (waterDmg > 0) {
-          this.applyDamageToPlayer(waterDmg, false);
+          this.applyDamageToTargetPlayer(p, waterDmg, false);
         }
       }
 
@@ -960,7 +1826,7 @@ export class Simulation implements ISimulation {
           ? engine.spacedmglowhp
           : engine.spacedmg;
       if (spaceDmg > 0) {
-        this.applyDamageToPlayer(spaceDmg, false);
+        this.applyDamageToTargetPlayer(p, spaceDmg, false);
       }
     } else {
       p.envSpaceFactor *= engine.environmentfriction;
@@ -973,12 +1839,22 @@ export class Simulation implements ISimulation {
     p.y += p.vy;
   }
 
-  private updatePlayerHealing(input: InputState): void {
-    const p = this.player;
+  private updatePlayerHealing(p: PlayerState, input: InputState): void {
     if (!p.alive) {
       p.healing = false;
       p.healingTicks = 0;
       return;
+    }
+
+    // Act II Aegis energy shield recharge
+    if (p.bodySpec.flags.includes('body-aegis-shield') && !p.shieldReady) {
+      const nextCd = (p.shieldCooldown ?? 0) - 1;
+      if (nextCd <= 0) {
+        p.shieldReady = true;
+        p.shieldCooldown = 0;
+      } else {
+        p.shieldCooldown = nextCd;
+      }
     }
 
     if (input.fire || p.fireCooldown > 0) {
@@ -1035,15 +1911,26 @@ export class Simulation implements ISimulation {
     );
   }
 
-  private updatePlayerWeapons(input: InputState): void {
-    const p = this.player;
+  private getOpponentPlayer(p: PlayerState): PlayerState | null {
+    if (!this.player2) return null;
+    if (p.playerIndex === 2) return this.player;
+    return this.player2;
+  }
+
+  private updatePlayerWeapons(
+    p: PlayerState,
+    input: InputState,
+    isP1: boolean,
+  ): void {
     if (!p.alive) return;
 
     p.firing = input.fire;
-    if (input.fire) {
-      this.continuousFireTicks++;
-    } else {
-      this.continuousFireTicks = 0;
+    if (isP1) {
+      if (input.fire) {
+        this.continuousFireTicks++;
+      } else {
+        this.continuousFireTicks = 0;
+      }
     }
 
     if (p.fireCooldown > 0) {
@@ -1051,6 +1938,7 @@ export class Simulation implements ISimulation {
       if (p.weaponSpec.id === 4 && p.fireCooldown === 0) {
         this.emitAudio('sndcannonreload', p.x, p.y);
       } else if (
+        isP1 &&
         p.weaponSpec.id === 4 &&
         input.fire &&
         !this.lastFirePressed
@@ -1062,6 +1950,8 @@ export class Simulation implements ISimulation {
     if (p.bombCooldown > 0) {
       p.bombCooldown--;
     }
+
+    const ownerTag = p.playerIndex !== undefined ? { ownerPlayer: p.playerIndex } : {};
 
     // Bomb body special: drop gravity-assisted bomb every 24 ticks when firing/boosting
     if (
@@ -1085,6 +1975,7 @@ export class Simulation implements ISimulation {
         piercing: false,
         aoeRadius: BOMB_AOE_RADIUS,
         fromGungine: false,
+        ...ownerTag,
       });
     }
 
@@ -1093,9 +1984,11 @@ export class Simulation implements ISimulation {
     const rad = (p.angleDeg * Math.PI) / 180;
     const muzzleX = p.x + Math.cos(rad) * 12;
     const muzzleY = p.y + Math.sin(rad) * 12;
+    const mpMode = this.getEffectiveMultiplayerMode();
+    const isDogfight = !this.modRegistry.isVanillaLocked() && mpMode === 'dogfight1v1';
 
     if (p.isUrauser) {
-      this.fireUrauserVolley(muzzleX, muzzleY);
+      this.fireUrauserVolley(p, muzzleX, muzzleY);
       return;
     }
 
@@ -1103,7 +1996,7 @@ export class Simulation implements ISimulation {
     switch (weapon.id) {
       case 1: {
         // Laser: interval 1, continuous piercing 520px ray, 1 dmg/tick
-        p.fireCooldown = weapon.interval || 1;
+        p.fireCooldown = resolveFireCooldown(weapon.interval || 1, p.bodySpec);
         const spec = this.getProjectileSpec('laser');
         const beamDmg = spec.dmg || 1;
         const endX = p.x + Math.cos(rad) * LASER_BEAM_LENGTH;
@@ -1125,12 +2018,24 @@ export class Simulation implements ISimulation {
           aoeRadius: 0,
           fromGungine: false,
           beamLength: LASER_BEAM_LENGTH,
+          ...ownerTag,
         });
 
         for (const enemy of this.enemies) {
           if (!enemy.active) continue;
           if (isSegmentHittingEnemy(p.x, p.y, endX, endY, 5, enemy)) {
-            this.damageEnemy(enemy, beamDmg, 'laser', false);
+            this.damageEnemy(enemy, beamDmg, 'laser', false, p);
+          }
+        }
+        if (isDogfight) {
+          const opp = this.getOpponentPlayer(p);
+          if (
+            opp &&
+            opp.alive &&
+            opp.flashTicks <= 0 &&
+            distPointToSegmentSq(opp.x, opp.y, p.x, p.y, endX, endY) <= 13 * 13
+          ) {
+            this.applyDamageToTargetPlayer(opp, beamDmg, true);
           }
         }
         if (Math.sin(rad) > 0 && endY >= this.data.room.sealevel && p.y < this.data.room.sealevel) {
@@ -1147,7 +2052,7 @@ export class Simulation implements ISimulation {
       }
       case 2: {
         // Spread: interval 9, 5 pellets across spread 6 deg step, recoil 1.5
-        p.fireCooldown = weapon.interval || 9;
+        p.fireCooldown = resolveFireCooldown(weapon.interval || 9, p.bodySpec);
         const spec = this.getProjectileSpec('spreadbullet');
         const num = weapon.numbullets || 5;
         const step = weapon.spread || 6;
@@ -1173,6 +2078,7 @@ export class Simulation implements ISimulation {
             piercing: false,
             aoeRadius: 0,
             fromGungine: false,
+            ...ownerTag,
           });
         }
         const recoil = weapon.recoil || 1.5;
@@ -1184,10 +2090,13 @@ export class Simulation implements ISimulation {
       }
       case 3: {
         // Missiles: interval 5, strict max 4 active
-        p.fireCooldown = weapon.interval || 5;
+        p.fireCooldown = resolveFireCooldown(weapon.interval || 5, p.bodySpec);
         const cap = weapon.maxbullets || 4;
         const activeMissiles = this.projectiles.filter(
-          (pr) => pr.owner === 'player' && pr.kind === 'missile',
+          (pr) =>
+            pr.owner === 'player' &&
+            pr.kind === 'missile' &&
+            (pr.ownerPlayer ?? 1) === (p.playerIndex ?? 1),
         ).length;
         if (activeMissiles >= cap) {
           this.emitAudio('sndmisempty', p.x, p.y);
@@ -1211,6 +2120,7 @@ export class Simulation implements ISimulation {
           piercing: false,
           aoeRadius: 0,
           fromGungine: false,
+          ...ownerTag,
         });
         this.spawnParticle('missilefireFlash', muzzleX, muzzleY);
         this.emitAudio('sndmissile', p.x, p.y);
@@ -1218,7 +2128,7 @@ export class Simulation implements ISimulation {
       }
       case 4: {
         // Cannon: interval 79, plasmaball dmg 20, speed 10, ttl 60, AOE 80
-        p.fireCooldown = weapon.interval || 79;
+        p.fireCooldown = resolveFireCooldown(weapon.interval || 79, p.bodySpec);
         const spec = this.getProjectileSpec('plasmaball');
         const spd = spec.speed || 10;
         this.spawnProjectile({
@@ -1236,14 +2146,76 @@ export class Simulation implements ISimulation {
           piercing: false,
           aoeRadius: PLASMA_AOE_RADIUS,
           fromGungine: false,
+          ...ownerTag,
         });
         this.spawnParticle('plasmafireflash', muzzleX, muzzleY);
         this.emitAudio('sndcannon', p.x, p.y);
         break;
       }
+      case 6: {
+        // Act II Railgun: hypersonic piercing slug + shockwave + recoil
+        p.fireCooldown = resolveFireCooldown(weapon.interval || 28, p.bodySpec);
+        this.spawnProjectile({
+          owner: 'player',
+          kind: 'railslug',
+          x: muzzleX,
+          y: muzzleY,
+          vx: Math.cos(rad) * RAILGUN_SPEED,
+          vy: Math.sin(rad) * RAILGUN_SPEED,
+          angleDeg: p.angleDeg,
+          ttl: RAILGUN_TTL,
+          dmg: RAILGUN_DMG,
+          radius: 6,
+          targetId: null,
+          piercing: true,
+          aoeRadius: 0,
+          fromGungine: false,
+          ...ownerTag,
+        });
+        const recoil = weapon.recoil || 2.2;
+        p.vx -= Math.cos(rad) * recoil;
+        p.vy -= Math.sin(rad) * recoil;
+        this.emitShockwave(muzzleX, muzzleY, 55, 0.7, 14);
+        this.spawnParticle('plasmafireflash', muzzleX, muzzleY);
+        this.emitAudio('sndcannon', p.x, p.y);
+        break;
+      }
+      case 7: {
+        // Act II Flak: airburst shrapnel shell splitting into 6 radial shards
+        p.fireCooldown = resolveFireCooldown(weapon.interval || 18, p.bodySpec);
+        this.spawnProjectile({
+          owner: 'player',
+          kind: 'flakshell',
+          x: muzzleX,
+          y: muzzleY,
+          vx: Math.cos(rad) * FLAK_SHELL_SPEED,
+          vy: Math.sin(rad) * FLAK_SHELL_SPEED,
+          angleDeg: p.angleDeg,
+          ttl: FLAK_SHELL_TTL,
+          dmg: FLAK_SHELL_DMG,
+          radius: 8,
+          targetId: null,
+          piercing: false,
+          aoeRadius: 0,
+          fromGungine: false,
+          ...ownerTag,
+        });
+        const recoil = weapon.recoil || 0.8;
+        p.vx -= Math.cos(rad) * recoil;
+        p.vy -= Math.sin(rad) * recoil;
+        this.spawnParticle('spreadfireFlash', muzzleX, muzzleY);
+        this.emitAudio('sndspread', p.x, p.y);
+        break;
+      }
+      case 8: {
+        // Act II Chain Lightning: 260px ±38° primary + up to 2 hops within 160px (3 total!)
+        p.fireCooldown = resolveFireCooldown(weapon.interval || 16, p.bodySpec);
+        this.fireChainLightning(p, rad, isDogfight, ownerTag);
+        break;
+      }
       default: {
         // Original & Weapon 5 (non-Urauser fallback): bullet interval 3
-        p.fireCooldown = weapon.interval || 3;
+        p.fireCooldown = resolveFireCooldown(weapon.interval || 3, p.bodySpec);
         const spec = this.getProjectileSpec(weapon.projectile || 'bullet');
         const jitter = spec.degreesoffset || 3;
         const a = p.angleDeg + this.rng.range(-jitter, jitter);
@@ -1264,6 +2236,7 @@ export class Simulation implements ISimulation {
           piercing: false,
           aoeRadius: 0,
           fromGungine: false,
+          ...ownerTag,
         });
         this.spawnParticle('fireFlash', muzzleX, muzzleY);
         this.emitAudio('sndbullet', p.x, p.y);
@@ -1272,10 +2245,122 @@ export class Simulation implements ISimulation {
     }
   }
 
-  private fireUrauserVolley(muzzleX: number, muzzleY: number): void {
-    const p = this.player;
-    p.fireCooldown = 4;
+  private fireChainLightning(
+    p: PlayerState,
+    rad: number,
+    isDogfight: boolean,
+    ownerTag: { ownerPlayer?: 1 | 2 },
+  ): void {
+    const arcPoints: { x: number; y: number }[] = [{ x: p.x, y: p.y }];
+    let primaryTargetId: number | null = null;
+
+    if (isDogfight) {
+      const opp = this.getOpponentPlayer(p);
+      if (opp && opp.alive) {
+        const dx = opp.x - p.x;
+        const dy = opp.y - p.y;
+        const dist = Math.hypot(dx, dy);
+        const targetAngle = (Math.atan2(dy, dx) * 180) / Math.PI;
+        if (
+          dist <= LIGHTNING_RANGE_PX &&
+          Math.abs(shortestAngleDiffDeg(p.angleDeg, targetAngle)) <= LIGHTNING_CONE_DEG
+        ) {
+          arcPoints.push({ x: opp.x, y: opp.y });
+          this.applyDamageToTargetPlayer(opp, LIGHTNING_DMG, true);
+        }
+      }
+    } else {
+      let primary: EnemyEntity | null = null;
+      let bestDist = Infinity;
+
+      for (const enemy of this.enemies) {
+        if (!enemy.active) continue;
+        const dx = enemy.x - p.x;
+        const dy = enemy.y - p.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > LIGHTNING_RANGE_PX) continue;
+        const targetAngle = (Math.atan2(dy, dx) * 180) / Math.PI;
+        if (Math.abs(shortestAngleDiffDeg(p.angleDeg, targetAngle)) > LIGHTNING_CONE_DEG) {
+          continue;
+        }
+        if (dist < bestDist) {
+          bestDist = dist;
+          primary = enemy;
+        }
+      }
+
+      if (primary) {
+        primaryTargetId = primary.id;
+        const hitTargets: EnemyEntity[] = [primary];
+        const hitIds = new Set<number>([primary.id]);
+
+        while (hitTargets.length < LIGHTNING_MAX_TARGETS) {
+          const anchor = hitTargets[hitTargets.length - 1]!;
+          let nextTarget: EnemyEntity | null = null;
+          let nextDist = Infinity;
+          for (const candidate of this.enemies) {
+            if (!candidate.active || hitIds.has(candidate.id)) continue;
+            const d = Math.hypot(candidate.x - anchor.x, candidate.y - anchor.y);
+            if (d <= LIGHTNING_CHAIN_PX && d < nextDist) {
+              nextDist = d;
+              nextTarget = candidate;
+            }
+          }
+          if (!nextTarget) break;
+          hitTargets.push(nextTarget);
+          hitIds.add(nextTarget.id);
+        }
+
+        for (const t of hitTargets) {
+          arcPoints.push({ x: t.x, y: t.y });
+        }
+
+        const multi = hitTargets.length > 1;
+        for (const t of hitTargets) {
+          this.damageEnemy(t, LIGHTNING_DMG, 'laser', multi, p);
+        }
+      }
+    }
+
+    if (arcPoints.length === 1) {
+      arcPoints.push({
+        x: p.x + Math.cos(rad) * 140,
+        y: p.y + Math.sin(rad) * 140,
+      });
+    }
+
+    this.spawnProjectile({
+      owner: 'player',
+      kind: 'lightningarc',
+      x: p.x,
+      y: p.y,
+      vx: 0,
+      vy: 0,
+      angleDeg: p.angleDeg,
+      ttl: LIGHTNING_VISUAL_TTL,
+      dmg: 0,
+      radius: 4,
+      targetId: primaryTargetId,
+      piercing: false,
+      aoeRadius: 0,
+      fromGungine: false,
+      arcPoints,
+      ...ownerTag,
+    });
+    this.emitAudio('sndlaser', p.x, p.y);
+  }
+
+  private fireUrauserVolley(
+    p: PlayerState,
+    muzzleX: number,
+    muzzleY: number,
+  ): void {
+    p.fireCooldown = resolveFireCooldown(4, p.bodySpec);
     const rad = (p.angleDeg * Math.PI) / 180;
+    const ownerTag = p.playerIndex !== undefined ? { ownerPlayer: p.playerIndex } : {};
+    const isDogfight =
+      !this.modRegistry.isVanillaLocked() &&
+      this.getEffectiveMultiplayerMode() === 'dogfight1v1';
 
     // Heavy 5-pellet spread
     for (let i = 0; i < 5; i++) {
@@ -1296,6 +2381,7 @@ export class Simulation implements ISimulation {
         piercing: false,
         aoeRadius: 0,
         fromGungine: false,
+        ...ownerTag,
       });
     }
 
@@ -1319,11 +2405,23 @@ export class Simulation implements ISimulation {
       aoeRadius: 0,
       fromGungine: false,
       beamLength: beamLen,
+      ...ownerTag,
     });
     for (const enemy of this.enemies) {
       if (!enemy.active) continue;
       if (isSegmentHittingEnemy(p.x, p.y, endX, endY, 6, enemy)) {
-        this.damageEnemy(enemy, 2, 'laser', false);
+        this.damageEnemy(enemy, 2, 'laser', false, p);
+      }
+    }
+    if (isDogfight) {
+      const opp = this.getOpponentPlayer(p);
+      if (
+        opp &&
+        opp.alive &&
+        opp.flashTicks <= 0 &&
+        distPointToSegmentSq(opp.x, opp.y, p.x, p.y, endX, endY) <= 14 * 14
+      ) {
+        this.applyDamageToTargetPlayer(opp, 2, true);
       }
     }
 
@@ -1360,6 +2458,29 @@ export class Simulation implements ISimulation {
       for (const step of coord.increaseDifficulty) {
         if (this.difficulty < step.max) {
           this.difficulty += step.add;
+        }
+      }
+    }
+
+    // Act II deterministic Mega-Boss waves (only when modded & arsenalBosses active)
+    if (!this.modRegistry.isVanillaLocked()) {
+      const customBosses: readonly CustomBossKind[] =
+        this.modRegistry.getCustomBosses?.() ?? [];
+      if (customBosses.length > 0 && this.difficulty >= this.nextBossDifficulty) {
+        const hasMegaBoss = this.enemies.some(
+          (e) =>
+            e.active &&
+            (e.kind === 'Dreadnought' || e.kind === 'SkyCarrier'),
+        );
+        const bossChoice = customBosses[this.bossWaveIndex % customBosses.length]!;
+        if (bossChoice === 'AceSquadron') {
+          this.spawnAceSquadron();
+          this.bossWaveIndex++;
+          this.nextBossDifficulty += 120;
+        } else if (!hasMegaBoss) {
+          this.spawnEnemy(bossChoice);
+          this.bossWaveIndex++;
+          this.nextBossDifficulty += 120;
         }
       }
     }
@@ -1503,10 +2624,26 @@ export class Simulation implements ISimulation {
     });
   }
 
+  private getTargetPlayerForEnemy(enemy: EnemyEntity): PlayerState {
+    if (!this.player2) return this.player;
+    if (this.player.alive && this.player2.alive) {
+      const d1 = Math.hypot(this.player.x - enemy.x, this.player.y - enemy.y);
+      const d2 = Math.hypot(this.player2.x - enemy.x, this.player2.y - enemy.y);
+      return d2 < d1 ? this.player2 : this.player;
+    }
+    if (this.player2.alive) return this.player2;
+    return this.player;
+  }
+
+  private anyActivePlayerAlive(): boolean {
+    return this.player.alive || Boolean(this.player2?.alive);
+  }
+
   private updateEnemies(): void {
     const specMap = this.getEnemyMap();
     const seaLevel = this.data.room.sealevel;
     const spaceLevel = this.data.room.spacelevel;
+    const anyAlive = this.anyActivePlayerAlive();
 
     for (const enemy of this.enemies) {
       if (!enemy.active) continue;
@@ -1515,8 +2652,9 @@ export class Simulation implements ISimulation {
       if (enemy.flashTicks > 0) enemy.flashTicks--;
 
       const spec = getEnemySpec(specMap, enemy.kind);
-      const dx = this.player.x - enemy.x;
-      const dy = this.player.y - enemy.y;
+      const targetPlayer = this.getTargetPlayerForEnemy(enemy);
+      const dx = targetPlayer.x - enemy.x;
+      const dy = targetPlayer.y - enemy.y;
       const dist = Math.hypot(dx, dy);
       const angleToPlayer = (Math.atan2(dy, dx) * 180) / Math.PI;
 
@@ -1549,7 +2687,7 @@ export class Simulation implements ISimulation {
             enemy.vy = (enemy.vy / spd) * targetSpd;
           }
 
-          if (this.phase === 'playing' && this.player.alive) {
+          if (this.phase === 'playing' && anyAlive) {
             if (enemy.fireTimer > 0) {
               enemy.fireTimer--;
             } else if (dist > (spec.minfiredist || 40) && dist < 640) {
@@ -1587,7 +2725,7 @@ export class Simulation implements ISimulation {
           enemy.angleDeg = (Math.atan2(enemy.vy, enemy.vx) * 180) / Math.PI;
 
           // Turn around past turndistance
-          const passed = flyDir > 0 ? enemy.x - this.player.x : this.player.x - enemy.x;
+          const passed = flyDir > 0 ? enemy.x - targetPlayer.x : targetPlayer.x - enemy.x;
           if (passed > (spec.turndistance || 600)) {
             enemy.vx = -flyDir * (spec.initvelocity || 8);
           }
@@ -1599,7 +2737,7 @@ export class Simulation implements ISimulation {
           // SFMT Jet fires when fireinterval < 1e6; Normal Jet has 999999999999
           if (
             this.phase === 'playing' &&
-            this.player.alive &&
+            anyAlive &&
             spec.fireinterval < 1_000_000
           ) {
             if (enemy.fireTimer > 0) {
@@ -1648,7 +2786,7 @@ export class Simulation implements ISimulation {
             enemy.vy = (enemy.vy / spd) * maxSpd;
           }
 
-          if (this.phase === 'playing' && this.player.alive) {
+          if (this.phase === 'playing' && anyAlive) {
             if (enemy.kind === 'LaserAce') {
               if (enemy.salvoRemaining > 0) {
                 enemy.laserActive = true;
@@ -1660,19 +2798,17 @@ export class Simulation implements ISimulation {
                 const lr = (enemy.gunAngleDeg * Math.PI) / 180;
                 const lx2 = enemy.x + Math.cos(lr) * enemy.laserLength;
                 const ly2 = enemy.y + Math.sin(lr) * enemy.laserLength;
-                if (
-                  enemy.salvoRemaining % 4 === 0 &&
-                  this.player.flashTicks <= 0 &&
-                  distPointToSegmentSq(
-                    this.player.x,
-                    this.player.y,
-                    enemy.x,
-                    enemy.y,
-                    lx2,
-                    ly2,
-                  ) <= 144
-                ) {
-                  this.applyDamageToPlayer(1.5, true);
+                if (enemy.salvoRemaining % 4 === 0) {
+                  for (const pl of [this.player, this.player2]) {
+                    if (
+                      pl &&
+                      pl.alive &&
+                      pl.flashTicks <= 0 &&
+                      distPointToSegmentSq(pl.x, pl.y, enemy.x, enemy.y, lx2, ly2) <= 144
+                    ) {
+                      this.applyDamageToTargetPlayer(pl, 1.5, true);
+                    }
+                  }
                 }
               } else {
                 enemy.laserActive = false;
@@ -1724,7 +2860,7 @@ export class Simulation implements ISimulation {
             );
           }
 
-          if (this.phase === 'playing' && this.player.alive) {
+          if (this.phase === 'playing' && anyAlive) {
             const desiredGun = clamp(angleToPlayer, -175, -5);
             const gDiff = shortestAngleDiffDeg(enemy.gunAngleDeg, desiredGun);
             const rotSpd = spec.gunrotationspeed || 2;
@@ -1759,6 +2895,53 @@ export class Simulation implements ISimulation {
           }
           break;
         }
+        case 'Dreadnought': {
+          enemy.y = seaLevel;
+          enemy.vy = 0;
+          if (this.tick % 5 === 0) {
+            this.spawnParticle('bigboattrail', enemy.x, seaLevel);
+          }
+          if (this.phase === 'playing' && anyAlive) {
+            const desiredGun = clamp(angleToPlayer, -175, -5);
+            const gDiff = shortestAngleDiffDeg(enemy.gunAngleDeg, desiredGun);
+            const rotSpd = spec.gunrotationspeed || 3;
+            enemy.gunAngleDeg += clamp(gDiff, -rotSpd, rotSpd);
+
+            if (enemy.salvoRemaining > 0) {
+              if (enemy.fireTimer <= 0) {
+                enemy.fireTimer = spec.bulletfireinterval || 2;
+                // Twin artillery turrets firing rapid 24-bullet bursts
+                const fired = Math.min(2, enemy.salvoRemaining);
+                enemy.salvoRemaining -= fired;
+                this.spawnEnemyArtillery(
+                  enemy.x - 75,
+                  enemy.y - 16,
+                  enemy.gunAngleDeg + this.rng.range(-4, 4),
+                  spec.bulletspeed || 12,
+                );
+                if (fired === 2) {
+                  this.spawnEnemyArtillery(
+                    enemy.x + 75,
+                    enemy.y - 16,
+                    enemy.gunAngleDeg + this.rng.range(-4, 4),
+                    spec.bulletspeed || 12,
+                  );
+                }
+              } else {
+                enemy.fireTimer--;
+              }
+            } else if (enemy.salvoCooldown > 0) {
+              enemy.salvoCooldown--;
+            } else if (dist < 900) {
+              enemy.salvoRemaining = 24;
+              enemy.fireTimer = 0;
+              enemy.salvoCooldown =
+                (spec.firesalvotimer || 85) +
+                this.rng.range(0, spec.firesalvotimerrand || 25);
+            }
+          }
+          break;
+        }
         case 'Submarine':
         case 'AceMarine': {
           if (enemy.state === 'surfacing') {
@@ -1771,7 +2954,7 @@ export class Simulation implements ISimulation {
             }
           } else if (enemy.state === 'firing') {
             enemy.y = seaLevel;
-            if (this.phase === 'playing' && this.player.alive) {
+            if (this.phase === 'playing' && anyAlive) {
               if (enemy.kind === 'AceMarine') {
                 if (enemy.fireTimer > 0) {
                   enemy.fireTimer--;
@@ -1850,7 +3033,7 @@ export class Simulation implements ISimulation {
             enemy.vy = 0;
           }
 
-          if (this.phase === 'playing' && this.player.alive) {
+          if (this.phase === 'playing' && anyAlive) {
             const gDiff = shortestAngleDiffDeg(enemy.gunAngleDeg, angleToPlayer);
             const rotSpd = spec.gunrotationspeed || 1;
             enemy.gunAngleDeg += clamp(gDiff, -rotSpd, rotSpd);
@@ -1880,13 +3063,78 @@ export class Simulation implements ISimulation {
           }
           break;
         }
+        case 'SkyCarrier': {
+          const targetAlt = -480;
+          if (enemy.fallFrames > 0 && enemy.y < targetAlt) {
+            enemy.fallFrames--;
+            enemy.vy = spec.spawnfallspeed || 2;
+            if (enemy.y + enemy.vy >= targetAlt || enemy.fallFrames === 0) {
+              enemy.y = targetAlt;
+              enemy.vy = 0;
+              enemy.fallFrames = 0;
+              enemy.state = 'cruise';
+            }
+          } else {
+            enemy.vy = 0;
+            enemy.state = 'cruise';
+          }
+
+          if (this.phase === 'playing' && anyAlive) {
+            // Periodically launch Fighter / Jet interceptors every 150 ticks
+            const launchCd = (enemy.carrierLaunchTimer ?? 150) - 1;
+            if (launchCd <= 0) {
+              enemy.carrierLaunchTimer = 150;
+              if (this.enemies.length < 28) {
+                const interceptorKind: EnemyKind = this.rng.chance(0.5)
+                  ? 'Fighter'
+                  : 'Jet';
+                this.spawnEnemy(interceptorKind, enemy.x, enemy.y + 18);
+              }
+            } else {
+              enemy.carrierLaunchTimer = launchCd;
+            }
+
+            const gDiff = shortestAngleDiffDeg(enemy.gunAngleDeg, angleToPlayer);
+            const rotSpd = spec.gunrotationspeed || 2;
+            enemy.gunAngleDeg += clamp(gDiff, -rotSpd, rotSpd);
+
+            if (enemy.salvoRemaining > 0) {
+              if (enemy.fireTimer <= 0) {
+                enemy.fireTimer = spec.bulletfireinterval || 3;
+                enemy.salvoRemaining--;
+                this.spawnEnemyBullet(
+                  enemy.x,
+                  enemy.y + 24,
+                  enemy.gunAngleDeg + this.rng.range(-8, 8),
+                  spec.bulletspeed || 11,
+                );
+              } else {
+                enemy.fireTimer--;
+              }
+            } else if (enemy.salvoCooldown > 0) {
+              enemy.salvoCooldown--;
+            } else if (dist < 900) {
+              enemy.salvoRemaining = spec.bulletspersalvo || 16;
+              enemy.fireTimer = 0;
+              enemy.salvoCooldown =
+                (spec.firesalvotimer || 75) +
+                this.rng.range(0, spec.firesalvotimerrand || 20);
+            }
+          }
+          break;
+        }
       }
 
       enemy.x += enemy.vx;
       enemy.y += enemy.vy;
 
-      const maxDespawnDist = enemy.kind === 'Blimp' ? 2400 : 1600;
-      if (Math.abs(enemy.x - this.player.x) > maxDespawnDist) {
+      const maxDespawnDist =
+        enemy.kind === 'Blimp' ||
+        enemy.kind === 'Dreadnought' ||
+        enemy.kind === 'SkyCarrier'
+          ? 2600
+          : 1600;
+      if (Math.abs(enemy.x - targetPlayer.x) > maxDespawnDist) {
         enemy.active = false;
       }
     }
@@ -1923,16 +3171,61 @@ export class Simulation implements ISimulation {
     );
   }
 
+  private spawnEnemyArtillery(
+    x: number,
+    y: number,
+    angleDeg: number,
+    speed: number,
+  ): void {
+    const r = (angleDeg * Math.PI) / 180;
+    this.spawnProjectile({
+      owner: 'enemy',
+      kind: 'artillery',
+      x,
+      y,
+      vx: Math.cos(r) * speed,
+      vy: Math.sin(r) * speed,
+      angleDeg,
+      ttl: 180,
+      dmg: 7,
+      radius: 6,
+      targetId: null,
+      piercing: false,
+      aoeRadius: 0,
+      fromGungine: false,
+    });
+    this.emitAudio(
+      this.rng.chance(0.5) ? 'sndebullet' : 'sndebullet2',
+      x,
+      y,
+    );
+  }
+
+  private resolveProjectileShooter(proj: ProjectileEntity): PlayerState {
+    if (proj.ownerPlayer === 2 && this.player2) {
+      return this.player2;
+    }
+    return this.player;
+  }
+
   private updateProjectiles(): void {
     const seaLevel = this.data.room.sealevel;
     const nextList: ProjectileEntity[] = [];
+    const spawnedDuringStep: ProjectileEntity[] = [];
+    const isDogfight =
+      !this.modRegistry.isVanillaLocked() &&
+      this.getEffectiveMultiplayerMode() === 'dogfight1v1';
 
     for (const proj of this.projectiles) {
       proj.prevX = proj.x;
       proj.prevY = proj.y;
       proj.ttl--;
 
-      if (proj.kind === 'laser' || proj.kind === 'elaser') {
+      if (
+        proj.kind === 'laser' ||
+        proj.kind === 'elaser' ||
+        proj.kind === 'lightningarc'
+      ) {
         if (proj.ttl > 0) {
           nextList.push(proj);
         }
@@ -1940,20 +3233,31 @@ export class Simulation implements ISimulation {
       }
 
       if (proj.kind === 'missile' && proj.owner === 'player') {
-        let target = this.enemies.find(
-          (e) => e.active && e.id === proj.targetId,
-        );
-        if (!target) {
-          target = this.findNearestEnemy(proj.x, proj.y) ?? undefined;
-          proj.targetId = target ? target.id : null;
-        }
         const curSpd = Math.hypot(proj.vx, proj.vy);
         const nextSpd = Math.min(14, curSpd + 0.55);
-        if (target) {
-          const desired =
-            (Math.atan2(target.y - proj.y, target.x - proj.x) * 180) / Math.PI;
-          const diff = shortestAngleDiffDeg(proj.angleDeg, desired);
-          proj.angleDeg += clamp(diff, -9, 9);
+        if (isDogfight) {
+          const shooter = this.resolveProjectileShooter(proj);
+          const opp = this.getOpponentPlayer(shooter);
+          if (opp && opp.alive) {
+            const desired =
+              (Math.atan2(opp.y - proj.y, opp.x - proj.x) * 180) / Math.PI;
+            const diff = shortestAngleDiffDeg(proj.angleDeg, desired);
+            proj.angleDeg += clamp(diff, -9, 9);
+          }
+        } else {
+          let target = this.enemies.find(
+            (e) => e.active && e.id === proj.targetId,
+          );
+          if (!target) {
+            target = this.findNearestEnemy(proj.x, proj.y) ?? undefined;
+            proj.targetId = target ? target.id : null;
+          }
+          if (target) {
+            const desired =
+              (Math.atan2(target.y - proj.y, target.x - proj.x) * 180) / Math.PI;
+            const diff = shortestAngleDiffDeg(proj.angleDeg, desired);
+            proj.angleDeg += clamp(diff, -9, 9);
+          }
         }
         const r = (proj.angleDeg * Math.PI) / 180;
         proj.vx = Math.cos(r) * nextSpd;
@@ -1972,75 +3276,247 @@ export class Simulation implements ISimulation {
       let consumed = false;
 
       if (proj.owner === 'player') {
-        for (const enemy of this.enemies) {
-          if (!enemy.active) continue;
+        const shooter = this.resolveProjectileShooter(proj);
+
+        if (isDogfight) {
+          const opp = this.getOpponentPlayer(shooter);
+          if (opp && opp.alive) {
+            const oppHitKey = -(opp.playerIndex ?? 2);
+            const hitSet = proj.piercing ? this.piercingHitIds.get(proj.id) : undefined;
+            const alreadyHit = hitSet?.has(oppHitKey) ?? false;
+            const segmentHit =
+              !alreadyHit &&
+              opp.flashTicks <= 0 &&
+              distPointToSegmentSq(
+                opp.x,
+                opp.y,
+                proj.prevX,
+                proj.prevY,
+                proj.x,
+                proj.y,
+              ) <=
+                (10 + proj.radius) * (10 + proj.radius);
+
+            if (segmentHit) {
+              if (proj.aoeRadius > 0) {
+                this.detonateDogfightAoe(proj, opp);
+                consumed = true;
+              } else if (proj.kind === 'flakshell') {
+                this.applyDamageToTargetPlayer(opp, proj.dmg, true);
+                this.detonateFlakShell(proj, spawnedDuringStep);
+                consumed = true;
+              } else {
+                this.applyDamageToTargetPlayer(opp, proj.dmg, true);
+                this.spawnParticle('bullet_hit', proj.x, proj.y);
+                if (proj.piercing) {
+                  let set = this.piercingHitIds.get(proj.id);
+                  if (!set) {
+                    set = new Set<number>();
+                    this.piercingHitIds.set(proj.id, set);
+                  }
+                  set.add(oppHitKey);
+                } else {
+                  consumed = true;
+                }
+              }
+            } else if (proj.kind === 'flakshell') {
+              const distToOpp = Math.hypot(proj.x - opp.x, proj.y - opp.y);
+              if (distToOpp < FLAK_PROXIMITY_PX || proj.ttl <= 0) {
+                this.detonateFlakShell(proj, spawnedDuringStep);
+                consumed = true;
+              }
+            }
+          } else if (proj.kind === 'flakshell' && proj.ttl <= 0) {
+            this.detonateFlakShell(proj, spawnedDuringStep);
+            consumed = true;
+          }
+
+          if (!consumed) {
+            const bombWaterHit = proj.kind === 'bomb' && proj.y >= seaLevel;
+            if (proj.aoeRadius > 0 && (proj.ttl <= 0 || bombWaterHit)) {
+              if (opp && opp.alive) {
+                this.detonateDogfightAoe(proj, opp);
+              }
+              if (bombWaterHit) {
+                this.spawnParticle('splashM', proj.x, seaLevel);
+              }
+              consumed = true;
+            }
+          }
+        } else {
+          // PvE (Solo or 2P Co-op)
+          for (const enemy of this.enemies) {
+            if (!enemy.active) continue;
+            if (proj.piercing && this.piercingHitIds.get(proj.id)?.has(enemy.id)) {
+              continue;
+            }
+            if (
+              isSegmentHittingEnemy(
+                proj.prevX,
+                proj.prevY,
+                proj.x,
+                proj.y,
+                proj.radius,
+                enemy,
+              )
+            ) {
+              if (proj.aoeRadius > 0) {
+                this.detonatePlayerAoe(proj, shooter);
+                consumed = true;
+                break;
+              } else if (proj.kind === 'flakshell') {
+                this.damageEnemy(enemy, proj.dmg, 'spread', false, shooter);
+                this.detonateFlakShell(proj, spawnedDuringStep);
+                consumed = true;
+                break;
+              } else {
+                const source: KillSource = proj.fromGungine
+                  ? 'gungine'
+                  : proj.kind === 'spreadbullet' || proj.kind === 'flakshard'
+                    ? 'spread'
+                    : proj.kind === 'missile'
+                      ? 'missile'
+                      : 'bullet';
+                this.damageEnemy(enemy, proj.dmg, source, false, shooter);
+                this.spawnParticle('bullet_hit', proj.x, proj.y);
+                if (proj.piercing) {
+                  let set = this.piercingHitIds.get(proj.id);
+                  if (!set) {
+                    set = new Set<number>();
+                    this.piercingHitIds.set(proj.id, set);
+                  }
+                  set.add(enemy.id);
+                } else {
+                  consumed = true;
+                  break;
+                }
+              }
+            }
+          }
+
+          // Flak airburst on enemy proximity (< 48px) or TTL expiry
+          if (!consumed && proj.kind === 'flakshell') {
+            const nearEnemy = this.enemies.some(
+              (e) => e.active && isWithinFlakProximity(proj.x, proj.y, e),
+            );
+            if (nearEnemy || proj.ttl <= 0) {
+              this.detonateFlakShell(proj, spawnedDuringStep);
+              consumed = true;
+            }
+          }
+
+          // Bomb or plasmaball detonation on expiry / bomb water hit
+          if (!consumed) {
+            const bombWaterHit = proj.kind === 'bomb' && proj.y >= seaLevel;
+            if (proj.aoeRadius > 0 && (proj.ttl <= 0 || bombWaterHit)) {
+              this.detonatePlayerAoe(proj, shooter);
+              if (bombWaterHit) {
+                this.spawnParticle('splashM', proj.x, seaLevel);
+              }
+              consumed = true;
+            }
+          }
+        }
+      } else if (this.phase === 'playing') {
+        const candidates = this.player2
+          ? [this.player, this.player2]
+          : [this.player];
+        for (const pl of candidates) {
+          if (!pl.alive) continue;
           if (
-            isSegmentHittingEnemy(
+            pl.flashTicks <= 0 &&
+            distPointToSegmentSq(
+              pl.x,
+              pl.y,
               proj.prevX,
               proj.prevY,
               proj.x,
               proj.y,
-              proj.radius,
-              enemy,
-            )
+            ) <=
+              (8 + proj.radius) * (8 + proj.radius)
           ) {
-            if (proj.aoeRadius > 0) {
-              this.detonatePlayerAoe(proj);
-            } else {
-              const source: KillSource = proj.fromGungine
-                ? 'gungine'
-                : proj.kind === 'spreadbullet'
-                  ? 'spread'
-                  : proj.kind === 'missile'
-                    ? 'missile'
-                    : 'bullet';
-              this.damageEnemy(enemy, proj.dmg, source, false);
-              this.spawnParticle('bullet_hit', proj.x, proj.y);
-            }
+            this.applyDamageToTargetPlayer(pl, proj.dmg, true);
+            this.spawnParticle('ebullet_fade', proj.x, proj.y);
             consumed = true;
             break;
           }
-        }
-
-        // Bomb or plasmaball detonation on expiry / bomb water hit
-        if (!consumed) {
-          const bombWaterHit = proj.kind === 'bomb' && proj.y >= seaLevel;
-          if (proj.aoeRadius > 0 && (proj.ttl <= 0 || bombWaterHit)) {
-            this.detonatePlayerAoe(proj);
-            if (bombWaterHit) {
-              this.spawnParticle('splashM', proj.x, seaLevel);
-            }
-            consumed = true;
-          }
-        }
-      } else if (this.phase === 'playing' && this.player.alive) {
-        if (
-          this.player.flashTicks <= 0 &&
-          distPointToSegmentSq(
-            this.player.x,
-            this.player.y,
-            proj.prevX,
-            proj.prevY,
-            proj.x,
-            proj.y,
-          ) <=
-            (8 + proj.radius) * (8 + proj.radius)
-        ) {
-          this.applyDamageToPlayer(proj.dmg, true);
-          this.spawnParticle('ebullet_fade', proj.x, proj.y);
-          consumed = true;
         }
       }
 
       if (!consumed && proj.ttl > 0) {
         nextList.push(proj);
+      } else {
+        this.piercingHitIds.delete(proj.id);
       }
     }
 
+    for (const shard of spawnedDuringStep) {
+      nextList.push(shard);
+    }
     this.projectiles = nextList;
   }
 
-  private detonatePlayerAoe(proj: ProjectileEntity): void {
+  private detonateFlakShell(
+    proj: ProjectileEntity,
+    outList: ProjectileEntity[],
+  ): void {
+    const ownerTag =
+      proj.ownerPlayer !== undefined ? { ownerPlayer: proj.ownerPlayer } : {};
+    for (let i = 0; i < FLAK_SHARD_COUNT; i++) {
+      const a = proj.angleDeg + i * (360 / FLAK_SHARD_COUNT);
+      const ar = (a * Math.PI) / 180;
+      const shard: ProjectileEntity = {
+        id: this.nextEntityId++,
+        owner: 'player',
+        kind: 'flakshard',
+        x: proj.x,
+        y: proj.y,
+        prevX: proj.x,
+        prevY: proj.y,
+        vx: Math.cos(ar) * FLAK_SHARD_SPEED,
+        vy: Math.sin(ar) * FLAK_SHARD_SPEED,
+        angleDeg: a,
+        ttl: FLAK_SHARD_TTL,
+        maxTtl: FLAK_SHARD_TTL,
+        dmg: FLAK_SHARD_DMG,
+        radius: 5,
+        targetId: null,
+        piercing: false,
+        aoeRadius: 0,
+        fromGungine: false,
+        ...ownerTag,
+      };
+      outList.push(shard);
+    }
+    this.emitShockwave(proj.x, proj.y, 72, 0.8, 16);
+    this.emitAudio('sndspread', proj.x, proj.y);
+    this.spawnParticle('explode_small', proj.x, proj.y);
+    this.screenShake = Math.max(this.screenShake, 2.5);
+  }
+
+  private detonateDogfightAoe(proj: ProjectileEntity, opp: PlayerState): void {
+    if (opp.alive && opp.flashTicks <= 0) {
+      const dist = Math.hypot(proj.x - opp.x, proj.y - opp.y);
+      if (dist <= proj.aoeRadius + 10) {
+        this.applyDamageToTargetPlayer(opp, proj.dmg, true);
+      }
+    }
+    if (proj.kind === 'plasmaball') {
+      this.emitShockwave(proj.x, proj.y, 96, 0.85, 16);
+      this.emitAudio('sndcannonexplo', proj.x, proj.y);
+      this.spawnParticle('plasma_hit', proj.x, proj.y);
+      this.screenShake = Math.max(this.screenShake, 4);
+    } else {
+      this.emitAudio('sndexplom', proj.x, proj.y);
+      this.spawnParticle('explode_small', proj.x, proj.y);
+      this.screenShake = Math.max(this.screenShake, 2.5);
+    }
+  }
+
+  private detonatePlayerAoe(
+    proj: ProjectileEntity,
+    shooter: PlayerState,
+  ): void {
     const source: KillSource = proj.kind === 'bomb' ? 'bomb' : 'cannon';
     let hits = 0;
     for (const enemy of this.enemies) {
@@ -2053,11 +3529,12 @@ export class Simulation implements ISimulation {
     for (const enemy of this.enemies) {
       if (!enemy.active) continue;
       if (isAoeHittingEnemy(proj.x, proj.y, proj.aoeRadius, enemy)) {
-        this.damageEnemy(enemy, proj.dmg, source, multiKill);
+        this.damageEnemy(enemy, proj.dmg, source, multiKill, shooter);
       }
     }
 
     if (proj.kind === 'plasmaball') {
+      this.emitShockwave(proj.x, proj.y, 96, 0.85, 16);
       this.emitAudio('sndcannonexplo', proj.x, proj.y);
       this.spawnParticle('plasma_hit', proj.x, proj.y);
       this.screenShake = Math.max(this.screenShake, 4);
@@ -2068,8 +3545,7 @@ export class Simulation implements ISimulation {
     }
   }
 
-  private checkPlayerEnemyCollisions(): void {
-    const p = this.player;
+  private checkPlayerEnemyCollisionsFor(p: PlayerState, playerSlot: 1 | 2): void {
     const body = p.bodySpec;
     const speed = Math.hypot(p.vx, p.vy);
     const isMeleeBody = body.id === 2 || body.impactrecvdmgmult === 0;
@@ -2089,7 +3565,8 @@ export class Simulation implements ISimulation {
         enemy.active = false;
         this.spawnParticle('explode_small', enemy.x, enemy.y);
         if (!isMeleeBody) {
-          this.applyDamageToPlayer(
+          this.applyDamageToTargetPlayer(
+            p,
             Math.max(1, (spec.damageonhit || 4) * effectiveRecvMult * 4),
             true,
           );
@@ -2100,14 +3577,15 @@ export class Simulation implements ISimulation {
       }
 
       if (isMeleeBody) {
-        if ((this.enemyRamGrace.get(enemy.id) ?? 0) > 0) continue;
-        this.enemyRamGrace.set(enemy.id, 8);
+        const graceKey = playerSlot === 1 ? enemy.id : playerSlot * 1_000_000 + enemy.id;
+        if ((this.enemyRamGrace.get(graceKey) ?? 0) > 0) continue;
+        this.enemyRamGrace.set(graceKey, 8);
         const ramDamage = Math.max(24, Math.round(speed * 5) + 16);
-        this.damageEnemy(enemy, ramDamage, 'melee', false);
+        this.damageEnemy(enemy, ramDamage, 'melee', false, p);
       } else {
         if (p.flashTicks > 0) continue;
         const selfDmg = Math.max(1, 16 * effectiveRecvMult);
-        this.applyDamageToPlayer(selfDmg, true);
+        this.applyDamageToTargetPlayer(p, selfDmg, true);
         p.flashTicks = Math.max(p.flashTicks, 12);
         this.hitstopTicks = Math.max(this.hitstopTicks, body.impactsleeptime);
         this.screenShake = Math.max(this.screenShake, body.impactcamshake);
@@ -2122,7 +3600,7 @@ export class Simulation implements ISimulation {
           Math.max(10, speed * 3) *
           (1 + effectiveDealMult) *
           critBonus;
-        this.damageEnemy(enemy, dealDmg, 'melee', false);
+        this.damageEnemy(enemy, dealDmg, 'melee', false, p);
       }
     }
   }
@@ -2132,13 +3610,14 @@ export class Simulation implements ISimulation {
     amount: number,
     source: KillSource,
     aoeOrMultiKill: boolean,
+    killer: PlayerState = this.player,
   ): void {
     if (!enemy.active || amount <= 0) return;
     enemy.health -= amount;
     enemy.flashTicks = 4;
 
     if (enemy.health <= 0) {
-      this.killEnemy(enemy, source, aoeOrMultiKill);
+      this.killEnemy(enemy, source, aoeOrMultiKill, killer);
     } else if (source !== 'laser' || this.tick % 4 === 0) {
       const hitSfx: readonly AudioCueId[] = [
         'sndhit1',
@@ -2156,6 +3635,7 @@ export class Simulation implements ISimulation {
     enemy: EnemyEntity,
     source: KillSource,
     aoeOrMultiKill: boolean,
+    killer: PlayerState = this.player,
   ): void {
     if (!enemy.active) return;
     enemy.active = false;
@@ -2183,6 +3663,16 @@ export class Simulation implements ISimulation {
       this.combo < 7 ? 'sndadd1' : this.combo < 14 ? 'sndadd2' : 'sndadd3';
     this.emitAudio(addCue, enemy.x, enemy.y);
 
+    // Act II Vampire body lifesteal (+2.5 HP on kill even while firing)
+    if (killer.alive && killer.bodySpec.flags.includes('body-vampire')) {
+      const prevHp = killer.health;
+      killer.health = Math.min(killer.maxHealth, killer.health + VAMPIRE_LIFESTEAL_HP);
+      if (killer.health > prevHp) {
+        this.emitAudio('sndheal', killer.x, killer.y);
+        this.spawnParticle('repair', killer.x, killer.y);
+      }
+    }
+
     if (enemy.kind === 'Blimp') {
       this.emitAudio('sndboatdie', enemy.x, enemy.y);
       this.emitAudio('sndexplom', enemy.x, enemy.y);
@@ -2190,6 +3680,13 @@ export class Simulation implements ISimulation {
       this.hitstopTicks = Math.max(this.hitstopTicks, 4);
       this.screenShake = Math.max(this.screenShake, 8);
       this.profile.sfmtUnlocked = true;
+    } else if (enemy.kind === 'Dreadnought' || enemy.kind === 'SkyCarrier') {
+      this.emitAudio('sndboatdie', enemy.x, enemy.y);
+      this.emitAudio('sndexplom', enemy.x, enemy.y);
+      this.spawnParticle('explode_big', enemy.x, enemy.y);
+      this.hitstopTicks = Math.max(this.hitstopTicks, 5);
+      this.screenShake = Math.max(this.screenShake, 10);
+      this.emitShockwave(enemy.x, enemy.y, 180, 1.0, 24);
     } else if (isBoatLike(enemy.kind)) {
       this.emitAudio('sndboatdie', enemy.x, enemy.y);
       this.spawnParticle(
@@ -2247,37 +3744,58 @@ export class Simulation implements ISimulation {
     }
   }
 
-  private applyDamageToPlayer(amount: number, emitHitCue: boolean): void {
-    const p = this.player;
+  private applyDamageToTargetPlayer(
+    p: PlayerState,
+    amount: number,
+    emitHitCue: boolean,
+  ): void {
     if (!p.alive || amount <= 0) return;
+
+    // Act II Aegis shield absorbs 1 incoming combat/collision hit every 5s (300 ticks)
+    if (
+      emitHitCue &&
+      p.bodySpec.flags.includes('body-aegis-shield') &&
+      p.shieldReady
+    ) {
+      p.shieldReady = false;
+      p.shieldCooldown = AEGIS_SHIELD_COOLDOWN_TICKS;
+      p.flashTicks = Math.max(p.flashTicks, 8);
+      this.emitShockwave(p.x, p.y, 64, 0.85, 16);
+      this.emitAudio('sndhealed', p.x, p.y);
+      return;
+    }
 
     p.health = Math.max(0, p.health - amount);
     if (emitHitCue) {
       p.flashTicks = Math.max(p.flashTicks, 6);
-      this.lastPlayerHitTick = this.tick;
+      if (p === this.player) {
+        this.lastPlayerHitTick = this.tick;
+      }
       this.screenShake = Math.max(this.screenShake, 3);
       this.emitAudio('sndplayerhit', p.x, p.y);
       this.spawnParticle('player_hit', p.x, p.y);
     }
 
     if (p.health <= 0) {
-      this.killPlayer();
+      this.killTargetPlayer(p);
     }
   }
 
-  private killPlayer(): void {
-    const p = this.player;
+  private killTargetPlayer(p: PlayerState): void {
     if (!p.alive) return;
     p.alive = false;
     p.healing = false;
     p.boosting = false;
     p.firing = false;
-    this.phase = 'dying';
-    this.deathTicks = DEATH_TICKS_DURATION;
 
     this.emitAudio('sndplayerdie', p.x, p.y);
     this.spawnParticle('explode_big', p.x, p.y);
     this.screenShake = Math.max(this.screenShake, 8);
+
+    const mpMode = this.getEffectiveMultiplayerMode();
+    if (!this.modRegistry.isVanillaLocked() && mpMode === 'dogfight1v1') {
+      return;
+    }
 
     if (p.bodySpec.flags.includes('nuke-on-death') || p.isUrauser) {
       p.nukeTriggered = true;
@@ -2286,18 +3804,38 @@ export class Simulation implements ISimulation {
       this.nukeFlashTicks = 30;
       this.screenShake = Math.max(this.screenShake, 12);
       this.emitAudio('sndnuke', p.x, p.y);
-      this.applyNukeBlastDamage();
+      this.emitShockwave(p.x, p.y, NUKE_MAX_RADIUS, 1.0, 28);
+      this.applyNukeBlastDamageFor(p);
     }
 
+    if (mpMode === 'coop2p' && this.player2) {
+      if (p === this.player && this.player2.alive) {
+        this.p1RespawnTicks = COOP_RESPAWN_TICKS;
+        return;
+      }
+      if (p === this.player2 && this.player.alive) {
+        this.p2RespawnTicks = COOP_RESPAWN_TICKS;
+        return;
+      }
+    }
+
+    this.enterDyingPhase();
+  }
+
+  private enterDyingPhase(): void {
+    this.phase = 'dying';
+    this.deathTicks = DEATH_TICKS_DURATION;
     this.finalizeSortieStats();
   }
 
   private updateDyingSequence(): void {
-    const p = this.player;
-    if (p.nukeTriggered && p.nukeTicks > 0) {
-      p.nukeTicks--;
-      p.nukeRadius = Math.min(NUKE_MAX_RADIUS, p.nukeRadius + 20);
-      this.applyNukeBlastDamage();
+    const players = this.player2 ? [this.player, this.player2] : [this.player];
+    for (const p of players) {
+      if (p.nukeTriggered && p.nukeTicks > 0) {
+        p.nukeTicks--;
+        p.nukeRadius = Math.min(NUKE_MAX_RADIUS, p.nukeRadius + 20);
+        this.applyNukeBlastDamageFor(p);
+      }
     }
 
     this.deathTicks--;
@@ -2307,12 +3845,11 @@ export class Simulation implements ISimulation {
     }
   }
 
-  private applyNukeBlastDamage(): void {
-    const p = this.player;
+  private applyNukeBlastDamageFor(p: PlayerState): void {
     for (const enemy of this.enemies) {
       if (!enemy.active) continue;
       if (isAoeHittingEnemy(p.x, p.y, p.nukeRadius, enemy)) {
-        this.damageEnemy(enemy, 9999, 'nuke', true);
+        this.damageEnemy(enemy, 9999, 'nuke', true, p);
       }
     }
     this.updateHighScores();
@@ -2329,6 +3866,13 @@ export class Simulation implements ISimulation {
     if (this.bestComboThisSortie > this.profile.stats.bestCombo) {
       this.profile.stats.bestCombo = this.bestComboThisSortie;
     }
+    if (!this.modRegistry.isVanillaLocked() && this.dailySeedId) {
+      const dailyMap = { ...(this.profile.dailyHighScores ?? {}) };
+      if (this.score > (dailyMap[this.dailySeedId] ?? 0)) {
+        dailyMap[this.dailySeedId] = this.score;
+        this.profile.dailyHighScores = dailyMap;
+      }
+    }
   }
 
   private finalizeSortieStats(): void {
@@ -2342,6 +3886,45 @@ export class Simulation implements ISimulation {
       this.profile.stats.totalScore += scoreDelta;
       this.finalizedScoreAdded = this.score;
     }
+  }
+
+  private updateShockwaves(): void {
+    if (this.shockwaves.length === 0) return;
+    const next: ShockwaveEvent[] = [];
+    for (const sw of this.shockwaves) {
+      sw.age++;
+      if (sw.age < sw.maxAge) {
+        const progress = sw.age / sw.maxAge;
+        sw.radius = 6 + (sw.maxRadius - 6) * (1 - (1 - progress) * (1 - progress));
+        next.push(sw);
+      }
+    }
+    this.shockwaves = next;
+  }
+
+  private emitShockwave(
+    x: number,
+    y: number,
+    maxRadius: number,
+    intensity: number,
+    maxAge = 18,
+  ): void {
+    if (this.modRegistry.isVanillaLocked()) return;
+    const fx = this.modRegistry.getEffectiveShaderFx?.() ?? this.modFlags.shaderFx;
+    if (!fx.shockwaves) return;
+    if (this.shockwaves.length >= MAX_ACTIVE_SHOCKWAVES) {
+      this.shockwaves.shift();
+    }
+    this.shockwaves.push({
+      id: this.nextEntityId++,
+      x,
+      y,
+      radius: 6,
+      maxRadius,
+      intensity,
+      age: 0,
+      maxAge,
+    });
   }
 
   private updateParticles(): void {
@@ -2398,6 +3981,7 @@ export class Simulation implements ISimulation {
 
     const genericSpec = this.data.fx.generic[kind];
     const expSpec = this.data.fx.explosions[kind];
+
     if (genericSpec) {
       const hasNegativeScaleY = genericSpec.scaley < 0;
       const defaultTtl = hasNegativeScaleY
@@ -2527,7 +4111,18 @@ export class Simulation implements ISimulation {
   }
 
   getSnapshot(): SimSnapshot {
-    return {
+    const modded = !this.modRegistry.isVanillaLocked();
+    let ghostPose: GhostPose | null | undefined;
+    if (modded) {
+      ghostPose =
+        this.modFlags.replayGhost &&
+        this.ghostRunner &&
+        (this.phase === 'launching' || this.phase === 'playing' || this.phase === 'dying')
+          ? this.ghostRunner.sampleAtTick(this.tick)
+          : null;
+    }
+
+    const baseSnapshot: SimSnapshot = {
       tick: this.tick,
       phase: this.phase,
       mode: this.mode,
@@ -2550,7 +4145,10 @@ export class Simulation implements ISimulation {
         loadout: { ...this.player.loadout },
       },
       enemies: this.enemies.map((e) => ({ ...e })),
-      projectiles: this.projectiles.map((pr) => ({ ...pr })),
+      projectiles: this.projectiles.map((pr) => ({
+        ...pr,
+        ...(pr.arcPoints ? { arcPoints: pr.arcPoints.map((pt) => ({ ...pt })) } : {}),
+      })),
       particles: this.particles.map((pt) => ({ ...pt })),
       parallax: this.parallax.map((px) => ({ ...px })),
       cameraTargetX: this.cameraTargetX,
@@ -2565,10 +4163,24 @@ export class Simulation implements ISimulation {
       autopilotEnabled: this.autopilotEnabled,
       seed: this.seed,
     };
+
+    if (modded) {
+      baseSnapshot.shockwaves = this.shockwaves.map((sw) => ({ ...sw }));
+      baseSnapshot.ghostPose = ghostPose ?? null;
+      baseSnapshot.player2 = this.player2
+        ? { ...this.player2, loadout: { ...this.player2.loadout } }
+        : null;
+      baseSnapshot.dogfight = this.dogfight ? { ...this.dogfight } : null;
+      baseSnapshot.activeMods = cloneModFlags(this.modFlags);
+      baseSnapshot.dailySeedId = this.dailySeedId;
+    }
+
+    return baseSnapshot;
   }
 
   getReplay(): ReplayRecording {
-    return {
+    const modded = !this.modRegistry.isVanillaLocked();
+    const recording: ReplayRecording = {
       seed: this.seed,
       mode: this.mode,
       loadout: { ...this.player.loadout },
@@ -2577,6 +4189,13 @@ export class Simulation implements ISimulation {
       finalScore: this.score,
       finalTicks: this.tick,
     };
+    if (modded) {
+      recording.version = 2;
+      recording.modFlags = cloneModFlags(this.modFlags);
+      recording.dailyDateId = this.dailySeedId;
+      recording.planeName = this.player.planeName;
+    }
+    return recording;
   }
 
   getProfile(): PilotProfile {
@@ -2600,7 +4219,9 @@ export class Simulation implements ISimulation {
   }
 
   unlockAll(): void {
-    const allParts: PartIndex[] = [0, 1, 2, 3, 4, 5];
+    const allParts: PartIndex[] = this.modRegistry.isVanillaLocked()
+      ? [0, 1, 2, 3, 4, 5]
+      : [0, 1, 2, 3, 4, 5, 6, 7, 8];
     this.profile.unlockedWeapons = [...allParts];
     this.profile.unlockedBodies = [...allParts];
     this.profile.unlockedEngines = [...allParts];
@@ -2616,7 +4237,11 @@ export function replaySimulation(
   recording: ReplayRecording,
   modRegistry?: IModRegistry,
 ): SimSnapshot {
-  const sim = new Simulation(data, modRegistry);
+  const effectiveRegistry = modRegistry ?? new ModRegistry(true);
+  const sim = new Simulation(data, effectiveRegistry);
+  if (!modRegistry && recording.modFlags?.moddedEnabled) {
+    sim.setModFlags(recording.modFlags);
+  }
   sim.launch(recording.loadout, recording.mode, recording.seed);
   for (const frame of recording.frames) {
     sim.step(decodeInputMask(frame.mask));
