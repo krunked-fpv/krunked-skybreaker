@@ -376,13 +376,23 @@ export function createProceduralFontSpec(
   const srcCols = display ? 6 : 5;
   const srcRows = display ? 8 : 7;
 
-  // Compact cell sizing honoring authentic Pic0 / Volter proportions while fitting 95 glyphs
-  const cellW = display ? Math.max(6, Math.round(size * 0.44)) : Math.max(5, Math.round(size * 0.5));
-  const cellH = display ? Math.max(8, Math.round(size * 0.66)) : Math.max(7, Math.round(size * 0.7));
+  // Compact cell sizing honoring authentic Pic0 / Volter proportions while fitting 95 glyphs.
+  // For small pixel sans (`fnts`, size <= 12), use exact 1:1 5x7 metrics (w<=5, xadvance<=6)
+  // matching Steam `fnts.fnt` compact line widths so 37-char mission text fits cleanly on 1 line.
+  const cellW = display
+    ? Math.max(6, Math.round(size * 0.44))
+    : size <= 12
+      ? 5
+      : Math.max(5, Math.round(size * 0.5));
+  const cellH = display
+    ? Math.max(8, Math.round(size * 0.66))
+    : size <= 12
+      ? 7
+      : Math.max(7, Math.round(size * 0.7));
   const scaleX = cellW / srcCols;
   const scaleY = cellH / srcRows;
-  const baseOffsetY = Math.max(0, Math.floor((lineHeight - cellH) * 0.5));
-  const advanceGap = Math.max(1, Math.round(size * (display ? 0.08 : 0.1)));
+  const baseOffsetY = !display && size <= 12 ? 1 : Math.max(0, Math.floor((lineHeight - cellH) * 0.5));
+  const advanceGap = !display && size <= 12 ? 1 : Math.max(1, Math.round(size * (display ? 0.08 : 0.1)));
 
   let cursorX = 1;
   let cursorY = 1;
@@ -390,7 +400,7 @@ export function createProceduralFontSpec(
 
   for (let code = 32; code <= 126; code++) {
     if (code === 32) {
-      const spaceW = Math.max(2, Math.floor(cellW * 0.35));
+      const spaceW = Math.max(2, Math.floor(cellW * 0.4));
       glyphs[code] = {
         id: code,
         x: 0,
@@ -399,7 +409,7 @@ export function createProceduralFontSpec(
         height: 1,
         xoffset: 0,
         yoffset: baseOffsetY + cellH,
-        xadvance: Math.max(3, Math.round(cellW * 0.52)),
+        xadvance: !display && size <= 12 ? 4 : Math.max(3, Math.round(cellW * 0.52)),
       };
       continue;
     }

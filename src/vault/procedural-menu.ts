@@ -390,25 +390,19 @@ function drawMissionFrame(p: SpritePainter, frameIdx: number): void {
 function drawProjectorTop(p: SpritePainter): void {
   const w = p.w;
   const h = p.h;
-  // Heavy steel overhead projector roller housing
-  p.rect(0, 0, w, h, 3);
-  p.rect(0, 0, w, 4, 5); // top specular bevel
-  p.rect(0, 4, w, 3, 3);
-  p.rect(0, 7, w, 14, 2); // recessed cylindrical body
-  p.hline(0, w - 1, 11, 3);
-  p.hline(0, w - 1, 12, 5); // metallic sheen band
-  p.rect(0, 21, w, 4, 3);
+  // Smooth metallic overhead projector roller housing with clean center text band (no rivet clutter!)
+  p.rect(0, 0, w, 4, 5); // crisp parchment top specular highlight
+  p.rect(0, 4, w, 4, 3); // upper bevel tan band
+  p.rect(0, 8, w, 14, 2); // smooth uncluttered center text band
+  p.rect(0, 22, w, 3, 3); // lower metallic rim
   p.rect(0, 25, w, 5, 1); // dark underside roller slot shadow
-  // End-cap brackets & industrial rivets
-  p.rect(0, 0, 22, h, 1);
-  p.rect(3, 3, 16, h - 6, 3);
-  p.rect(w - 22, 0, 22, h, 1);
-  p.rect(w - 19, 3, 16, h - 6, 3);
-  for (let x = 40; x < w - 30; x += 56) {
-    p.rect(x, 6, 4, 4, 1);
-    p.px(x + 1, 7, 5);
-    p.rect(x, 22, 4, 3, 1);
-  }
+  // Clean end-cap mounting brackets (strictly at outer edges x=0..18 and w-18..w)
+  p.rect(0, 0, 18, h, 1);
+  p.rect(2, 3, 14, h - 6, 3);
+  p.rect(3, 5, 12, 5, 5);
+  p.rect(w - 18, 0, 18, h, 1);
+  p.rect(w - 16, 3, 14, h - 6, 3);
+  p.rect(w - 15, 5, 12, 5, 5);
 }
 
 function drawProjectorRope(p: SpritePainter): void {
@@ -499,10 +493,75 @@ function drawPlaneIconPart(
       : category === 'body'
         ? PLAYER_BODY_GRIDS
         : PLAYER_WING_GRIDS;
-  const grid = grids[frameIdx] ?? grids[0]!;
-  // 1px dark drop shadow underneath + crisp bright 7 silhouette on top
-  p.gridSymY(grid, undefined, 0, 1, { '1': 1 });
-  p.gridSymY(grid, undefined, 0, 0, { '1': 7 });
+  const topRows = grids[frameIdx] ?? grids[0]!;
+
+  // Expand vertically-mirrored 24x24 (+X) part into a crisp 24x24 buffer,
+  // bridge the central fuselage wing-root on weapons so `plane_icon_weapon` reads as
+  // ONE continuous horizontal wing bar (not 2 disconnected halves), and rotate 90° CCW
+  // (nose pointing UP -Y) to match `sheet2grey.png` vertical plane_icon_* orientation!
+  const mask = new Uint8Array(24 * 24);
+  for (let r = 0; r < topRows.length; r++) {
+    const row = topRows[r]!;
+    const mirrorR = 23 - r;
+    for (let c = 0; c < row.length; c++) {
+      if (row[c] === '1') {
+        mask[r * 24 + c] = 1;
+        mask[mirrorR * 24 + c] = 1;
+      }
+    }
+  }
+  if (category === 'weapon') {
+    // Bridge the central y=10..13 wing root cleanly across the inner wing chord
+    let minC = 24;
+    let maxC = -1;
+    for (let c = 0; c < 24; c++) {
+      if (mask[9 * 24 + c] === 1) {
+        if (c < minC) minC = c;
+        if (c > maxC) maxC = c;
+      }
+    }
+    if (maxC >= minC) {
+      for (let r = 10; r <= 13; r++) {
+        for (let c = minC; c <= maxC; c++) {
+          mask[r * 24 + c] = 1;
+        }
+      }
+    }
+  }
+
+  // Rotate 90° CCW: (x_src, y_src) -> (dx = y_src, dy = 23 - x_src), centered in 24x25
+  // Draw crisp 1px dark drop shadow below (dy + 1) then bright white (7) silhouette on top!
+  let minY = 24;
+  let maxY = -1;
+  for (let sy = 0; sy < 24; sy++) {
+    for (let sx = 0; sx < 24; sx++) {
+      if (mask[sy * 24 + sx] === 1) {
+        const dy = 23 - sx;
+        if (dy < minY) minY = dy;
+        if (dy > maxY) maxY = dy;
+      }
+    }
+  }
+  const shiftY = maxY >= minY ? Math.round(11.5 - (minY + maxY) * 0.5) : 0;
+
+  for (let sy = 0; sy < 24; sy++) {
+    for (let sx = 0; sx < 24; sx++) {
+      if (mask[sy * 24 + sx] === 1) {
+        const dx = sy;
+        const dy = 23 - sx + shiftY;
+        p.px(dx, dy + 1, 1);
+      }
+    }
+  }
+  for (let sy = 0; sy < 24; sy++) {
+    for (let sx = 0; sx < 24; sx++) {
+      if (mask[sy * 24 + sx] === 1) {
+        const dx = sy;
+        const dy = 23 - sx + shiftY;
+        p.px(dx, dy, 7);
+      }
+    }
+  }
 }
 
 function drawKeyboardKeycap(p: SpritePainter, frameIdx: number): void {
@@ -783,10 +842,15 @@ function drawProceduralMenuSprite(
     return;
   }
   if (name === 'menu_wings') {
-    const dir = frameIdx === 0 ? 1 : -1;
-    const x0 = dir > 0 ? 1 : w - 2;
-    p.tri(x0, 2, x0 + dir * 14, 5, x0 + dir * 4, 13, 1);
-    p.tri(x0 + dir * 2, 4, x0 + dir * 12, 6, x0 + dir * 5, 11, 7);
+    // Stylized 4-feather aviation wing emblem (f0 = left wing, f1 = right wing)
+    const lengths = [15, 13, 10, 7];
+    for (let i = 0; i < lengths.length; i++) {
+      const len = lengths[i]!;
+      const y = 1 + i * 3;
+      const x0 = frameIdx === 0 ? 1 : w - 1 - len;
+      p.rect(x0, y, len, 3, 1);
+      p.hline(x0 + 1, x0 + len - 2, y + 1, 7);
+    }
     return;
   }
   if (name === 'skybreaker_logo' || name === 'luftrausers_logo') {
