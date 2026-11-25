@@ -366,6 +366,21 @@ describe('GLSL ES 3.00 Shader & Post Uniform Contracts', () => {
 
     expect(OUTPASS_VERT).toContain('400.0 / 600.0');
     expect(OUTPASS_VERT).toContain('viewport.y');
+
+    expect(OUTPASS_FRAG).toContain(
+      'if (uFxFlags.x < 0.5 && uFxFlags.y < 0.5 && uFxFlags.z < 0.5 && uFxFlags.w < 0.5)',
+    );
+    expect(OUTPASS_FRAG).toContain('fragColor = vec4(cta.rgb, 1.0);');
+    expect(OUTPASS_FRAG).toContain(
+      'float hudSafe = 1.0 - smoothstep(0.82, 0.88, vTexCoords.y);',
+    );
+    expect(OUTPASS_FRAG).toContain('sw.w * hudSafe');
+    expect(OUTPASS_FRAG).toContain('warpStrength * 0.045 * hudSafe');
+    expect(OUTPASS_FRAG).toContain(
+      '0.30 * speedNorm * smoothstep(0.25, 0.75, edgeDist) * hudSafe',
+    );
+    expect(OUTPASS_FRAG).toContain('(bloomAcc / 8.0) * 0.30');
+    expect(POST_WATER_FRAG).toContain('clamp(delta.y / 14.0, 0.0, 0.55)');
   });
 
   it('computePostShaderUniforms handles 100% HP, 50% HP, critical < 33% HP, and cameraYViewSpace', () => {
@@ -561,6 +576,72 @@ describe('HangarController & TelemetryHud Contracts', () => {
     expect(lines).toContain('0.120ms');
     expect(lines).toContain('THE ORIGINAL');
     hud.dispose();
+  });
+
+  it('TelemetryHud.bindKeyboardToggle toggles cleanly on Backquote, `, ~, and key=Backquote', () => {
+    const listeners = new Map<string, Set<EventListener>>();
+    const target: EventTarget = {
+      addEventListener(type: string, cb: EventListenerOrEventListenerObject | null) {
+        if (typeof cb !== 'function') return;
+        let set = listeners.get(type);
+        if (!set) {
+          set = new Set();
+          listeners.set(type, set);
+        }
+        set.add(cb);
+      },
+      removeEventListener(type: string, cb: EventListenerOrEventListenerObject | null) {
+        if (typeof cb !== 'function') return;
+        listeners.get(type)?.delete(cb);
+      },
+      dispatchEvent(ev: Event) {
+        for (const cb of listeners.get(ev.type) ?? []) {
+          cb(ev);
+        }
+        return true;
+      },
+    };
+
+    const fireKey = (opts: {
+      code: string;
+      key: string;
+      shiftKey?: boolean;
+      ctrlKey?: boolean;
+    }) => {
+      target.dispatchEvent({
+        type: 'keydown',
+        code: opts.code,
+        key: opts.key,
+        shiftKey: opts.shiftKey ?? false,
+        ctrlKey: opts.ctrlKey ?? false,
+        metaKey: false,
+        altKey: false,
+      } as unknown as Event);
+    };
+
+    const hud = new TelemetryHud();
+    hud.bindKeyboardToggle(target);
+    expect(hud.isVisible()).toBe(false);
+
+    fireKey({ code: 'Backquote', key: '`' });
+    expect(hud.isVisible()).toBe(true);
+
+    fireKey({ code: 'IntlBackslash', key: '`' });
+    expect(hud.isVisible()).toBe(false);
+
+    fireKey({ code: 'IntlBackslash', key: '~', shiftKey: true });
+    expect(hud.isVisible()).toBe(true);
+
+    fireKey({ code: '', key: 'Backquote' });
+    expect(hud.isVisible()).toBe(false);
+
+    // Modifier chords must not toggle
+    fireKey({ code: 'Backquote', key: '`', ctrlKey: true });
+    expect(hud.isVisible()).toBe(false);
+
+    hud.dispose();
+    fireKey({ code: 'Backquote', key: '`' });
+    expect(hud.isVisible()).toBe(false);
   });
 
   it('builds valid builtin pixel font bitmap and quad geometry', () => {
@@ -1594,5 +1675,397 @@ describe('Renderer Visual & UI Regression Contracts', () => {
 
     runWithFonts(true);
     runWithFonts(false);
+  });
+
+  it('submits allied submarine in Hangar/launchSubY, laser_charge telegraph, stroboscopic boss flash, and Boat gun mount', () => {
+    const mockGl = createMockWebGL2Context();
+    const instanceBatches: Float32Array[] = [];
+    const solidBuffers: Float32Array[] = [];
+    const createdPrograms: Array<{ id: number }> = [];
+    let currentProgram: unknown = null;
+
+    mockGl.gl.createProgram = vi.fn(() => {
+      const p = { id: createdPrograms.length + 1 };
+      createdPrograms.push(p);
+      return p;
+    });
+    mockGl.gl.useProgram = vi.fn((p: unknown) => {
+      currentProgram = p;
+    });
+    mockGl.gl.bufferSubData = vi.fn(
+      (_target: number, _offset: number, data: ArrayBufferView) => {
+        if (data instanceof Float32Array) {
+          instanceBatches.push(new Float32Array(data));
+        }
+      },
+    );
+    mockGl.gl.bufferData = vi.fn((_target: number, data: ArrayBufferView | number) => {
+      // solidProg is the 7th compiled program (index 6)
+      if (
+        currentProgram === createdPrograms[6] &&
+        data instanceof Float32Array &&
+        data.length > 0
+      ) {
+        solidBuffers.push(new Float32Array(data));
+      }
+    });
+
+    const mockCanvas = {
+      width: 600,
+      height: 400,
+      style: { imageRendering: '' },
+      getContext: vi.fn((kind: string) => (kind === 'webgl2' ? mockGl.gl : null)),
+    } as unknown as HTMLCanvasElement;
+
+    const vault = createMockVaultBundle();
+    vault.data.atlases.sprites.sprites = {
+      ...vault.data.atlases.sprites.sprites,
+      submarine: {
+        name: 'submarine',
+        size: [198, 36],
+        hull: [0, 0, 198, 36],
+        center: [99, 36],
+        subs: [{ x: 20, y: 0 }],
+      },
+      small_boat: {
+        name: 'small_boat',
+        size: [60, 17],
+        hull: [0, 0, 60, 17],
+        center: [29, 17],
+        subs: [{ x: 25, y: 0 }],
+      },
+      small_boat_gun: {
+        name: 'small_boat_gun',
+        size: [16, 3],
+        hull: [0, 0, 16, 3],
+        center: [0, 1],
+        subs: [{ x: 30, y: 0 }],
+      },
+      blimp: {
+        name: 'blimp',
+        size: [550, 219],
+        hull: [0, 0, 550, 219],
+        center: [275, 109],
+        subs: [{ x: 40, y: 0 }],
+      },
+      big_boat_gun: {
+        name: 'big_boat_gun',
+        size: [35, 9],
+        hull: [0, 0, 35, 9],
+        center: [3, 5],
+        subs: [{ x: 45, y: 0 }],
+      },
+      laserace_body: {
+        name: 'laserace_body',
+        size: [45, 45],
+        hull: [0, 0, 45, 45],
+        center: [22, 22],
+        subs: [{ x: 50, y: 0 }],
+      },
+      laser_charge: {
+        name: 'laser_charge',
+        size: [32, 32],
+        hull: [0, 0, 32, 32],
+        center: [0, 16],
+        subs: [
+          { x: 100, y: 0 },
+          { x: 110, y: 0 },
+          { x: 120, y: 0 },
+          { x: 130, y: 0 },
+          { x: 140, y: 0 },
+          { x: 150, y: 0 },
+        ],
+      },
+    };
+
+    const unpackInstances = () => {
+      const out: Array<{
+        x: number;
+        y: number;
+        angleRad: number;
+        subX: number;
+        scaleX: number;
+        depth: number;
+        flash: number;
+      }> = [];
+      for (const batch of instanceBatches) {
+        for (let i = 0; i < batch.length; i += 13) {
+          out.push({
+            x: batch[i]!,
+            y: batch[i + 1]!,
+            angleRad: batch[i + 2]!,
+            subX: batch[i + 3]!,
+            scaleX: batch[i + 9]!,
+            depth: batch[i + 11]!,
+            flash: batch[i + 12]!,
+          });
+        }
+      }
+      return out;
+    };
+
+    const renderer = new WebGL2Renderer();
+    renderer.init(mockCanvas, vault);
+    const controller = new HangarController();
+
+    // 1. Hangar renders surfaced allied submarine at (camX, seaLevel) in main & reflect
+    const hangarSnap = makeSnapshot({ phase: 'hangar' });
+    instanceBatches.length = 0;
+    renderer.render(hangarSnap, hangarSnap, 0, controller.buildUiState(hangarSnap), 1.0);
+    const hangarSubs = unpackInstances().filter((i) => i.subX === 20);
+    expect(hangarSubs).toHaveLength(2);
+    for (const sub of hangarSubs) {
+      expect(sub.x).toBeCloseTo(18, 4); // camX = elapsedSec * 18
+      expect(sub.y).toBe(0);
+      expect(sub.depth).toBeCloseTo(0.55, 5);
+      expect(sub.scaleX).toBe(1);
+    }
+
+    // 2. Launching with launchSubY=0 renders allied submarine in main & reflect at (0, 0), depth 0.52
+    const launchSnap = makeSnapshot({ phase: 'launching', launchSubY: 0 });
+    instanceBatches.length = 0;
+    renderer.render(launchSnap, launchSnap, 0, null, 0.2);
+    const launchSubs = unpackInstances().filter((i) => i.subX === 20);
+    expect(launchSubs).toHaveLength(2);
+    expect(launchSubs[0]!.x).toBe(0);
+    expect(launchSubs[0]!.y).toBe(0);
+    expect(launchSubs[0]!.depth).toBeCloseTo(0.52, 5);
+    expect(launchSubs[0]!.flash).toBe(0);
+
+    // When launchSubY > seaLevel + 8, reflection is omitted
+    const submergedLaunchSnap = makeSnapshot({ phase: 'playing', launchSubY: 16 });
+    instanceBatches.length = 0;
+    renderer.render(submergedLaunchSnap, submergedLaunchSnap, 0, null, 0.3);
+    expect(unpackInstances().filter((i) => i.subX === 20)).toHaveLength(1);
+
+    // 3. LaserAce laser_charge telegraph, Boat gun mount, and stroboscopic boss flash
+    const baseEnemy = {
+      prevX: 0,
+      prevY: 0,
+      vy: 0,
+      health: 100,
+      maxHealth: 100,
+      active: true,
+      state: 'cruise' as const,
+      aiTimer: 0,
+      fireTimer: 10,
+      salvoRemaining: 0,
+      salvoCooldown: 0,
+      surfaceTimer: 0,
+      fallFrames: 0,
+      lifetime: 100,
+      activationTimer: 0,
+      hitRadius: 20,
+      width: 40,
+      height: 20,
+      scoreValue: 100,
+      difficultyWeight: 1,
+      laserActive: false,
+      laserLength: 0,
+    };
+
+    const combatSnapTick1 = makeSnapshot({
+      tick: 1,
+      phase: 'playing',
+      enemies: [
+        {
+          ...baseEnemy,
+          id: 1,
+          kind: 'Blimp',
+          x: 200,
+          y: -240,
+          prevX: 200,
+          prevY: -240,
+          vx: -1,
+          angleDeg: 180,
+          gunAngleDeg: 90,
+          flashTicks: 4,
+          spriteMain: 'blimp',
+          spriteGun: 'big_boat_gun',
+        },
+        {
+          ...baseEnemy,
+          id: 2,
+          kind: 'Fighter',
+          x: 80,
+          y: -150,
+          prevX: 80,
+          prevY: -150,
+          vx: 3,
+          angleDeg: 0,
+          gunAngleDeg: 0,
+          flashTicks: 3,
+          spriteMain: 'fighter_body',
+        },
+        {
+          ...baseEnemy,
+          id: 3,
+          kind: 'LaserAce',
+          x: 140,
+          y: -120,
+          prevX: 140,
+          prevY: -120,
+          vx: 3,
+          angleDeg: 0,
+          gunAngleDeg: 45,
+          flashTicks: 0,
+          spriteMain: 'laserace_body',
+          laserChargeTicks: 15,
+        },
+        {
+          ...baseEnemy,
+          id: 4,
+          kind: 'Boat',
+          x: -50,
+          y: 0,
+          prevX: -50,
+          prevY: 0,
+          vx: -1,
+          angleDeg: 180,
+          gunAngleDeg: -120,
+          flashTicks: 0,
+          spriteMain: 'small_boat',
+          spriteGun: 'small_boat_gun',
+        },
+      ],
+    });
+
+    instanceBatches.length = 0;
+    renderer.render(combatSnapTick1, combatSnapTick1, 0, null, 0.4);
+    const instTick1 = unpackInstances();
+
+    // tick=1 -> tick % 6 < 2 => Blimp flash=1; Fighter flashTicks=3 (odd) => flash=1
+    const blimpTick1 = instTick1.find((i) => i.subX === 40);
+    expect(blimpTick1?.flash).toBe(1);
+    const fighterTick1 = instTick1.find((i) => i.x === 80 && i.y === -150);
+    expect(fighterTick1?.flash).toBe(1);
+
+    // LaserAce laserChargeTicks=15 -> frame Math.floor((24 - 15) / 4) = 2 -> subX = 120, depth 0.38
+    const chargeInstances = instTick1.filter((i) => i.subX === 120);
+    expect(chargeInstances).toHaveLength(2); // main + reflect (ey = -120 < 4)
+    expect(chargeInstances[0]!.depth).toBeCloseTo(0.38, 5);
+    expect(chargeInstances[0]!.angleRad).toBeCloseTo(Math.PI / 4, 5);
+
+    // Boat small_boat_gun mounted at (ex + 3 * scaleX, ey - 14) = (-50 - 3, -14)
+    const smallGun = instTick1.find((i) => i.subX === 30);
+    expect(smallGun).toBeDefined();
+    expect(smallGun!.x).toBe(-53);
+    expect(smallGun!.y).toBe(-14);
+
+    // tick=3, flashTicks=4 -> Blimp flash=0 (3 % 6 >= 2); Fighter flashTicks=4 (even) -> flash=0
+    const combatSnapTick3 = {
+      ...combatSnapTick1,
+      tick: 3,
+      enemies: combatSnapTick1.enemies.map((e) =>
+        e.id === 2 ? { ...e, flashTicks: 4 } : e,
+      ),
+    };
+    instanceBatches.length = 0;
+    renderer.render(combatSnapTick3, combatSnapTick3, 0, null, 0.5);
+    const instTick3 = unpackInstances();
+    expect(instTick3.find((i) => i.subX === 40)?.flash).toBe(0);
+    expect(instTick3.find((i) => i.x === 80 && i.y === -150)?.flash).toBe(0);
+
+    // 4. Fallback rects when submarine and laser_charge sprites are missing
+    delete vault.data.atlases.sprites.sprites['submarine'];
+    delete vault.data.atlases.sprites.sprites['laser_charge'];
+    solidBuffers.length = 0;
+    const fallbackSnap = {
+      ...combatSnapTick1,
+      launchSubY: 0,
+    };
+    renderer.render(fallbackSnap, fallbackSnap, 0, null, 0.6);
+    const hasSubHullAndTower = solidBuffers.some((buf) => {
+      let sawHull = false;
+      let sawTower = false;
+      let sawCharge = false;
+      for (let i = 0; i <= buf.length - 36; i += 36) {
+        const xs = [buf[i]!, buf[i + 6]!, buf[i + 12]!, buf[i + 24]!];
+        const ys = [buf[i + 1]!, buf[i + 7]!, buf[i + 13]!, buf[i + 25]!];
+        const w = Math.max(...xs) - Math.min(...xs);
+        const h = Math.max(...ys) - Math.min(...ys);
+        if (Math.abs(w - 160) < 0.5 && Math.abs(h - 22) < 0.5) sawHull = true;
+        if (Math.abs(w - 36) < 0.5 && Math.abs(h - 14) < 0.5) sawTower = true;
+        if (w > 11 && w < 18 && h > 11 && h < 18) sawCharge = true;
+      }
+      return sawHull && sawTower && sawCharge;
+    });
+    expect(hasSubHullAndTower).toBe(true);
+
+    // 5. Dogfight/Co-op P1 HP & P2 dark backing pills + elevated P1/P2 18x10 tag backing rects
+    const p2 = {
+      ...makeSnapshot().player,
+      x: 180,
+      y: -150,
+      prevX: 180,
+      prevY: -150,
+      health: 75,
+      maxHealth: 100,
+      playerIndex: 2 as const,
+    };
+    const dogfightSnap = makeSnapshot({
+      phase: 'playing',
+      player: {
+        ...makeSnapshot().player,
+        x: 120,
+        y: -160,
+        prevX: 120,
+        prevY: -160,
+        health: 80,
+        maxHealth: 100,
+      },
+      player2: p2,
+      activeMods: {
+        moddedEnabled: true,
+        arsenalBosses: false,
+        replayGhost: false,
+        dailySeed: false,
+        shaderFx: {
+          crtScanlines: false,
+          phosphorBloom: false,
+          speedWarp: false,
+          shockwaves: false,
+        },
+        multiplayerMode: 'dogfight1v1',
+        p2BotEnabled: false,
+      },
+      dogfight: {
+        p1Wins: 1,
+        p2Wins: 0,
+        round: 2,
+        bestOf: 5,
+        roundBannerTicks: 0,
+        winner: null,
+        lastScorer: 1,
+      },
+    });
+    solidBuffers.length = 0;
+    renderer.render(dogfightSnap, dogfightSnap, 0, null, 0.7);
+    const sawDogfightPillsAndTags = solidBuffers.some((buf) => {
+      let sawP1Pill = false;
+      let sawP2Pill = false;
+      let tagBackCount = 0;
+      for (let i = 0; i <= buf.length - 36; i += 36) {
+        const xs = [buf[i]!, buf[i + 6]!, buf[i + 12]!, buf[i + 24]!];
+        const ys = [buf[i + 1]!, buf[i + 7]!, buf[i + 13]!, buf[i + 25]!];
+        const minX = Math.min(...xs);
+        const minY = Math.min(...ys);
+        const w = Math.max(...xs) - minX;
+        const h = Math.max(...ys) - minY;
+        if (Math.abs(minX - 8) < 0.5 && Math.abs(minY - 6) < 0.5 && Math.abs(w - 86) < 0.5 && Math.abs(h - 24) < 0.5) {
+          sawP1Pill = true;
+        }
+        if (Math.abs(minX - (600 - 94)) < 0.5 && Math.abs(minY - 6) < 0.5 && Math.abs(w - 86) < 0.5 && Math.abs(h - 24) < 0.5) {
+          sawP2Pill = true;
+        }
+        if (Math.abs(w - 18) < 0.5 && Math.abs(h - 10) < 0.5) {
+          tagBackCount++;
+        }
+      }
+      return sawP1Pill && sawP2Pill && tagBackCount === 2;
+    });
+    expect(sawDogfightPillsAndTags).toBe(true);
+
+    renderer.dispose();
   });
 });

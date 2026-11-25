@@ -125,7 +125,12 @@ export class TelemetryHud {
     const listener = (event: Event): void => {
       const kb = event as KeyboardEvent;
       if (kb.ctrlKey || kb.metaKey || kb.altKey) return;
-      if (kb.code === 'Backquote' || kb.key === '`') {
+      if (
+        kb.code === 'Backquote' ||
+        kb.key === '`' ||
+        kb.key === '~' ||
+        kb.key === 'Backquote'
+      ) {
         this.toggle();
       }
     };

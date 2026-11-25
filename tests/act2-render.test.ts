@@ -1026,7 +1026,7 @@ describe('WebGL2Renderer Act II Visuals & Shader FX Pipeline', () => {
     expect(swCall).toBeDefined();
     expect(swCall!.data[3]).toBeCloseTo(0.9, 4); // intensity > 0
 
-    // Verify Dreadnought (1.3x) & SkyCarrier (1.1x) upright flipped instances
+    // Verify Dreadnought (1.3x) & SkyCarrier (1.0x) upright flipped instances
     const allInstances: Array<{ angleRad: number; subX: number; scaleX: number; scaleY: number }> = [];
     for (const batch of mockGl.instanceBatches) {
       for (let i = 0; i < batch.length; i += 13) {
@@ -1047,8 +1047,8 @@ describe('WebGL2Renderer Act II Visuals & Shader FX Pipeline', () => {
     const carrier = allInstances.find((i) => i.subX === 6);
     expect(carrier).toBeDefined();
     expect(carrier!.angleRad).toBe(0);
-    expect(carrier!.scaleX).toBeCloseTo(-1.1, 4);
-    expect(carrier!.scaleY).toBeCloseTo(1.1, 4);
+    expect(carrier!.scaleX).toBeCloseTo(-1.0, 4);
+    expect(carrier!.scaleY).toBeCloseTo(1.0, 4);
 
     // 3. Dogfight match winner Game Over card
     const dogfightOver = makeSnapshot({
