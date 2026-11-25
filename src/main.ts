@@ -1,34 +1,73 @@
 import { AudioEngine } from './audio';
 import {
+  DEFAULT_ACT2_MOD_FLAGS,
+  DEFAULT_SHADER_FX,
   VANILLA_1TO1_PROFILE,
+  type Act2ModFlags,
   type EnemyKind,
   type GameMode,
   type InputState,
   type Loadout,
+  type PaletteDefinition,
   type PartIndex,
   type PilotProfile,
   type RauserDebugApi,
   type RauserDebugState,
+  type ReplayRecording,
   type SimSnapshot,
 } from './contracts';
-import { DEFAULT_PALETTE_ID, WebGL2Renderer } from './render';
+import {
+  ACT2_BONUS_PALETTES,
+  DEFAULT_PALETTE_ID,
+  WebGL2Renderer,
+  sanitizeCustomPalette,
+} from './render';
 import {
   ModRegistry,
   Simulation,
+  computeCoopP2BotInput,
+  computeDailySeed,
+  computeDogfightBotInput,
   createDefaultProfile,
+  parseReplayJson,
+  serializeReplay,
 } from './sim';
 import { HangarController, TelemetryHud } from './ui';
 import { VaultLoader } from './vault';
 
 const PROFILE_STORAGE_KEY = 'krunked_luftrausers_profile_v1';
+const ACT2_MODS_STORAGE_KEY = 'krunked_luftrausers_act2_mods_v1';
+const ACT2_CUSTOM_PALETTE_KEY = 'krunked_luftrausers_act2_custom_palette_v1';
+const ACT2_PB_GHOST_KEY = 'krunked_luftrausers_act2_pb_ghost_v1';
+
 const FIXED_DT = 1 / VANILLA_1TO1_PROFILE.fixedTimestepHz;
 const MAX_SUB_STEPS = VANILLA_1TO1_PROFILE.maxSubSteps;
 
-function clampPartIndex(value: number): PartIndex {
+function clampPartIndex(value: number, maxPart: number = 8): PartIndex {
   const n = Math.floor(Number.isFinite(value) ? value : 0);
   if (n <= 0) return 0;
-  if (n >= 5) return 5;
+  if (n >= maxPart) return maxPart as PartIndex;
   return n as PartIndex;
+}
+
+function cloneModFlags(flags: Act2ModFlags): Act2ModFlags {
+  return {
+    moddedEnabled: Boolean(flags.moddedEnabled),
+    arsenalBosses: Boolean(flags.arsenalBosses),
+    replayGhost: Boolean(flags.replayGhost),
+    dailySeed: Boolean(flags.dailySeed),
+    shaderFx: {
+      crtScanlines: Boolean(flags.shaderFx?.crtScanlines),
+      phosphorBloom: Boolean(flags.shaderFx?.phosphorBloom),
+      speedWarp: Boolean(flags.shaderFx?.speedWarp),
+      shockwaves: Boolean(flags.shaderFx?.shockwaves),
+    },
+    multiplayerMode:
+      flags.multiplayerMode === 'coop2p' || flags.multiplayerMode === 'dogfight1v1'
+        ? flags.multiplayerMode
+        : 'solo',
+    p2BotEnabled: flags.p2BotEnabled !== undefined ? Boolean(flags.p2BotEnabled) : true,
+  };
 }
 
 function loadStoredProfile(): PilotProfile {
@@ -43,15 +82,18 @@ function loadStoredProfile(): PilotProfile {
     return {
       ...fallback,
       ...parsed,
-      unlockedWeapons: Array.isArray(parsed.unlockedWeapons) && parsed.unlockedWeapons.length > 0
-        ? parsed.unlockedWeapons.map(clampPartIndex)
-        : fallback.unlockedWeapons,
-      unlockedBodies: Array.isArray(parsed.unlockedBodies) && parsed.unlockedBodies.length > 0
-        ? parsed.unlockedBodies.map(clampPartIndex)
-        : fallback.unlockedBodies,
-      unlockedEngines: Array.isArray(parsed.unlockedEngines) && parsed.unlockedEngines.length > 0
-        ? parsed.unlockedEngines.map(clampPartIndex)
-        : fallback.unlockedEngines,
+      unlockedWeapons:
+        Array.isArray(parsed.unlockedWeapons) && parsed.unlockedWeapons.length > 0
+          ? parsed.unlockedWeapons.map((v) => clampPartIndex(v, 5))
+          : fallback.unlockedWeapons,
+      unlockedBodies:
+        Array.isArray(parsed.unlockedBodies) && parsed.unlockedBodies.length > 0
+          ? parsed.unlockedBodies.map((v) => clampPartIndex(v, 5))
+          : fallback.unlockedBodies,
+      unlockedEngines:
+        Array.isArray(parsed.unlockedEngines) && parsed.unlockedEngines.length > 0
+          ? parsed.unlockedEngines.map((v) => clampPartIndex(v, 5))
+          : fallback.unlockedEngines,
       completedMissions: Array.isArray(parsed.completedMissions)
         ? parsed.completedMissions.filter((n): n is number => typeof n === 'number')
         : fallback.completedMissions,
@@ -60,9 +102,9 @@ function loadStoredProfile(): PilotProfile {
         : fallback.activeMissionIds,
       lastLoadout: parsed.lastLoadout
         ? {
-            weapon: clampPartIndex(parsed.lastLoadout.weapon),
-            body: clampPartIndex(parsed.lastLoadout.body),
-            engine: clampPartIndex(parsed.lastLoadout.engine),
+            weapon: clampPartIndex(parsed.lastLoadout.weapon, 8),
+            body: clampPartIndex(parsed.lastLoadout.body, 8),
+            engine: clampPartIndex(parsed.lastLoadout.engine, 8),
           }
         : fallback.lastLoadout,
       lastMode: parsed.lastMode === 'sfmt' ? 'sfmt' : 'normal',
@@ -81,6 +123,10 @@ function loadStoredProfile(): PilotProfile {
             bestCombo: Number(parsed.stats.bestCombo) || 1,
           }
         : fallback.stats,
+      dailyHighScores:
+        parsed.dailyHighScores && typeof parsed.dailyHighScores === 'object'
+          ? { ...parsed.dailyHighScores }
+          : {},
     };
   } catch {
     return fallback;
@@ -92,6 +138,71 @@ function saveStoredProfile(profile: PilotProfile): void {
     window.localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profile));
   } catch {
     // Ignore storage quota or privacy-mode restrictions cleanly
+  }
+}
+
+function loadStoredModFlags(): Act2ModFlags {
+  try {
+    const raw = window.localStorage.getItem(ACT2_MODS_STORAGE_KEY);
+    if (!raw) return cloneModFlags(DEFAULT_ACT2_MOD_FLAGS);
+    const parsed = JSON.parse(raw) as Partial<Act2ModFlags>;
+    if (!parsed || typeof parsed !== 'object') {
+      return cloneModFlags(DEFAULT_ACT2_MOD_FLAGS);
+    }
+    return cloneModFlags({
+      ...DEFAULT_ACT2_MOD_FLAGS,
+      ...parsed,
+      shaderFx: {
+        ...DEFAULT_SHADER_FX,
+        ...(parsed.shaderFx ?? {}),
+      },
+    });
+  } catch {
+    return cloneModFlags(DEFAULT_ACT2_MOD_FLAGS);
+  }
+}
+
+function saveStoredModFlags(flags: Act2ModFlags): void {
+  try {
+    window.localStorage.setItem(ACT2_MODS_STORAGE_KEY, JSON.stringify(flags));
+  } catch {
+    // ignore
+  }
+}
+
+function loadStoredCustomPalette(): PaletteDefinition | null {
+  try {
+    const raw = window.localStorage.getItem(ACT2_CUSTOM_PALETTE_KEY);
+    if (!raw) return null;
+    return sanitizeCustomPalette(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredCustomPalette(palette: PaletteDefinition): void {
+  try {
+    window.localStorage.setItem(ACT2_CUSTOM_PALETTE_KEY, JSON.stringify(palette));
+  } catch {
+    // ignore
+  }
+}
+
+function loadStoredPbGhost(): ReplayRecording | null {
+  try {
+    const raw = window.localStorage.getItem(ACT2_PB_GHOST_KEY);
+    if (!raw) return null;
+    return parseReplayJson(raw);
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredPbGhost(recording: ReplayRecording): void {
+  try {
+    window.localStorage.setItem(ACT2_PB_GHOST_KEY, serializeReplay(recording));
+  } catch {
+    // ignore
   }
 }
 
@@ -130,17 +241,39 @@ async function bootstrap(): Promise<void> {
   const vault = await vaultLoader.load();
 
   const storedProfile = loadStoredProfile();
-  const modRegistry = new ModRegistry();
+  let modFlags = loadStoredModFlags();
+  let pbGhostReplay = loadStoredPbGhost();
+
+  const modRegistry = new ModRegistry(!modFlags.moddedEnabled);
   const sim = new Simulation(vault.data, modRegistry, storedProfile);
 
   const renderer = new WebGL2Renderer();
   renderer.init(canvas, vault);
+
+  for (const bonus of ACT2_BONUS_PALETTES) {
+    renderer.registerCustomPalette(bonus);
+  }
 
   const hangar = new HangarController({
     initialPaletteId: storedProfile.selectedPaletteId || DEFAULT_PALETTE_ID,
     vaultSource: vault.data.vaultSource,
     totalMissionsCount: vault.data.global.missions.length,
   });
+
+  const savedCustomPalette = loadStoredCustomPalette();
+  if (savedCustomPalette) {
+    hangar.getPaletteStudio().setPalette(savedCustomPalette);
+    hangar.registerCustomPalette(savedCustomPalette);
+    renderer.registerCustomPalette(savedCustomPalette);
+  }
+
+  sim.setModFlags(modFlags);
+  hangar.setModFlags(modFlags);
+  renderer.setShaderFx(modFlags.moddedEnabled ? modFlags.shaderFx : DEFAULT_SHADER_FX);
+  if (pbGhostReplay) {
+    sim.setGhostReplay(pbGhostReplay);
+  }
+
   hangar.syncPaletteFromProfile(
     storedProfile.selectedPaletteId,
     storedProfile.completedMissions.length,
@@ -166,6 +299,7 @@ async function bootstrap(): Promise<void> {
   // Input state
   const keysDown = new Set<string>();
   const debugInputOverride: Partial<InputState> = {};
+  const debugP2InputOverride: Partial<InputState> = {};
   let prevGamepadMask = 0;
 
   let prevSnapshot: SimSnapshot = sim.getSnapshot();
@@ -191,10 +325,43 @@ async function bootstrap(): Promise<void> {
       prof.unlockedEngines.length,
       prof.sfmtUnlocked,
       prof.stats.sorties,
+      prof.dailyHighScores ?? {},
     ]);
     if (sig !== lastSavedSignature) {
       lastSavedSignature = sig;
       saveStoredProfile(prof);
+    }
+  };
+
+  const applyModFlags = (partial: Partial<Act2ModFlags>): void => {
+    const merged = cloneModFlags({
+      ...modFlags,
+      ...partial,
+      shaderFx: {
+        ...modFlags.shaderFx,
+        ...(partial.shaderFx ?? {}),
+      },
+    });
+    modFlags = merged;
+    sim.setModFlags(merged);
+    hangar.setModFlags(merged);
+    renderer.setShaderFx(merged.moddedEnabled ? merged.shaderFx : DEFAULT_SHADER_FX);
+    saveStoredModFlags(merged);
+    currSnapshot = sim.getSnapshot();
+    prevSnapshot = currSnapshot;
+    persistCurrentProfile();
+  };
+
+  const maybeUpdatePbGhost = (snap: SimSnapshot): void => {
+    if (snap.phase !== 'gameover' || snap.score <= 0) return;
+    if (modFlags.moddedEnabled && modFlags.multiplayerMode === 'dogfight1v1') return;
+    const rec = sim.getReplay();
+    if (!rec.frames || rec.frames.length === 0) return;
+    const prevBest = pbGhostReplay?.finalScore ?? 0;
+    if (rec.finalScore >= prevBest) {
+      pbGhostReplay = rec;
+      saveStoredPbGhost(rec);
+      sim.setGhostReplay(rec);
     }
   };
 
@@ -206,23 +373,80 @@ async function bootstrap(): Promise<void> {
 
   const applyPaletteId = (paletteId: string): void => {
     hangar.setPaletteById(paletteId);
-    renderer.setPalette(hangar.getSelectedPalette().id);
+    const selected = hangar.getSelectedPalette();
+    renderer.registerCustomPalette(selected);
+    renderer.setPalette(selected.id);
     const prof = sim.getProfile();
     prof.selectedPaletteId = renderer.getPalette().id;
     sim.setProfile(prof);
     persistCurrentProfile();
   };
 
+  const applyCustomPalette = (palette: PaletteDefinition): void => {
+    const sanitized = sanitizeCustomPalette(palette);
+    if (!sanitized) return;
+    hangar.getPaletteStudio().setPalette(sanitized);
+    hangar.registerCustomPalette(sanitized);
+    renderer.registerCustomPalette(sanitized);
+    saveStoredCustomPalette(sanitized);
+    applyPaletteId(sanitized.id);
+  };
+
+  const launchCurrentSortie = (explicitSeed?: number): void => {
+    const snap = sim.getSnapshot();
+    if (pbGhostReplay && modFlags.moddedEnabled && modFlags.replayGhost) {
+      sim.setGhostReplay(pbGhostReplay);
+    }
+    sim.launch(snap.player.loadout, snap.mode, explicitSeed);
+    currSnapshot = sim.getSnapshot();
+    prevSnapshot = currSnapshot;
+    audio.playSfx('sndlaunch');
+    audio.syncFromSnapshot(currSnapshot);
+    persistCurrentProfile();
+  };
+
   const handleHangarKeyAction = (code: string): boolean => {
     const snap = sim.getSnapshot();
 
+    // 1. Live Palette Studio takes priority when open
+    if (hangar.getPaletteStudio().isOpen()) {
+      const res = hangar.handlePaletteStudioKey(code);
+      if (!res.handled) return false;
+      audio.playSfx(res.cue);
+      if (res.changed || res.saved) {
+        applyCustomPalette(res.palette);
+      }
+      return true;
+    }
+
+    // 2. Act II Mod Deck overlay inside Hangar
+    if (hangar.isModDeckOpen()) {
+      const res = hangar.handleModDeckKey(code, modFlags, {
+        onFlagsChange: (nextFlags) => {
+          applyModFlags(nextFlags);
+        },
+        onShaderFxChange: (fx) => {
+          renderer.setShaderFx(modFlags.moddedEnabled ? fx : DEFAULT_SHADER_FX);
+        },
+        onOpenPaletteStudio: () => {
+          const studioPal = hangar.getPaletteStudio().getPalette();
+          applyCustomPalette(studioPal);
+        },
+      });
+      if (!res.handled) return false;
+      audio.playSfx(res.cue);
+      return true;
+    }
+
+    // 3. Toggle Mod Deck directly from Hangar with Tab
+    if (code === 'Tab') {
+      hangar.toggleModDeck(true);
+      audio.playSfx('sndswap');
+      return true;
+    }
+
     if (code === 'KeyX' || code === 'Enter') {
-      sim.launch(snap.player.loadout, snap.mode);
-      currSnapshot = sim.getSnapshot();
-      prevSnapshot = currSnapshot;
-      audio.playSfx('sndlaunch');
-      audio.syncFromSnapshot(currSnapshot);
-      persistCurrentProfile();
+      launchCurrentSortie();
       return true;
     }
 
@@ -278,7 +502,8 @@ async function bootstrap(): Promise<void> {
       e.code === 'ArrowDown' ||
       e.code === 'ArrowLeft' ||
       e.code === 'ArrowRight' ||
-      e.code === 'Space'
+      e.code === 'Space' ||
+      e.code === 'Tab'
     ) {
       e.preventDefault();
     }
@@ -323,6 +548,17 @@ async function bootstrap(): Promise<void> {
         debugApi.spawnEnemy('Fighter', snap.player.x + 100, snap.player.y - 40);
         return;
       }
+      if (e.code === 'F2' && modFlags.moddedEnabled && modFlags.arsenalBosses) {
+        e.preventDefault();
+        debugApi.spawnEnemy('Dreadnought', snap.player.x + 260, 0);
+        debugApi.spawnEnemy('SkyCarrier', snap.player.x - 240, -420);
+        return;
+      }
+    }
+
+    if (snap.phase === 'hangar') {
+      handleHangarKeyAction(e.code);
+      return;
     }
 
     if (e.code === 'KeyP' || e.code === 'Escape') {
@@ -355,19 +591,9 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    if (snap.phase === 'hangar') {
-      handleHangarKeyAction(e.code);
-      return;
-    }
-
     if (snap.phase === 'gameover') {
       if (e.code === 'Enter' || e.code === 'KeyX' || e.code === 'Space' || e.code === 'KeyZ') {
-        sim.launch(snap.player.loadout, snap.mode);
-        currSnapshot = sim.getSnapshot();
-        prevSnapshot = currSnapshot;
-        audio.playSfx('sndlaunch');
-        audio.syncFromSnapshot(currSnapshot);
-        persistCurrentProfile();
+        launchCurrentSortie();
       } else if (e.code === 'KeyH' || e.code === 'Backspace') {
         sim.returnToHangar();
         currSnapshot = sim.getSnapshot();
@@ -387,22 +613,41 @@ async function bootstrap(): Promise<void> {
     keysDown.clear();
   });
 
-  const pollGamepad = (): InputState => {
-    const gpInput: InputState = { left: false, right: false, thrust: false, fire: false };
+  const readGamepadSlot = (slotIndex: number): {
+    input: InputState;
+    pad: Gamepad | null;
+  } => {
+    const input: InputState = { left: false, right: false, thrust: false, fire: false };
     if (typeof navigator === 'undefined' || typeof navigator.getGamepads !== 'function') {
-      return gpInput;
+      return { input, pad: null };
     }
     const pads = navigator.getGamepads();
-    let pad: Gamepad | null = null;
+    const connected: Gamepad[] = [];
     for (let i = 0; i < pads.length; i++) {
-      if (pads[i]?.connected) {
-        pad = pads[i] ?? null;
-        break;
-      }
+      const p = pads[i];
+      if (p?.connected) connected.push(p);
     }
+    const pad = connected[slotIndex] ?? null;
+    if (!pad) return { input, pad: null };
+
+    const axX = pad.axes[0] ?? 0;
+    const axY = pad.axes[1] ?? 0;
+    const btn = (idx: number): boolean => Boolean(pad.buttons[idx]?.pressed);
+    input.left = btn(14) || axX < -0.35;
+    input.right = btn(15) || axX > 0.35;
+    input.thrust = btn(12) || axY < -0.5 || btn(0) || btn(7);
+    input.fire = btn(2) || btn(1) || btn(5);
+    return { input, pad };
+  };
+
+  const pollGamepad = (): { p1: InputState; p2: InputState } => {
+    const slot0 = readGamepadSlot(0);
+    const slot1 = readGamepadSlot(1);
+
+    const pad = slot0.pad;
     if (!pad) {
       prevGamepadMask = 0;
-      return gpInput;
+      return { p1: slot0.input, p2: slot1.input };
     }
 
     const axX = pad.axes[0] ?? 0;
@@ -415,10 +660,8 @@ async function bootstrap(): Promise<void> {
     const right = btn(15) || axX > 0.35;
     const aBtn = btn(0);
     const bBtn = btn(1);
-    const xBtn = btn(2);
-    const rbBtn = btn(5);
-    const rtBtn = btn(7);
     const startBtn = btn(9);
+    const selectBtn = btn(8);
 
     const mask =
       (up ? 1 : 0) |
@@ -427,7 +670,8 @@ async function bootstrap(): Promise<void> {
       (right ? 8 : 0) |
       (aBtn ? 16 : 0) |
       (startBtn ? 32 : 0) |
-      (bBtn ? 64 : 0);
+      (bBtn ? 64 : 0) |
+      (selectBtn ? 128 : 0);
     const rising = mask & ~prevGamepadMask;
     prevGamepadMask = mask;
 
@@ -435,18 +679,16 @@ async function bootstrap(): Promise<void> {
     if (rising !== 0) {
       unlockAudio();
       if (snap.phase === 'hangar') {
-        if (rising & 1) handleHangarKeyAction('ArrowUp');
+        if (rising & 128) handleHangarKeyAction('Tab');
+        else if (rising & 1) handleHangarKeyAction('ArrowUp');
         else if (rising & 2) handleHangarKeyAction('ArrowDown');
         else if (rising & 4) handleHangarKeyAction('ArrowLeft');
         else if (rising & 8) handleHangarKeyAction('ArrowRight');
         else if (rising & (16 | 32)) handleHangarKeyAction('Enter');
+        else if (rising & 64) handleHangarKeyAction('Escape');
       } else if (snap.phase === 'gameover') {
         if (rising & (16 | 32)) {
-          sim.launch(snap.player.loadout, snap.mode);
-          currSnapshot = sim.getSnapshot();
-          prevSnapshot = currSnapshot;
-          audio.playSfx('sndlaunch');
-          audio.syncFromSnapshot(currSnapshot);
+          launchCurrentSortie();
         } else if (rising & 64) {
           sim.returnToHangar();
           currSnapshot = sim.getSnapshot();
@@ -461,32 +703,91 @@ async function bootstrap(): Promise<void> {
       }
     }
 
-    gpInput.left = left;
-    gpInput.right = right;
-    gpInput.thrust = up || aBtn || rtBtn;
-    gpInput.fire = xBtn || bBtn || rbBtn;
-    return gpInput;
+    return { p1: slot0.input, p2: slot1.input };
   };
 
-  const sampleFlightInput = (): InputState => {
+  const sampleFlightInputs = (): { p1: InputState; p2: InputState } => {
     const gp = pollGamepad();
-    return {
+    const isHuman2P =
+      modFlags.moddedEnabled &&
+      modFlags.multiplayerMode !== 'solo' &&
+      !modFlags.p2BotEnabled;
+
+    if (isHuman2P) {
+      // Split-keyboard + dual-gamepad: P1 = WASD + F/Space/LShift, P2 = Arrows + Numpad0/Slash/M/Enter
+      const p1: InputState = {
+        left: debugInputOverride.left ?? (keysDown.has('KeyA') || gp.p1.left),
+        right: debugInputOverride.right ?? (keysDown.has('KeyD') || gp.p1.right),
+        thrust: debugInputOverride.thrust ?? (keysDown.has('KeyW') || gp.p1.thrust),
+        fire:
+          debugInputOverride.fire ??
+          (keysDown.has('KeyF') ||
+            keysDown.has('Space') ||
+            keysDown.has('ShiftLeft') ||
+            gp.p1.fire),
+      };
+      const p2: InputState = {
+        left: debugP2InputOverride.left ?? (keysDown.has('ArrowLeft') || gp.p2.left),
+        right: debugP2InputOverride.right ?? (keysDown.has('ArrowRight') || gp.p2.right),
+        thrust: debugP2InputOverride.thrust ?? (keysDown.has('ArrowUp') || gp.p2.thrust),
+        fire:
+          debugP2InputOverride.fire ??
+          (keysDown.has('Numpad0') ||
+            keysDown.has('Slash') ||
+            keysDown.has('KeyM') ||
+            keysDown.has('Enter') ||
+            gp.p2.fire),
+      };
+      return { p1, p2 };
+    }
+
+    // 100% Vanilla control mapping preserved for Solo + Bot-partner 2P
+    const p1: InputState = {
       left:
         debugInputOverride.left ??
-        (keysDown.has('ArrowLeft') || keysDown.has('KeyA') || gp.left),
+        (keysDown.has('ArrowLeft') || keysDown.has('KeyA') || gp.p1.left),
       right:
         debugInputOverride.right ??
-        (keysDown.has('ArrowRight') || keysDown.has('KeyD') || gp.right),
+        (keysDown.has('ArrowRight') || keysDown.has('KeyD') || gp.p1.right),
       thrust:
         debugInputOverride.thrust ??
-        (keysDown.has('ArrowUp') || keysDown.has('KeyW') || gp.thrust),
+        (keysDown.has('ArrowUp') || keysDown.has('KeyW') || gp.p1.thrust),
       fire:
         debugInputOverride.fire ??
         (keysDown.has('KeyZ') ||
           keysDown.has('Space') ||
           keysDown.has('KeyJ') ||
-          gp.fire),
+          gp.p1.fire),
     };
+
+    let p2: InputState = { left: false, right: false, thrust: false, fire: false };
+    if (modFlags.moddedEnabled && modFlags.multiplayerMode !== 'solo') {
+      if (
+        debugP2InputOverride.left !== undefined ||
+        debugP2InputOverride.right !== undefined ||
+        debugP2InputOverride.thrust !== undefined ||
+        debugP2InputOverride.fire !== undefined
+      ) {
+        p2 = {
+          left: debugP2InputOverride.left ?? false,
+          right: debugP2InputOverride.right ?? false,
+          thrust: debugP2InputOverride.thrust ?? false,
+          fire: debugP2InputOverride.fire ?? false,
+        };
+      } else if (modFlags.multiplayerMode === 'dogfight1v1' && currSnapshot.player2) {
+        p2 = computeDogfightBotInput(
+          currSnapshot.player2,
+          currSnapshot.player,
+          currSnapshot.seaLevel,
+          currSnapshot.spaceLevel,
+          currSnapshot.projectiles,
+        );
+      } else {
+        p2 = computeCoopP2BotInput(currSnapshot);
+      }
+    }
+
+    return { p1, p2 };
   };
 
   let accumulator = 0;
@@ -494,9 +795,18 @@ async function bootstrap(): Promise<void> {
   let elapsedSec = 0;
 
   const renderFrame = (alpha: number): void => {
+    const daily = computeDailySeed();
+    const dailyBest = currSnapshot.profile.dailyHighScores?.[daily.dateId] ?? 0;
     const hangarUi =
       currSnapshot.phase === 'hangar'
-        ? hangar.buildUiState(currSnapshot, vault.data.vaultSource)
+        ? hangar.buildUiState(currSnapshot, vault.data.vaultSource, {
+            modFlags,
+            dailySeedId: daily.dateId,
+            dailyBestScore: dailyBest,
+            pbGhostScore: pbGhostReplay?.finalScore ?? 0,
+            p2Loadout: sim.getP2Loadout(),
+            p2PlaneName: currSnapshot.player2?.planeName,
+          })
         : null;
     renderer.render(currSnapshot, prevSnapshot, alpha, hangarUi, elapsedSec);
     telemetryHud.update({
@@ -508,10 +818,28 @@ async function bootstrap(): Promise<void> {
     });
   };
 
-  const stepOneTick = (input: InputState): void => {
+  const stepOneTick = (p1Input: InputState, p2Input?: InputState): void => {
     prevSnapshot = currSnapshot;
-    currSnapshot = sim.step(input);
+    if (modFlags.moddedEnabled && modFlags.multiplayerMode !== 'solo') {
+      const resolvedP2 =
+        p2Input ??
+        (modFlags.multiplayerMode === 'dogfight1v1' && currSnapshot.player2
+          ? computeDogfightBotInput(
+              currSnapshot.player2,
+              currSnapshot.player,
+              currSnapshot.seaLevel,
+              currSnapshot.spaceLevel,
+              currSnapshot.projectiles,
+            )
+          : computeCoopP2BotInput(currSnapshot));
+      currSnapshot = sim.step2P(p1Input, resolvedP2);
+    } else {
+      currSnapshot = sim.step(p1Input);
+    }
     audio.syncFromSnapshot(currSnapshot);
+    if (currSnapshot.phase === 'gameover' && prevSnapshot.phase !== 'gameover') {
+      maybeUpdatePbGhost(currSnapshot);
+    }
     if (
       currSnapshot.completedMissionsThisSortie.length > 0 ||
       currSnapshot.phase !== prevSnapshot.phase
@@ -527,9 +855,9 @@ async function bootstrap(): Promise<void> {
     accumulator += dt;
 
     let subSteps = 0;
-    const input = sampleFlightInput();
+    const { p1, p2 } = sampleFlightInputs();
     while (accumulator >= FIXED_DT && subSteps < MAX_SUB_STEPS) {
-      stepOneTick(input);
+      stepOneTick(p1, p2);
       accumulator -= FIXED_DT;
       subSteps += 1;
     }
@@ -577,6 +905,7 @@ async function bootstrap(): Promise<void> {
         healing: snap.player.healing,
         underwater: snap.player.underwater,
         inSpace: snap.player.inSpace,
+        shieldReady: snap.player.shieldReady,
       },
       enemyCount: snap.enemies.length,
       enemyCountsByKind,
@@ -591,16 +920,25 @@ async function bootstrap(): Promise<void> {
       webglErrors: fm.webglErrors,
       consoleErrorCount,
       postUniforms: renderer.getLastPostUniforms(),
+      modFlags: cloneModFlags(modFlags),
+      modDeckOpen: hangar.isModDeckOpen(),
+      paletteStudioOpen: hangar.getPaletteStudio().isOpen(),
+      ghostActive: Boolean(snap.ghostPose),
+      dailySeedId: snap.dailySeedId ?? null,
+      player2Alive: Boolean(snap.player2?.alive),
+      dogfight: snap.dogfight ?? null,
+      shockwaveCount: snap.shockwaves?.length ?? 0,
     };
   };
 
   const debugApi: RauserDebugApi = {
     getState: buildDebugState,
     setLoadout(w: number, b: number, e: number): void {
+      const maxPart = modFlags.moddedEnabled && modFlags.arsenalBosses ? 8 : 5;
       const loadout: Loadout = {
-        weapon: clampPartIndex(w),
-        body: clampPartIndex(b),
-        engine: clampPartIndex(e),
+        weapon: clampPartIndex(w, maxPart),
+        body: clampPartIndex(b, maxPart),
+        engine: clampPartIndex(e, maxPart),
       };
       sim.setLoadout(loadout);
       currSnapshot = sim.getSnapshot();
@@ -620,12 +958,7 @@ async function bootstrap(): Promise<void> {
       renderFrame(1);
     },
     launch(seed?: number): void {
-      const snap = sim.getSnapshot();
-      sim.launch(snap.player.loadout, snap.mode, seed);
-      currSnapshot = sim.getSnapshot();
-      prevSnapshot = currSnapshot;
-      audio.syncFromSnapshot(currSnapshot);
-      persistCurrentProfile();
+      launchCurrentSortie(seed);
       renderFrame(1);
     },
     returnToHangar(): void {
@@ -649,6 +982,16 @@ async function bootstrap(): Promise<void> {
       else debugInputOverride.thrust = partial.thrust;
       if (partial.fire === undefined) delete debugInputOverride.fire;
       else debugInputOverride.fire = partial.fire;
+    },
+    setP2Input(partial: Partial<InputState>): void {
+      if (partial.left === undefined) delete debugP2InputOverride.left;
+      else debugP2InputOverride.left = partial.left;
+      if (partial.right === undefined) delete debugP2InputOverride.right;
+      else debugP2InputOverride.right = partial.right;
+      if (partial.thrust === undefined) delete debugP2InputOverride.thrust;
+      else debugP2InputOverride.thrust = partial.thrust;
+      if (partial.fire === undefined) delete debugP2InputOverride.fire;
+      else debugP2InputOverride.fire = partial.fire;
     },
     stepFrames(n: number, input?: Partial<InputState>): void {
       const count = Math.max(0, Math.floor(n));
@@ -688,9 +1031,15 @@ async function bootstrap(): Promise<void> {
     resetProfile(): void {
       try {
         window.localStorage.removeItem(PROFILE_STORAGE_KEY);
+        window.localStorage.removeItem(ACT2_MODS_STORAGE_KEY);
+        window.localStorage.removeItem(ACT2_CUSTOM_PALETTE_KEY);
+        window.localStorage.removeItem(ACT2_PB_GHOST_KEY);
       } catch {
         // ignore
       }
+      pbGhostReplay = null;
+      sim.setGhostReplay(null);
+      applyModFlags(DEFAULT_ACT2_MOD_FLAGS);
       sim.resetProfile();
       applyPaletteId(DEFAULT_PALETTE_ID);
       currSnapshot = sim.getSnapshot();
@@ -707,6 +1056,53 @@ async function bootstrap(): Promise<void> {
     },
     toggleDebugHud(visible?: boolean): void {
       telemetryHud.toggle(visible);
+      renderFrame(1);
+    },
+    setModFlags(flags: Partial<Act2ModFlags>): void {
+      applyModFlags(flags);
+      renderFrame(1);
+    },
+    getModFlags(): Act2ModFlags {
+      return cloneModFlags(modFlags);
+    },
+    toggleModDeck(open?: boolean): void {
+      hangar.toggleModDeck(open);
+      renderFrame(1);
+    },
+    togglePaletteStudio(open?: boolean): void {
+      const next = hangar.togglePaletteStudio(open);
+      if (next) {
+        applyCustomPalette(hangar.getPaletteStudio().getPalette());
+      }
+      renderFrame(1);
+    },
+    setCustomPalette(palette: PaletteDefinition): void {
+      applyCustomPalette(palette);
+      renderFrame(1);
+    },
+    exportReplay(): string {
+      return serializeReplay(sim.getReplay());
+    },
+    importGhostReplay(json: string): boolean {
+      const parsed = parseReplayJson(json);
+      if (!parsed) return false;
+      pbGhostReplay = parsed;
+      saveStoredPbGhost(parsed);
+      sim.setGhostReplay(parsed);
+      renderFrame(1);
+      return true;
+    },
+    getDailySeed(): { dateId: string; seed: number } {
+      return computeDailySeed();
+    },
+    setP2Loadout(w: number, b: number, e: number): void {
+      const maxPart = modFlags.moddedEnabled && modFlags.arsenalBosses ? 8 : 5;
+      sim.setP2Loadout({
+        weapon: clampPartIndex(w, maxPart),
+        body: clampPartIndex(b, maxPart),
+        engine: clampPartIndex(e, maxPart),
+      });
+      currSnapshot = sim.getSnapshot();
       renderFrame(1);
     },
   };
