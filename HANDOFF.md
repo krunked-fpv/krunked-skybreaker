@@ -1,22 +1,18 @@
-# krunkedLUFTRAUSERS — Act I Sprint Handoff
+# krunkedLUFTRAUSERS — Act II Sprint Handoff
 
-## 1. Shipped 1:1 Capabilities & Verified Parity Metrics
-- **Deterministic 60Hz Core (`src/sim/`):** Pure, zero-DOM fixed-timestep (`1/60s`, `Mulberry32` PRNG) aerodynamics (`turnspeed` vs `turnspeedboost`, laser `1/3` turn divisor), cease-fire-only healing with `fireCooldown` lockout, sea/space hazards, all 6 Weapons / 6 Bodies / 6 Engines, 126 aircraft (`125` named + `[5,5,5]` `URAUSER`), 10 enemy types (Normal + SFMT), spawn budgets, hitstop, `x1..x20 MAX` combo timer, 90-mission progression, Ace Pilot Bot, and bitmask replay recording.
-- **WebGL2 `600x400` Pipeline (`src/render/`, `src/ui/`):** Dual `NEAREST` FBOs, GLSL ES 3.00 `batch`/`post`/`font`/`combofont`/`pauselines` shaders (`2x2` health circle, water palette remapping), 12 palettes, projector Hangar, and hidden-by-default backtick (`` ` ``) Telemetry HUD.
-- **Phase-Locked 3-Stem Audio (`src/audio/`):** Sample-accurate `AudioBufferSourceNode` epoch mixer (`0.000ms` inter-stem drift), 125-combo bass/drums/lead matrix, low-HP alarm stem, spatial `*dist` SFX bus, and procedural synth fallbacks.
-- **Empirical Verification:** `npm run typecheck` (`0` errors), `npm test` (`61/61`), `npm run test:parity` (`25/25` live Steam proofs + 12 × 3,600-tick Ace Bot sorties + bit-identical replays), `npm run audit:parity` (`19/19`, `0` git-hygiene violations, `0` JSON diffs), live browser sortie at `144.0 FPS` (`7.1ms` p95), `0` GL/console errors, reload persistence verified.
+## 1. Shipped Capabilities & Verified Parity Metrics
+- **Act I Vanilla 1:1 Lock (`VANILLA_1TO1_PROFILE`):** Default profile locks `ModRegistry` (`vanillaLocked = true`) so flight controls, 60Hz `Mulberry32` aerodynamics, 126 aircraft (`125` + `[5,5,5]` `URAUSER`), 10 Normal/SFMT enemies, 90 missions, `600x400` `NEAREST` palette/water/health shaders, and phase-locked 3-stem Web Audio remain bit-identically 1:1 with Steam data.
+- **Act II Mod Packs (Hangar `Tab` -> `ACT II MOD DECK`):**
+  1. **Expanded Arsenal & Mega-Bosses (`src/sim/mod-packs.ts`):** Custom weapons (`6` Railgun, `7` Flak 6-shard airburst, `8` Chain Lightning 3-target arc), bodies (`6` Aegis shield, `7` Vampire lifesteal, `8` Overclock), engines (`6` Afterburner, `7` Vector, `8` Ion), and Mega-Bosses (`Dreadnought`, `SkyCarrier`, `AceSquadron`) with identical vanilla flight controls.
+  2. **Deterministic Replay Ghost & Daily Seed (`src/sim/replay-ghost.ts`):** Isolated-PRNG `GhostRunner` rendering your Personal Best silhouette & trail, UTC `YYYYMMDD` Daily Seed sorties, and fuzz-hardened replay JSON export/import.
+  3. **Custom Shader & Live Palette Studio (`src/render/shaders.ts`, `src/ui/palette-studio.ts`):** Toggleable CRT Scanlines, Phosphor Bloom, Speed-Warp Vignette, and Screen-Space Shockwaves in `outpass` (strictly zeroed in Vanilla 1:1), 4 bonus neon palettes, and an 8-slot live RGB Palette Studio.
+  4. **Local 2P Co-op & 1v1 Dogfight Arena (`src/sim/simulation.ts`, `src/main.ts`):** Co-op waves with 300-tick partner respawn and Best-of-5 1v1 Dogfight Arena (Bot wingman/rival or split-keyboard `WASD+F/Space` vs `Arrows+M/Num0` & dual Gamepad).
+- **Empirical Verification:** `npm run typecheck` (`0` errors), `npm test` (`89/89`), `npm run test:playtesters` (**`100/100`** adversarial playtesters `PT-001`..`PT-100`), `npm run test:parity` (`25/25` live Steam E2E proofs), `npm run audit:parity` (`19/19`, `0` git-hygiene violations, `0` JSON diffs), live Chrome WebGL2 playtests at `144.0 FPS` (`7.3ms` p95), `0.000ms` audio drift, `0` GL/console errors, clean reload persistence, and spotless Vanilla 1:1 reset.
 
-## 2. Runtime Operation
-- **Steam Vault (`steam-local`):** `npm start` reads `LUFTRAUSERS_STEAM_DIR` (Windows default: `C:\Program Files (x86)\Steam\steamapps\common\Luftrausers\data`) strictly read-only via Vite middleware; zero Steam assets are tracked in git.
-- **Procedural Fallback (`procedural-fallback`):** Activates automatically without Steam, providing matching vanilla stats, 8-level vector atlases, bitmap fonts, and synth stems/SFX.
-- **CLI:** `npm start` | `npm run build` | `npm run typecheck` | `npm test` | `npm run test:parity` | `npm run audit:parity`.
+## 2. Runtime Operation & CLI
+- `npm start` mounts local Steam `data/` read-only (`LUFTRAUSERS_STEAM_DIR`, Windows default) or falls back cleanly to deterministic procedural vector/synth assets.
+- **CLI:** `npm start` | `npm run build` | `npm run typecheck` | `npm test` | `npm run test:playtesters` | `npm run test:parity` | `npm run audit:parity`.
 
-## 3. Known Edge Nuances
-- `sheet1grey.png` is decoded live as 32-bit TGA; proprietary `PCP\0` files (`sheet2grey.png`, `nuke.png`, `fnt*_0.png`) use clean-room procedural 8-level textures aligned to Steam `.json`/`.fnt` metrics.
-- `[5,5,5]` `URAUSER` intentionally renders the authentic `416x300` fortress sprite.
-- QA hotkeys (`F3/F4/F6/F7/F8/F9`) in `src/main.ts` activate only while the hidden Telemetry HUD is open.
-
-## 4. Act II ("Make It Better") Leverage Points
-`VANILLA_1TO1_PROFILE` locks Act I parity inside `ModRegistry` (`vanillaLocked = true`). Unlock `ModRegistry` to build Act II cleanly without vanilla regression:
-- **FPV/Acro Flight Mutators:** Register `FlightMutator`s for acro curves, airmode, and thrust vectoring.
-- **Custom Parts, Bosses & Modes:** Add `customEngines`/`customBodies`/`customWeapons`, boss waves, `customPalettes`, replay ghost sharing, or co-op/dogfight arenas over the pure 60Hz `Simulation`.
+## 3. Act III Extension Seams
+- **FPV / Acro Flight Mutators:** Wire optional Betaflight-style rate/airmode `FlightMutator`s behind `ModRegistry`.
+- **Online Netplay & Leaderboards:** Feed deterministic `ReplayFrame` bitmasks over WebRTC/WebSocket rollback or submit verified Daily Seed replays.
