@@ -35,6 +35,7 @@ export {
   clearStoredProfileKeys,
   cloneStoredModFlags,
   computeCampaignUnlockedProfile,
+  loadExplicitStoredAssetMode,
   loadProgressionLockMode,
   loadStoredAssetMode,
   loadStoredCustomPalette,
