@@ -1,4 +1,10 @@
-import type { EnemyEntity, InputState, SimSnapshot } from '../contracts/sim';
+import type {
+  EnemyEntity,
+  InputState,
+  PlayerState,
+  ProjectileEntity,
+  SimSnapshot,
+} from '../contracts/sim';
 import { clamp, shortestAngleDiffDeg } from './math';
 
 interface ThreatVector {
@@ -6,11 +12,61 @@ interface ThreatVector {
   urgency: number;
 }
 
-function findIncomingThreat(snapshot: SimSnapshot): ThreatVector | null {
-  const { player, projectiles, enemies, seaLevel, spaceLevel } = snapshot;
+interface TargetPosition {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+}
+
+function getWeaponLeadSpeed(weaponId: number): number {
+  switch (weaponId) {
+    case 1:
+      return 42;
+    case 4:
+      return 10;
+    case 3:
+      return 14;
+    case 6:
+      return 38;
+    case 7:
+      return 14;
+    case 8:
+      return 60;
+    default:
+      return 22;
+  }
+}
+
+function getFireEnvelope(weaponId: number): { maxErrDeg: number; maxDist: number } {
+  switch (weaponId) {
+    case 1:
+      return { maxErrDeg: 22, maxDist: 520 };
+    case 3:
+      return { maxErrDeg: 75, maxDist: 620 };
+    case 6:
+      return { maxErrDeg: 18, maxDist: 640 };
+    case 7:
+      return { maxErrDeg: 30, maxDist: 420 };
+    case 8:
+      return { maxErrDeg: 35, maxDist: 260 };
+    default:
+      return { maxErrDeg: 32, maxDist: 580 };
+  }
+}
+
+function findIncomingThreatForPlayer(
+  player: PlayerState,
+  projectiles: readonly ProjectileEntity[],
+  enemies: readonly EnemyEntity[],
+  seaLevel: number,
+  spaceLevel: number,
+  treatOpponentProjectilesAsThreat = false,
+): ThreatVector | null {
   let bestUrgency = 0;
   let bestEscapeX = 0;
   let bestEscapeY = 0;
+  const selfSlot = player.playerIndex ?? 1;
 
   const evaluateThreat = (tx: number, ty: number, tvx: number, tvy: number, radius: number): void => {
     const dx = tx - player.x;
@@ -52,7 +108,10 @@ function findIncomingThreat(snapshot: SimSnapshot): ThreatVector | null {
   };
 
   for (const p of projectiles) {
-    if (p.owner !== 'enemy') continue;
+    const isThreat = treatOpponentProjectilesAsThreat
+      ? p.owner === 'enemy' || (p.ownerPlayer !== undefined && p.ownerPlayer !== selfSlot)
+      : p.owner === 'enemy';
+    if (!isThreat) continue;
     evaluateThreat(p.x, p.y, p.vx, p.vy, p.radius + 8);
   }
   for (const e of enemies) {
@@ -69,8 +128,11 @@ function findIncomingThreat(snapshot: SimSnapshot): ThreatVector | null {
   };
 }
 
-function selectTarget(snapshot: SimSnapshot): EnemyEntity | null {
-  const { player, enemies, seaLevel } = snapshot;
+function selectEnemyTargetForPlayer(
+  player: PlayerState,
+  enemies: readonly EnemyEntity[],
+  seaLevel: number,
+): EnemyEntity | null {
   const waterproof = player.engineSpec.waterproof;
   let best: EnemyEntity | null = null;
   let bestScore = Infinity;
@@ -92,17 +154,13 @@ function selectTarget(snapshot: SimSnapshot): EnemyEntity | null {
   return best;
 }
 
-/**
- * Pure 60Hz autonomous Ace Pilot controller.
- * Avoids sea (unless waterproof) and space ceiling (y < -1100), dodges projectiles,
- * halts firing to heal when HP < 48% (up to 85%), and leads targets using stall-whip turns.
- */
-export function computeAutopilotInput(snapshot: SimSnapshot): InputState {
-  if (snapshot.phase !== 'playing' || !snapshot.player.alive) {
-    return { left: false, right: false, thrust: false, fire: false };
-  }
-
-  const { player, seaLevel, spaceLevel } = snapshot;
+function computeFlightAndFireInput(
+  player: PlayerState,
+  target: TargetPosition | null,
+  threat: ThreatVector | null,
+  seaLevel: number,
+  spaceLevel: number,
+): InputState {
   const waterproof = player.engineSpec.waterproof;
   const hpRatio = player.maxHealth > 0 ? player.health / player.maxHealth : 1;
   const shouldHeal = hpRatio < 0.48 || (player.healing && hpRatio < 0.85);
@@ -137,9 +195,6 @@ export function computeAutopilotInput(snapshot: SimSnapshot): InputState {
       inhibitFire = true;
     }
   } else {
-    const threat = findIncomingThreat(snapshot);
-    const target = selectTarget(snapshot);
-
     if (threat && (shouldHeal || threat.urgency > 0.85)) {
       desiredAngleDeg = threat.escapeAngleDeg;
       forceThrust = true;
@@ -151,19 +206,12 @@ export function computeAutopilotInput(snapshot: SimSnapshot): InputState {
       forceThrust = Math.hypot(player.vx, player.vy) < 4.5;
     } else if (target) {
       const dist = Math.hypot(target.x - player.x, target.y - player.y);
-      const projSpeed =
-        player.weaponSpec.id === 1
-          ? 42
-          : player.weaponSpec.id === 4
-            ? 10
-            : player.weaponSpec.id === 3
-              ? 14
-              : 22;
+      const projSpeed = getWeaponLeadSpeed(player.weaponSpec.id);
       const leadTicks = Math.min(22, dist / projSpeed);
       const aimX = target.x + target.vx * leadTicks;
       let aimY = target.y + target.vy * leadTicks;
 
-      // Avoid diving straight into ocean surface when chasing boats.
+      // Avoid diving straight into ocean surface when chasing low targets.
       if (!waterproof && player.y > seaLevel - 160 && aimY > seaLevel - 40) {
         aimY = seaLevel - 120;
       }
@@ -198,23 +246,72 @@ export function computeAutopilotInput(snapshot: SimSnapshot): InputState {
   }
 
   let fire = false;
-  if (!inhibitFire) {
-    const target = selectTarget(snapshot);
-    if (target) {
-      const dist = Math.hypot(target.x - player.x, target.y - player.y);
-      const targetAngle =
-        (Math.atan2(target.y - player.y, target.x - player.x) * 180) / Math.PI;
-      const fireErr = Math.abs(shortestAngleDiffDeg(player.angleDeg, targetAngle));
-
-      if (player.weaponSpec.id === 1) {
-        fire = fireErr < 22 && dist < 520;
-      } else if (player.weaponSpec.id === 3) {
-        fire = fireErr < 75 && dist < 620;
-      } else {
-        fire = fireErr < 32 && dist < 580;
-      }
-    }
+  if (!inhibitFire && target) {
+    const dist = Math.hypot(target.x - player.x, target.y - player.y);
+    const targetAngle =
+      (Math.atan2(target.y - player.y, target.x - player.x) * 180) / Math.PI;
+    const fireErr = Math.abs(shortestAngleDiffDeg(player.angleDeg, targetAngle));
+    const envelope = getFireEnvelope(player.weaponSpec.id);
+    fire = fireErr < envelope.maxErrDeg && dist < envelope.maxDist;
   }
 
   return { left, right, thrust, fire };
+}
+
+/**
+ * Pure 60Hz autonomous Ace Pilot controller.
+ * Avoids sea (unless waterproof) and space ceiling (y < -1100), dodges projectiles,
+ * halts firing to heal when HP < 48% (up to 85%), and leads targets using stall-whip turns.
+ */
+export function computeAutopilotInput(snapshot: SimSnapshot): InputState {
+  if (snapshot.phase !== 'playing' || !snapshot.player.alive) {
+    return { left: false, right: false, thrust: false, fire: false };
+  }
+
+  const { player, enemies, projectiles, seaLevel, spaceLevel } = snapshot;
+  const threat = findIncomingThreatForPlayer(player, projectiles, enemies, seaLevel, spaceLevel);
+  const target = selectEnemyTargetForPlayer(player, enemies, seaLevel);
+  return computeFlightAndFireInput(player, target, threat, seaLevel, spaceLevel);
+}
+
+/**
+ * Autonomous Player 2 AI controller for Act II 2P Co-op mode.
+ * Uses identical sea/space safety, threat dodging, healing, and lead pursuit for `snapshot.player2`.
+ */
+export function computeCoopP2BotInput(snapshot: SimSnapshot): InputState {
+  if (snapshot.phase !== 'playing' || !snapshot.player2 || !snapshot.player2.alive) {
+    return { left: false, right: false, thrust: false, fire: false };
+  }
+
+  const { player2, enemies, projectiles, seaLevel, spaceLevel } = snapshot;
+  const threat = findIncomingThreatForPlayer(player2, projectiles, enemies, seaLevel, spaceLevel);
+  const target = selectEnemyTargetForPlayer(player2, enemies, seaLevel);
+  return computeFlightAndFireInput(player2, target, threat, seaLevel, spaceLevel);
+}
+
+/**
+ * Autonomous AI controller for P2 in Act II 1v1 Dogfight Arena mode.
+ * Applies sea/space safety, dodges opponent projectiles, heals when low HP, and executes lead pursuit.
+ */
+export function computeDogfightBotInput(
+  self: PlayerState,
+  opponent: PlayerState,
+  seaLevel: number,
+  spaceLevel: number,
+  projectiles: readonly ProjectileEntity[],
+): InputState {
+  if (!self.alive) {
+    return { left: false, right: false, thrust: false, fire: false };
+  }
+
+  const threat = findIncomingThreatForPlayer(
+    self,
+    projectiles,
+    [],
+    seaLevel,
+    spaceLevel,
+    true,
+  );
+  const target: TargetPosition | null = opponent.alive ? opponent : null;
+  return computeFlightAndFireInput(self, target, threat, seaLevel, spaceLevel);
 }
