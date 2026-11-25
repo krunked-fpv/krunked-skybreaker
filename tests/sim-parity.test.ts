@@ -27,6 +27,22 @@ const IDLE_INPUT: InputState = {
   fire: false,
 };
 
+function launchToPlaying(
+  sim: Simulation,
+  loadout: { weapon: PartIndex; body: PartIndex; engine: PartIndex },
+  mode: 'normal' | 'sfmt' = 'normal',
+  seed = 100,
+) {
+  sim.launch(loadout, mode, seed);
+  let snap = sim.getSnapshot();
+  let guard = 0;
+  while (snap.phase === 'launching' && guard < 60) {
+    snap = sim.step(IDLE_INPUT);
+    guard++;
+  }
+  return snap;
+}
+
 function createTestGameDataBundle(): GameDataBundle {
   const originalEngine: EngineSpec = {
     id: 0,
@@ -657,6 +673,24 @@ function createTestGameDataBundle(): GameDataBundle {
           ttlrand: 0,
           scaley: 1,
         },
+        jet_trail: {
+          key: 'jet_trail',
+          spritename: 'fx_jet_trail',
+          depth: -3,
+          imagespeed: 0,
+          imagespeedrand: 0,
+          friction: 0,
+          vspeed: 0,
+          vspeedrand: 0,
+          imageanglerand: 0,
+          initvelocity: 0,
+          initvelocityrand: 0,
+          loop: false,
+          allowbelowsea: true,
+          ttl: 0,
+          ttlrand: 0,
+          scaley: -0.02,
+        },
       },
       explosions: {
         explode_small: {
@@ -777,7 +811,7 @@ describe('Deterministic 60Hz Simulation Parity', () => {
     const sim = new Simulation(data);
 
     // Original engine: 10 deg/tick unboosted, 4 deg/tick boosted
-    sim.launch({ weapon: 0, body: 0, engine: 0 }, 'normal', 100);
+    launchToPlaying(sim, { weapon: 0, body: 0, engine: 0 }, 'normal', 100);
     let snap = sim.step({ left: false, right: true, thrust: false, fire: false });
     expect(snap.player.angleDeg - snap.player.prevAngleDeg).toBeCloseTo(10, 6);
 
@@ -785,7 +819,7 @@ describe('Deterministic 60Hz Simulation Parity', () => {
     expect(snap.player.angleDeg - snap.player.prevAngleDeg).toBeCloseTo(4, 6);
 
     // Superboost engine: 10 deg/tick unboosted, 1 deg/tick boosted
-    sim.launch({ weapon: 0, body: 0, engine: 1 }, 'normal', 100);
+    launchToPlaying(sim, { weapon: 0, body: 0, engine: 1 }, 'normal', 100);
     snap = sim.step({ left: false, right: true, thrust: false, fire: false });
     expect(snap.player.angleDeg - snap.player.prevAngleDeg).toBeCloseTo(10, 6);
 
@@ -793,7 +827,7 @@ describe('Deterministic 60Hz Simulation Parity', () => {
     expect(snap.player.angleDeg - snap.player.prevAngleDeg).toBeCloseTo(1, 6);
 
     // Laser weapon: 1/3 turn rate while firing
-    sim.launch({ weapon: 1, body: 0, engine: 0 }, 'normal', 100);
+    launchToPlaying(sim, { weapon: 1, body: 0, engine: 0 }, 'normal', 100);
     snap = sim.step({ left: false, right: true, thrust: false, fire: true });
     expect(snap.player.angleDeg - snap.player.prevAngleDeg).toBeCloseTo(10 / 3, 6);
 
@@ -804,7 +838,7 @@ describe('Deterministic 60Hz Simulation Parity', () => {
   it('3. Healing lockout while firing vs regeneration during cease-fire', () => {
     const data = createTestGameDataBundle();
     const sim = new Simulation(data);
-    sim.launch({ weapon: 0, body: 0, engine: 0 }, 'normal', 200);
+    launchToPlaying(sim, { weapon: 0, body: 0, engine: 0 }, 'normal', 200);
     sim.damagePlayer(8);
     const damagedHp = sim.getSnapshot().player.health;
     expect(damagedHp).toBe(8);
@@ -842,7 +876,7 @@ describe('Deterministic 60Hz Simulation Parity', () => {
 
     // Standard engine plunged into ocean: loses HP, pitches toward -90, floats back up
     const simOrig = new Simulation(data);
-    simOrig.launch({ weapon: 0, body: 0, engine: 0 }, 'normal', 300);
+    launchToPlaying(simOrig, { weapon: 0, body: 0, engine: 0 }, 'normal', 300);
     // Turn straight down (+90) in 18 ticks (18 * 10 = 180 deg) then thrust into water
     for (let i = 0; i < 18; i++) {
       simOrig.step({ left: false, right: true, thrust: false, fire: false });
@@ -851,8 +885,8 @@ describe('Deterministic 60Hz Simulation Parity', () => {
     let waterDamaged = false;
     let pitchedUpward = false;
     let prevAngleUnderwater: number | null = null;
-    for (let i = 0; i < 50; i++) {
-      const snap = simOrig.step({ left: false, right: false, thrust: i < 12, fire: false });
+    for (let i = 0; i < 90; i++) {
+      const snap = simOrig.step({ left: false, right: false, thrust: i < 42, fire: false });
       if (snap.player.underwater) {
         enteredWater = true;
         if (snap.player.health < snap.player.maxHealth) waterDamaged = true;
@@ -868,13 +902,13 @@ describe('Deterministic 60Hz Simulation Parity', () => {
 
     // Underwater engine (waterproof: true): zero water damage even when submerged
     const simSub = new Simulation(data);
-    simSub.launch({ weapon: 0, body: 0, engine: 3 }, 'normal', 300);
+    launchToPlaying(simSub, { weapon: 0, body: 0, engine: 3 }, 'normal', 300);
     for (let i = 0; i < 18; i++) {
       simSub.step({ left: false, right: true, thrust: false, fire: false });
     }
     let subWentUnderwater = false;
-    for (let i = 0; i < 40; i++) {
-      const snap = simSub.step({ left: false, right: false, thrust: i < 20, fire: false });
+    for (let i = 0; i < 80; i++) {
+      const snap = simSub.step({ left: false, right: false, thrust: i < 55, fire: false });
       if (snap.player.underwater) {
         subWentUnderwater = true;
         expect(snap.player.health).toBe(snap.player.maxHealth);
@@ -884,7 +918,7 @@ describe('Deterministic 60Hz Simulation Parity', () => {
 
     // Space ceiling (y < -1300): pushes vy downward and deals space damage
     const simSpace = new Simulation(data);
-    simSpace.launch({ weapon: 0, body: 0, engine: 0 }, 'normal', 301);
+    launchToPlaying(simSpace, { weapon: 0, body: 0, engine: 0 }, 'normal', 301);
     let enteredSpace = false;
     let spaceDamaged = false;
     for (let i = 0; i < 200; i++) {
@@ -907,7 +941,7 @@ describe('Deterministic 60Hz Simulation Parity', () => {
 
     // Gungine rear bullets while boosting
     const simGun = new Simulation(data);
-    simGun.launch({ weapon: 0, body: 0, engine: 2 }, 'normal', 400);
+    launchToPlaying(simGun, { weapon: 0, body: 0, engine: 2 }, 'normal', 400);
     let snap = simGun.step({ left: false, right: false, thrust: true, fire: false });
     const gungineBullets = snap.projectiles.filter((p) => p.fromGungine);
     expect(gungineBullets.length).toBe(1);
@@ -917,15 +951,14 @@ describe('Deterministic 60Hz Simulation Parity', () => {
 
     // Spread: 5 pellets + 1.5 recoil opposite facing (-90 deg -> vy increases by +1.5)
     const simSpread = new Simulation(data);
-    simSpread.launch({ weapon: 2, body: 0, engine: 0 }, 'normal', 401);
+    const preSpread = launchToPlaying(simSpread, { weapon: 2, body: 0, engine: 0 }, 'normal', 401);
     snap = simSpread.step({ left: false, right: false, thrust: false, fire: true });
     expect(snap.projectiles.filter((p) => p.kind === 'spreadbullet')).toHaveLength(5);
-    // Without recoil vy would be -5.5 + 0.2 = -5.3 * 0.96 = -5.088; with +1.5 recoil -> ~ -3.588
-    expect(snap.player.vy).toBeCloseTo((-5.5 + 0.2) * 0.96 + 1.5, 3);
+    expect(snap.player.vy).toBeCloseTo((preSpread.player.vy + 0.2) * 0.96 + 1.5, 3);
 
     // Missiles: strict max 4 active cap + sndmisempty on 5th attempt
     const simMis = new Simulation(data);
-    simMis.launch({ weapon: 3, body: 0, engine: 0 }, 'normal', 402);
+    launchToPlaying(simMis, { weapon: 3, body: 0, engine: 0 }, 'normal', 402);
     simMis.spawnEnemy('BigBoat', 300, 0);
     let sawEmptyCue = false;
     for (let i = 0; i < 30; i++) {
@@ -938,9 +971,9 @@ describe('Deterministic 60Hz Simulation Parity', () => {
 
     // Cannon: 79-tick interval + AOE explosion damaging nearby enemies
     const simCan = new Simulation(data);
-    simCan.launch({ weapon: 4, body: 0, engine: 0 }, 'normal', 403);
-    const e1 = simCan.spawnEnemy('Ace', 0, -160);
-    const e2 = simCan.spawnEnemy('Fighter', 40, -160);
+    const preCan = launchToPlaying(simCan, { weapon: 4, body: 0, engine: 0 }, 'normal', 403);
+    const e1 = simCan.spawnEnemy('Ace', 0, preCan.player.y - 128);
+    const e2 = simCan.spawnEnemy('Fighter', 40, preCan.player.y - 128);
     snap = simCan.step({ left: false, right: false, thrust: true, fire: true });
     expect(snap.projectiles.filter((p) => p.kind === 'plasmaball')).toHaveLength(1);
     expect(snap.player.fireCooldown).toBe(79);
@@ -968,8 +1001,8 @@ describe('Deterministic 60Hz Simulation Parity', () => {
 
     // Melee body: ramming deals >= 24 damage with ZERO self-damage and ZERO hitstop
     const simMelee = new Simulation(data);
-    simMelee.launch({ weapon: 0, body: 2, engine: 0 }, 'normal', 500);
-    simMelee.spawnEnemy('Fighter', 0, -56);
+    const preMelee = launchToPlaying(simMelee, { weapon: 0, body: 2, engine: 0 }, 'normal', 500);
+    simMelee.spawnEnemy('Fighter', 0, preMelee.player.y - 24);
     for (let i = 0; i < 10; i++) {
       simMelee.step({ left: false, right: false, thrust: true, fire: false });
     }
@@ -978,10 +1011,10 @@ describe('Deterministic 60Hz Simulation Parity', () => {
     expect(meleeSnap.hitstopTicks).toBe(0);
     expect(meleeSnap.killsByKind['Fighter']).toBe(1);
 
-    // Nuke body: death triggers 440px radial wipe & awards kills
+    // Nuke body: death triggers 420px radial wipe & awards kills
     const simNuke = new Simulation(data);
-    simNuke.launch({ weapon: 0, body: 3, engine: 0 }, 'normal', 501);
-    simNuke.spawnEnemy('Fighter', 180, -32);
+    const preNuke = launchToPlaying(simNuke, { weapon: 0, body: 3, engine: 0 }, 'normal', 501);
+    simNuke.spawnEnemy('Fighter', 180, preNuke.player.y);
     simNuke.spawnEnemy('Boat', -200, 0);
     simNuke.damagePlayer(999);
     const deathSnap = simNuke.getSnapshot();
@@ -999,7 +1032,7 @@ describe('Deterministic 60Hz Simulation Parity', () => {
 
     // Bomb body: drops bombs every 24 ticks when firing/boosting
     const simBomb = new Simulation(data);
-    simBomb.launch({ weapon: 0, body: 4, engine: 0 }, 'normal', 502);
+    launchToPlaying(simBomb, { weapon: 0, body: 4, engine: 0 }, 'normal', 502);
     const snap1 = simBomb.step({ left: false, right: false, thrust: true, fire: false });
     expect(snap1.projectiles.some((p) => p.kind === 'bomb')).toBe(true);
 
@@ -1031,11 +1064,11 @@ describe('Deterministic 60Hz Simulation Parity', () => {
     const data = createTestGameDataBundle();
     const sim = new Simulation(data);
     // Use hover engine (4) so plane stays smoothly aloft during 180-tick combo decay window
-    sim.launch({ weapon: 4, body: 0, engine: 4 }, 'normal', 600);
+    const preCombo = launchToPlaying(sim, { weapon: 4, body: 0, engine: 4 }, 'normal', 600);
 
-    // Spawn 20 fighters timed to cross (-76 -> +4) right as the plasmaball reaches y = -140
+    // Spawn 20 fighters timed to cross (-76 -> +4) right as the plasmaball reaches y = preCombo.player.y - 108
     for (let i = 0; i < 20; i++) {
-      sim.spawnEnemy('Fighter', -76, -140 - (i % 4) * 6);
+      sim.spawnEnemy('Fighter', -76, preCombo.player.y - 108 - (i % 4) * 6);
     }
     let reachedMax = false;
     for (let t = 0; t < 20; t++) {
@@ -1047,13 +1080,19 @@ describe('Deterministic 60Hz Simulation Parity', () => {
     expect(sim.getSnapshot().combo).toBe(20);
     expect(reachedMax).toBe(true);
 
-    // Let combo decay -> warning (<60) -> drop back to 1 while hovering safely
+    // Let combo decay -> warning (<60) -> drop back to 1 while cruising up-right safely
     let sawWarn = false;
     let sawDrop = false;
-    for (let t = 0; t < 190; t++) {
-      const s = sim.step({ left: false, right: false, thrust: t % 6 === 0, fire: false });
+    for (let t = 0; t < 360; t++) {
+      const s = sim.step({
+        left: false,
+        right: t < 7,
+        thrust: t >= 7,
+        fire: false,
+      });
       if (s.comboWarning) sawWarn = true;
       if (s.audioEvents.some((e) => e.cue === 'sndcombodrop')) sawDrop = true;
+      if (sawDrop) break;
     }
     expect(sawWarn).toBe(true);
     expect(sawDrop).toBe(true);
@@ -1061,7 +1100,7 @@ describe('Deterministic 60Hz Simulation Parity', () => {
 
     // Normal Jet does NOT fire; SFMT Jet DOES fire
     const simNorm = new Simulation(data);
-    simNorm.launch({ weapon: 0, body: 0, engine: 0 }, 'normal', 601);
+    launchToPlaying(simNorm, { weapon: 0, body: 0, engine: 0 }, 'normal', 601);
     simNorm.spawnEnemy('Jet', -200, -120);
     let normEnemyBullets = 0;
     for (let i = 0; i < 40; i++) {
@@ -1071,7 +1110,7 @@ describe('Deterministic 60Hz Simulation Parity', () => {
     expect(normEnemyBullets).toBe(0);
 
     const simSfmt = new Simulation(data);
-    simSfmt.launch({ weapon: 0, body: 0, engine: 0 }, 'sfmt', 601);
+    launchToPlaying(simSfmt, { weapon: 0, body: 0, engine: 0 }, 'sfmt', 601);
     simSfmt.spawnEnemy('Jet', -200, -120);
     let sfmtEnemyBullets = 0;
     for (let i = 0; i < 40; i++) {
@@ -1083,7 +1122,7 @@ describe('Deterministic 60Hz Simulation Parity', () => {
     // 90-mission tracking & part unlock: [0,0,0] requires killing 5 Fighters in one sortie
     const simM = new Simulation(data);
     simM.setProfile(createDefaultProfile());
-    simM.launch({ weapon: 0, body: 0, engine: 0 }, 'normal', 602);
+    launchToPlaying(simM, { weapon: 0, body: 0, engine: 0 }, 'normal', 602);
     expect(simM.getSnapshot().activeMissions).toHaveLength(3);
     for (let i = 0; i < 10; i++) {
       simM.spawnEnemy('Fighter', (i % 2 === 0 ? 1 : -1) * (140 + i * 24), -260);
@@ -1108,7 +1147,7 @@ describe('Deterministic 60Hz Simulation Parity', () => {
     let maxComboSeen = 1;
     for (let t = 0; t < 3600; t++) {
       const curr = sim.getSnapshot();
-      if (curr.phase !== 'playing') break;
+      if (curr.phase !== 'playing' && curr.phase !== 'launching') break;
       const aiInput = computeAutopilotInput(curr);
       const next = sim.step(aiInput);
       expect(Number.isFinite(next.player.x)).toBe(true);
@@ -1130,8 +1169,8 @@ describe('Deterministic 60Hz Simulation Parity', () => {
 
     // Hitstop freeze frames on non-melee collision
     const simHitstop = new Simulation(data);
-    simHitstop.launch({ weapon: 0, body: 0, engine: 0 }, 'normal', 800);
-    simHitstop.spawnEnemy('Fighter', 0, -56);
+    const preHitstop = launchToPlaying(simHitstop, { weapon: 0, body: 0, engine: 0 }, 'normal', 800);
+    simHitstop.spawnEnemy('Fighter', 0, preHitstop.player.y - 24);
     let sawHitstop = false;
     for (let i = 0; i < 10; i++) {
       const s = simHitstop.step({ left: false, right: false, thrust: true, fire: false });
@@ -1141,27 +1180,29 @@ describe('Deterministic 60Hz Simulation Parity', () => {
 
     // Submarine surfaces & launches Missile; Blimp spawns with 600 HP and unlocks SFMT on kill
     const simEnemies = new Simulation(data);
-    simEnemies.launch({ weapon: 5, body: 5, engine: 5 }, 'normal', 801);
+    launchToPlaying(simEnemies, { weapon: 5, body: 5, engine: 5 }, 'normal', 801);
     simEnemies.spawnEnemy('Submarine', 120, 10);
+    let sawSubMissile = false;
     for (let i = 0; i < 90; i++) {
-      simEnemies.step(IDLE_INPUT);
+      const s = simEnemies.step(IDLE_INPUT);
+      if (s.enemies.some((e) => e.kind === 'Missile')) sawSubMissile = true;
     }
     const subSnap = simEnemies.getSnapshot();
-    expect(subSnap.enemies.some((e) => e.kind === 'Missile')).toBe(true);
+    expect(sawSubMissile).toBe(true);
     expect(subSnap.parallax.length).toBeGreaterThanOrEqual(1);
 
     // BigBoat SFMT has 160 HP vs Normal 210 HP; LaserAce fires beam; Blimp unlocks SFMT on death
     const simBigNorm = new Simulation(data);
-    simBigNorm.launch({ weapon: 0, body: 0, engine: 0 }, 'normal', 802);
+    launchToPlaying(simBigNorm, { weapon: 0, body: 0, engine: 0 }, 'normal', 802);
     expect(simBigNorm.spawnEnemy('BigBoat', 200, 0).maxHealth).toBe(210);
 
     const simBigSfmt = new Simulation(data);
-    simBigSfmt.launch({ weapon: 0, body: 0, engine: 0 }, 'sfmt', 802);
+    launchToPlaying(simBigSfmt, { weapon: 0, body: 0, engine: 0 }, 'sfmt', 802);
     expect(simBigSfmt.spawnEnemy('BigBoat', 200, 0).maxHealth).toBe(160);
 
     const simBlimp = new Simulation(data);
-    simBlimp.launch({ weapon: 0, body: 3, engine: 0 }, 'normal', 803);
-    const blimp = simBlimp.spawnEnemy('Blimp', 50, -32);
+    const preBlimp = launchToPlaying(simBlimp, { weapon: 0, body: 3, engine: 0 }, 'normal', 803);
+    const blimp = simBlimp.spawnEnemy('Blimp', 50, preBlimp.player.y);
     expect(blimp.maxHealth).toBe(600);
     simBlimp.damagePlayer(999);
     for (let i = 0; i < 30; i++) simBlimp.step(IDLE_INPUT);
@@ -1173,7 +1214,7 @@ describe('Deterministic 60Hz Simulation Parity', () => {
 
     // Boost curve hits maxSpeed in ~8-12 ticks and releasing thrust emits sndunboost + boostend
     const simAero = new Simulation(data);
-    simAero.launch({ weapon: 0, body: 0, engine: 0 }, 'normal', 900);
+    launchToPlaying(simAero, { weapon: 0, body: 0, engine: 0 }, 'normal', 900);
     for (let i = 0; i < 9; i++) {
       simAero.step({ left: false, right: true, thrust: false, fire: false });
     }
@@ -1210,8 +1251,8 @@ describe('Deterministic 60Hz Simulation Parity', () => {
 
     // LaserAce beam & AceMarine Ace launch
     const simBoss = new Simulation(data);
-    simBoss.launch({ weapon: 0, body: 0, engine: 0 }, 'normal', 901);
-    simBoss.spawnEnemy('LaserAce', 220, -80);
+    const preBoss = launchToPlaying(simBoss, { weapon: 0, body: 0, engine: 0 }, 'normal', 901);
+    simBoss.spawnEnemy('LaserAce', 220, preBoss.player.y - 40);
     simBoss.spawnEnemy('AceMarine', 260, 10);
     let sawLaserAceBeam = false;
     let sawAceMarineAce = false;
@@ -1239,5 +1280,267 @@ describe('Deterministic 60Hz Simulation Parity', () => {
     expect(autoReplay.player.x).toBe(autoSnap.player.x);
     expect(autoReplay.player.y).toBe(autoSnap.player.y);
     expect(autoReplay.score).toBe(autoSnap.score);
+  });
+
+  it('10. P0 regression: Player & URAUSER laser beams survive into spawn-tick snapshot and expire on cease-fire', () => {
+    const data = createTestGameDataBundle();
+
+    // Standard Laser (weapon 1)
+    const simLaser = new Simulation(data);
+    launchToPlaying(simLaser, { weapon: 1, body: 0, engine: 0 }, 'normal', 1001);
+    const fireSnap = simLaser.step({ left: false, right: false, thrust: false, fire: true });
+    const lasersOnFire = fireSnap.projectiles.filter((p) => p.kind === 'laser');
+    expect(lasersOnFire.length).toBeGreaterThanOrEqual(1);
+    expect(lasersOnFire[0]!.ttl).toBe(1);
+    expect(lasersOnFire[0]!.beamLength).toBe(520);
+
+    // Next tick with fire: false -> beam expires cleanly
+    const ceaseSnap = simLaser.step(IDLE_INPUT);
+    expect(ceaseSnap.projectiles.filter((p) => p.kind === 'laser')).toHaveLength(0);
+
+    // Continuous laser fire keeps exactly 1 active beam per tick
+    const hold1 = simLaser.step({ left: false, right: false, thrust: false, fire: true });
+    const hold2 = simLaser.step({ left: false, right: false, thrust: false, fire: true });
+    expect(hold1.projectiles.filter((p) => p.kind === 'laser')).toHaveLength(1);
+    expect(hold2.projectiles.filter((p) => p.kind === 'laser')).toHaveLength(1);
+
+    // URAUSER [5, 5, 5] heavy beam
+    const simUra = new Simulation(data);
+    launchToPlaying(simUra, { weapon: 5, body: 5, engine: 5 }, 'normal', 1002);
+    const uraFire = simUra.step({ left: false, right: false, thrust: false, fire: true });
+    expect(uraFire.projectiles.filter((p) => p.kind === 'laser').length).toBeGreaterThanOrEqual(1);
+    expect(uraFire.projectiles.filter((p) => p.kind === 'spreadbullet')).toHaveLength(5);
+    const uraCease = simUra.step(IDLE_INPUT);
+    expect(uraCease.projectiles.filter((p) => p.kind === 'laser')).toHaveLength(0);
+  });
+
+  it('11. P1 regression: Healing lockout respects fireCooldown > 0 for Cannon (79) and Spread (9)', () => {
+    const data = createTestGameDataBundle();
+
+    // Cannon (interval 79): firing 1 tick locks healing for entire cooldown
+    const simCan = new Simulation(data);
+    launchToPlaying(simCan, { weapon: 4, body: 0, engine: 4 }, 'normal', 1101);
+    simCan.damagePlayer(8);
+    const canDamagedHp = simCan.getSnapshot().player.health;
+
+    let snap = simCan.step({ left: false, right: false, thrust: false, fire: true });
+    expect(snap.player.fireCooldown).toBe(79);
+    expect(snap.player.healing).toBe(false);
+
+    // For 78 ticks (fireCooldown 78 -> 1), fireCooldown > 0 must block healing & healingTicks
+    for (let i = 0; i < 78; i++) {
+      snap = simCan.step(IDLE_INPUT);
+      expect(snap.player.fireCooldown).toBeGreaterThan(0);
+      expect(snap.player.healing).toBe(false);
+      expect(snap.player.healingTicks).toBe(0);
+      expect(snap.player.health).toBe(canDamagedHp);
+    }
+
+    // Tick 79 post-fire completes cooldown (fireCooldown -> 0) and begins 12-tick heal delay
+    snap = simCan.step(IDLE_INPUT);
+    expect(snap.player.fireCooldown).toBe(0);
+    expect(snap.player.healing).toBe(false);
+    expect(snap.player.healingTicks).toBe(1);
+
+    for (let i = 0; i < 11; i++) {
+      snap = simCan.step(IDLE_INPUT);
+    }
+    expect(snap.player.healing).toBe(true);
+    expect(snap.player.health).toBeGreaterThan(canDamagedHp);
+
+    // Spread (interval 9): firing 1 tick locks healing while fireCooldown > 0
+    const simSpread = new Simulation(data);
+    launchToPlaying(simSpread, { weapon: 2, body: 0, engine: 4 }, 'normal', 1102);
+    simSpread.damagePlayer(8);
+    const spreadDamagedHp = simSpread.getSnapshot().player.health;
+
+    snap = simSpread.step({ left: false, right: false, thrust: false, fire: true });
+    expect(snap.player.fireCooldown).toBe(9);
+    for (let i = 0; i < 8; i++) {
+      snap = simSpread.step(IDLE_INPUT);
+      expect(snap.player.fireCooldown).toBeGreaterThan(0);
+      expect(snap.player.healing).toBe(false);
+      expect(snap.player.healingTicks).toBe(0);
+      expect(snap.player.health).toBe(spreadDamagedHp);
+    }
+    for (let i = 0; i < 12; i++) {
+      snap = simSpread.step(IDLE_INPUT);
+    }
+    expect(snap.player.healing).toBe(true);
+    expect(snap.player.health).toBeGreaterThan(spreadDamagedHp);
+  });
+
+  it('12. P2 regression: nuke body impactdmgmult deals and receives higher ram damage than original while melee stays 0 self-damage', () => {
+    const data = createTestGameDataBundle();
+
+    const runRam = (body: PartIndex) => {
+      const sim = new Simulation(data);
+      const pre = launchToPlaying(sim, { weapon: 0, body, engine: 0 }, 'normal', 1200);
+      const ace = sim.spawnEnemy('Ace', pre.player.x, pre.player.y - 16);
+      // Step 2 ticks thrusting straight up into the Ace
+      sim.step({ left: false, right: false, thrust: true, fire: false });
+      const post = sim.step({ left: false, right: false, thrust: true, fire: false });
+      const postAce = post.enemies.find((e) => e.id === ace.id)!;
+      return {
+        selfDmg: post.player.maxHealth - post.player.health,
+        enemyDmg: ace.maxHealth - postAce.health,
+        hitstop: post.hitstopTicks,
+      };
+    };
+
+    const origRam = runRam(0);
+    const nukeRam = runRam(3);
+    const meleeRam = runRam(2);
+
+    expect(meleeRam.selfDmg).toBe(0);
+    expect(meleeRam.hitstop).toBe(0);
+    expect(nukeRam.enemyDmg).toBeGreaterThan(origRam.enemyDmg);
+    expect(nukeRam.selfDmg).toBeGreaterThan(origRam.selfDmg);
+  });
+
+  it('13. P2 regression: Ace/LaserAce boost maxSpd evaluates (maxspeed || 4) + 3 = 7 within boostdstplayer', () => {
+    const data = createTestGameDataBundle();
+    const sim = new Simulation(data);
+    const pre = launchToPlaying(sim, { weapon: 0, body: 0, engine: 4 }, 'normal', 1300);
+
+    // Spawn Ace within boostdstplayer (300px) so maxSpd branch hits (spec.maxspeed || 4) + 3 = 7
+    const ace = sim.spawnEnemy('Ace', pre.player.x + 120, pre.player.y);
+    let maxObservedSpeed = 0;
+    for (let i = 0; i < 30; i++) {
+      const s = sim.step(IDLE_INPUT);
+      const tracked = s.enemies.find((e) => e.id === ace.id);
+      if (!tracked) break;
+      const dist = Math.hypot(tracked.x - s.player.x, tracked.y - s.player.y);
+      if (dist <= 300) {
+        maxObservedSpeed = Math.max(maxObservedSpeed, Math.hypot(tracked.vx, tracked.vy));
+      }
+    }
+    expect(maxObservedSpeed).toBeGreaterThan(6.5);
+    expect(maxObservedSpeed).toBeLessThanOrEqual(7.001);
+  });
+
+  it('14. P3 regression: submarine launch phase propels above y = -180 with vy <= -6 and stays aloft >= 35 ticks without thrust', () => {
+    const data = createTestGameDataBundle();
+    const sim = new Simulation(data);
+    sim.launch({ weapon: 0, body: 0, engine: 0 }, 'normal', 1400);
+
+    const initial = sim.getSnapshot();
+    expect(initial.phase).toBe('launching');
+    expect(initial.launchTicks).toBeGreaterThan(0);
+    expect(initial.player.vy).toBe(-9.5);
+
+    let snap = initial;
+    let launchSteps = 0;
+    while (snap.phase === 'launching' && launchSteps < 60) {
+      snap = sim.step(IDLE_INPUT);
+      launchSteps++;
+    }
+    expect(launchSteps).toBeGreaterThan(0);
+    expect(snap.phase).toBe('playing');
+    expect(snap.player.y).toBeLessThan(-180);
+    expect(snap.player.vy).toBeLessThanOrEqual(-6);
+
+    for (let t = 0; t < 40; t++) {
+      snap = sim.step(IDLE_INPUT);
+      expect(snap.player.y).toBeLessThan(0);
+      expect(snap.player.underwater).toBe(false);
+    }
+  });
+
+  it('15. P3 regression: post-death nuke kills count toward highScore and profile.stats.totalScore at gameover', () => {
+    const data = createTestGameDataBundle();
+    const sim = new Simulation(data);
+    const profile = createDefaultProfile();
+    profile.highScoreNormal = 10;
+    profile.stats.sorties = 2;
+    profile.stats.totalScore = 100;
+    sim.setProfile(profile);
+
+    const pre = launchToPlaying(sim, { weapon: 0, body: 3, engine: 0 }, 'normal', 1500);
+    // Spawn Fighter beyond initial nuke radius (120) yet inside NUKE_MAX_RADIUS (420)
+    sim.spawnEnemy('Fighter', pre.player.x + 300, pre.player.y);
+    sim.damagePlayer(999);
+    expect(sim.getSnapshot().phase).toBe('dying');
+    expect(sim.getSnapshot().score).toBe(0);
+
+    let snap = sim.getSnapshot();
+    while (snap.phase === 'dying') {
+      snap = sim.step(IDLE_INPUT);
+    }
+    expect(snap.phase).toBe('gameover');
+    expect(snap.killsThisSortie).toBeGreaterThanOrEqual(1);
+    expect(snap.score).toBeGreaterThan(10);
+    expect(snap.profile.highScoreNormal).toBe(snap.score);
+    expect(snap.profile.stats.sorties).toBe(3);
+    expect(snap.profile.stats.totalScore).toBe(100 + snap.score);
+  });
+
+  it('16. P3 regression: Spec radius constants (Nuke 420, Plasma 80, Bomb 48) and jet_trail scaley -0.02 decay', () => {
+    const data = createTestGameDataBundle();
+
+    // NUKE_MAX_RADIUS = 420 (Boat at y=0, player at y≈-194 -> max x reach ≈ 405)
+    const simNuke = new Simulation(data);
+    const preNuke = launchToPlaying(simNuke, { weapon: 0, body: 3, engine: 0 }, 'normal', 1601);
+    const inNuke = simNuke.spawnEnemy('Boat', preNuke.player.x + 340, 0);
+    const outNuke = simNuke.spawnEnemy('Boat', preNuke.player.x + 470, 0);
+    simNuke.damagePlayer(999);
+    for (let i = 0; i < 30; i++) simNuke.step(IDLE_INPUT);
+    const nukeSnap = simNuke.getSnapshot();
+    expect(nukeSnap.player.nukeRadius).toBe(420);
+    expect(nukeSnap.enemies.some((e) => e.id === inNuke.id)).toBe(false);
+    expect(nukeSnap.enemies.some((e) => e.id === outNuke.id)).toBe(true);
+
+    // PLASMA_AOE_RADIUS = 80 (Fighter hitRadius=12 -> 90 hits, 94 misses)
+    const simPlasma = new Simulation(data);
+    const prePlasma = launchToPlaying(simPlasma, { weapon: 4, body: 0, engine: 4 }, 'normal', 1602);
+    const targetY = prePlasma.player.y - 60;
+    const directAce = simPlasma.spawnEnemy('Ace', 0, targetY);
+    const splashIn = simPlasma.spawnEnemy('Fighter', 90, targetY);
+    const splashOut = simPlasma.spawnEnemy('Fighter', 94, targetY);
+    simPlasma.step({ left: false, right: false, thrust: false, fire: true });
+    for (let i = 0; i < 12; i++) {
+      simPlasma.step(IDLE_INPUT);
+    }
+    const plasmaSnap = simPlasma.getSnapshot();
+    expect(plasmaSnap.enemies.find((e) => e.id === directAce.id)!.health).toBeLessThan(60);
+    expect(plasmaSnap.enemies.some((e) => e.id === splashIn.id)).toBe(false);
+    expect(plasmaSnap.enemies.some((e) => e.id === splashOut.id)).toBe(true);
+
+    // BOMB_AOE_RADIUS = 48
+    const simBomb = new Simulation(data);
+    launchToPlaying(simBomb, { weapon: 0, body: 4, engine: 4 }, 'normal', 1603);
+    const bombStep = simBomb.step({ left: false, right: false, thrust: true, fire: false });
+    const bombProj = bombStep.projectiles.find((p) => p.kind === 'bomb')!;
+    expect(bombProj.aoeRadius).toBe(48);
+
+    // jet_trail scaley = -0.02 decays scaleY from 1.0 down by -0.02/tick and expires at <= 0
+    const simJet = new Simulation(data);
+    launchToPlaying(simJet, { weapon: 0, body: 0, engine: 4 }, 'normal', 1604);
+    simJet.spawnEnemy('Jet', -400, -300);
+    let trailId: number | null = null;
+    const observedScales: number[] = [];
+    for (let i = 0; i < 65; i++) {
+      const s = simJet.step(IDLE_INPUT);
+      if (trailId === null) {
+        const firstTrail = s.particles.find((pt) => pt.kind === 'jet_trail');
+        if (firstTrail) {
+          trailId = firstTrail.id;
+          observedScales.push(firstTrail.scaleY);
+        }
+      } else {
+        const tracked = s.particles.find((pt) => pt.id === trailId);
+        if (tracked) {
+          observedScales.push(tracked.scaleY);
+        } else {
+          break;
+        }
+      }
+    }
+    expect(trailId).not.toBeNull();
+    expect(observedScales[0]).toBeCloseTo(0.98, 4);
+    expect(observedScales[1]).toBeCloseTo(0.96, 4);
+    expect(observedScales[observedScales.length - 1]).toBeGreaterThan(0);
+    expect(observedScales[observedScales.length - 1]).toBeLessThanOrEqual(0.03);
+    expect(observedScales.length).toBe(49);
   });
 });

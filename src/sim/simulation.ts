@@ -65,10 +65,12 @@ const COMBO_MAX_TIMER = 180;
 const COMBO_WARNING_THRESHOLD = 60;
 const HEAL_DELAY_TICKS = 12;
 const LASER_BEAM_LENGTH = 520;
-const NUKE_MAX_RADIUS = 440;
-const PLASMA_AOE_RADIUS = 84;
-const BOMB_AOE_RADIUS = 56;
+const NUKE_MAX_RADIUS = 420;
+const PLASMA_AOE_RADIUS = 80;
+const BOMB_AOE_RADIUS = 48;
 const DEATH_TICKS_DURATION = 90;
+const LAUNCH_TICKS_DURATION = 18;
+const LAUNCH_INITIAL_VY = -9.5;
 
 export function encodeInputMask(input: InputState): number {
   return (
@@ -276,6 +278,7 @@ export class Simulation implements ISimulation {
   private lastPlayerHitTick = -1000;
   private distinctKindsThisSortie = new Set<EnemyKind>();
   private sortieFinalized = false;
+  private finalizedScoreAdded = 0;
   private hitSoundIndex = 0;
 
   private nextEntityId = 1;
@@ -389,7 +392,7 @@ export class Simulation implements ISimulation {
       prevX: 0,
       prevY: seaLevel - 32,
       vx: 0,
-      vy: -5.5,
+      vy: LAUNCH_INITIAL_VY,
       angleDeg: -90,
       prevAngleDeg: -90,
       health: resolved.maxHealth,
@@ -438,7 +441,7 @@ export class Simulation implements ISimulation {
     this.hitstopTicks = 0;
     this.screenShake = 0;
     this.nukeFlashTicks = 0;
-    this.launchTicks = 18;
+    this.launchTicks = LAUNCH_TICKS_DURATION;
     this.deathTicks = 0;
 
     this.score = 0;
@@ -459,6 +462,7 @@ export class Simulation implements ISimulation {
     this.lastPlayerHitTick = -1000;
     this.distinctKindsThisSortie.clear();
     this.sortieFinalized = false;
+    this.finalizedScoreAdded = 0;
     this.hitSoundIndex = 0;
 
     this.nextEntityId = 1;
@@ -471,7 +475,7 @@ export class Simulation implements ISimulation {
     this.enemyRamGrace.clear();
 
     this.player = this.buildPlayerState(loadout);
-    this.phase = 'playing';
+    this.phase = 'launching';
     this.cameraTargetX = this.player.x;
     this.cameraTargetY = clamp(
       this.player.y - 40,
@@ -490,10 +494,12 @@ export class Simulation implements ISimulation {
   }
 
   returnToHangar(): void {
-    if (this.phase === 'dying') {
+    if (this.phase === 'dying' || this.phase === 'gameover') {
       this.finalizeSortieStats();
     }
     this.phase = 'hangar';
+    this.launchTicks = 0;
+    this.deathTicks = 0;
     this.paused = false;
     this.enemies = [];
     this.projectiles = [];
@@ -677,7 +683,6 @@ export class Simulation implements ISimulation {
       mask: encodeInputMask(effectiveInput),
     });
 
-    if (this.launchTicks > 0) this.launchTicks--;
     if (this.nukeFlashTicks > 0) this.nukeFlashTicks--;
     if (this.screenShake > 0) {
       this.screenShake = Math.max(0, this.screenShake * 0.85 - 0.1);
@@ -688,10 +693,12 @@ export class Simulation implements ISimulation {
       return this.getSnapshot();
     }
 
-    if (this.phase === 'playing') {
+    if (this.phase === 'launching') {
+      this.updateLaunchingSequence();
+    } else if (this.phase === 'playing') {
       this.updatePlayerAerodynamics(effectiveInput);
-      this.updatePlayerHealing(effectiveInput);
       this.updatePlayerWeapons(effectiveInput);
+      this.updatePlayerHealing(effectiveInput);
       this.updateComboTimer();
       this.updateSpawnDirector();
       this.updateParallax();
@@ -738,6 +745,28 @@ export class Simulation implements ISimulation {
 
     this.lastFirePressed = effectiveInput.fire;
     return this.getSnapshot();
+  }
+
+  private updateLaunchingSequence(): void {
+    const p = this.player;
+    p.prevX = p.x;
+    p.prevY = p.y;
+    p.prevAngleDeg = p.angleDeg;
+    p.boosting = true;
+    p.wasBoosting = true;
+    p.boostAnimFrame = (p.boostAnimFrame + 1) % 60;
+
+    // Propel cleanly upward out of the submarine past y = -180 before entering playing
+    p.vy = Math.min(-6.5, p.vy + 0.05);
+    p.x += p.vx;
+    p.y += p.vy;
+
+    if (this.launchTicks > 0) {
+      this.launchTicks--;
+    }
+    if (this.launchTicks <= 0) {
+      this.phase = 'playing';
+    }
   }
 
   private updatePlayerAerodynamics(input: InputState): void {
@@ -948,7 +977,7 @@ export class Simulation implements ISimulation {
       return;
     }
 
-    if (input.fire) {
+    if (input.fire || p.fireCooldown > 0) {
       p.healing = false;
       p.healingTicks = 0;
       return;
@@ -1084,7 +1113,7 @@ export class Simulation implements ISimulation {
           vx: Math.cos(rad) * LASER_BEAM_LENGTH,
           vy: Math.sin(rad) * LASER_BEAM_LENGTH,
           angleDeg: p.angleDeg,
-          ttl: 1,
+          ttl: 2,
           dmg: beamDmg,
           radius: 5,
           targetId: null,
@@ -1184,7 +1213,7 @@ export class Simulation implements ISimulation {
         break;
       }
       case 4: {
-        // Cannon: interval 79, plasmaball dmg 20, speed 10, ttl 60, AOE 84
+        // Cannon: interval 79, plasmaball dmg 20, speed 10, ttl 60, AOE 80
         p.fireCooldown = weapon.interval || 79;
         const spec = this.getProjectileSpec('plasmaball');
         const spd = spec.speed || 10;
@@ -1278,7 +1307,7 @@ export class Simulation implements ISimulation {
       vx: Math.cos(rad) * beamLen,
       vy: Math.sin(rad) * beamLen,
       angleDeg: p.angleDeg,
-      ttl: 1,
+      ttl: 2,
       dmg: 2,
       radius: 6,
       targetId: null,
@@ -1605,7 +1634,7 @@ export class Simulation implements ISimulation {
           const maxSpd =
             dist > (spec.boostdstplayer || 300)
               ? (spec.maxspeed || 4) + (spec.boostdstspeed || 5)
-              : spec.maxspeed || 4 + 3;
+              : (spec.maxspeed || 4) + 3;
           const r = (enemy.angleDeg * Math.PI) / 180;
           enemy.vx += Math.cos(r) * 0.7;
           enemy.vy += Math.sin(r) * 0.7 + (spec.gravity || 0.4) * 0.4;
@@ -2040,6 +2069,12 @@ export class Simulation implements ISimulation {
     const body = p.bodySpec;
     const speed = Math.hypot(p.vx, p.vy);
     const isMeleeBody = body.id === 2 || body.impactrecvdmgmult === 0;
+    const effectiveRecvMult =
+      body.impactrecvdmgmult === 0
+        ? 0
+        : Math.max(body.impactrecvdmgmult, body.impactdmgmult || 0);
+    const effectiveDealMult =
+      (body.impactdealdmgmult || 0.25) + (body.impactdmgmult || 0);
 
     for (const enemy of this.enemies) {
       if (!enemy.active) continue;
@@ -2051,7 +2086,7 @@ export class Simulation implements ISimulation {
         this.spawnParticle('explode_small', enemy.x, enemy.y);
         if (!isMeleeBody) {
           this.applyDamageToPlayer(
-            Math.max(1, (spec.damageonhit || 4) * body.impactrecvdmgmult * 4),
+            Math.max(1, (spec.damageonhit || 4) * effectiveRecvMult * 4),
             true,
           );
           this.hitstopTicks = Math.max(this.hitstopTicks, body.impactsleeptime);
@@ -2067,7 +2102,7 @@ export class Simulation implements ISimulation {
         this.damageEnemy(enemy, ramDamage, 'melee', false);
       } else {
         if (p.flashTicks > 0) continue;
-        const selfDmg = Math.max(1, 16 * body.impactrecvdmgmult);
+        const selfDmg = Math.max(1, 16 * effectiveRecvMult);
         this.applyDamageToPlayer(selfDmg, true);
         p.flashTicks = Math.max(p.flashTicks, 12);
         this.hitstopTicks = Math.max(this.hitstopTicks, body.impactsleeptime);
@@ -2081,7 +2116,7 @@ export class Simulation implements ISimulation {
             : 1;
         const dealDmg =
           Math.max(10, speed * 3) *
-          (1 + (body.impactdealdmgmult || 0.25)) *
+          (1 + effectiveDealMult) *
           critBonus;
         this.damageEnemy(enemy, dealDmg, 'melee', false);
       }
@@ -2297,7 +2332,11 @@ export class Simulation implements ISimulation {
     if (!this.sortieFinalized) {
       this.sortieFinalized = true;
       this.profile.stats.sorties++;
-      this.profile.stats.totalScore += this.score;
+    }
+    const scoreDelta = this.score - this.finalizedScoreAdded;
+    if (scoreDelta > 0) {
+      this.profile.stats.totalScore += scoreDelta;
+      this.finalizedScoreAdded = this.score;
     }
   }
 
@@ -2313,10 +2352,22 @@ export class Simulation implements ISimulation {
         pt.vx *= 1 - pt.friction;
         pt.vy *= 1 - pt.friction;
       }
+
+      const genericSpec = this.data.fx.generic[pt.kind];
+      if (genericSpec && genericSpec.scaley < 0) {
+        pt.scaleY = Math.max(0, pt.scaleY + genericSpec.scaley);
+        if (pt.scaleY <= 1e-6) {
+          pt.scaleY = 0;
+        }
+      }
+
       pt.frame += pt.frameSpeed;
       pt.ttl--;
 
       if (!pt.allowBelowSea && pt.y > seaLevel) {
+        continue;
+      }
+      if (pt.scaleY <= 0) {
         continue;
       }
       if (pt.ttl > 0 && (pt.loop || pt.frame < pt.frameCount)) {
@@ -2344,8 +2395,12 @@ export class Simulation implements ISimulation {
     const genericSpec = this.data.fx.generic[kind];
     const expSpec = this.data.fx.explosions[kind];
     if (genericSpec) {
+      const hasNegativeScaleY = genericSpec.scaley < 0;
+      const defaultTtl = hasNegativeScaleY
+        ? Math.max(1, Math.ceil(1 / Math.abs(genericSpec.scaley)) + 1)
+        : 16;
       const ttl =
-        (genericSpec.ttl || 16) +
+        (genericSpec.ttl > 0 ? genericSpec.ttl : defaultTtl) +
         (genericSpec.ttlrand ? this.rng.range(0, genericSpec.ttlrand) : 0);
       const speed =
         (genericSpec.initvelocity || 0) +
@@ -2371,10 +2426,12 @@ export class Simulation implements ISimulation {
             : 0),
         angleDeg: angle,
         scaleX: 1,
-        scaleY: genericSpec.scaley || 1,
+        scaleY: genericSpec.scaley > 0 ? genericSpec.scaley : 1,
         frame: 0,
         frameSpeed:
-          (genericSpec.imagespeed || 0.4) +
+          (Number.isFinite(genericSpec.imagespeed)
+            ? genericSpec.imagespeed
+            : 0.4) +
           (genericSpec.imagespeedrand
             ? this.rng.range(0, genericSpec.imagespeedrand)
             : 0),
