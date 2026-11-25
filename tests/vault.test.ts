@@ -773,6 +773,37 @@ describe('createProceduralFallbackBundle & procedural parity', () => {
         expect(g.y + g.height, `${fname} char ${code} y overflow`).toBeLessThanOrEqual(fspec.scaleH);
       }
     }
+
+    // Compact procedural fnts width matches Steam fnts so 37-char mission text fits on 1 line at scale=1
+    const sampleMission = 'DESTROY 5 FIGHTERS IN A SINGLE SORTIE';
+    const fntsSpec = fallback.data.fonts.fnts!;
+    let sampleW = 0;
+    for (let i = 0; i < sampleMission.length; i++) {
+      sampleW += fntsSpec.glyphs[sampleMission.charCodeAt(i)]?.xadvance ?? 6;
+    }
+    expect(sampleW).toBeLessThanOrEqual(212);
+
+    // plane_icon_weapon is rotated vertically and bridged cleanly across its horizontal center
+    const weaponIconEntry = fallback.data.atlases.menusprites.sprites.plane_icon_weapon!;
+    const wiSub = weaponIconEntry.subs[0]!;
+    let centerWingPx = 0;
+    for (let y = 0; y < weaponIconEntry.size[1]; y++) {
+      for (let x = 10; x <= 13; x++) {
+        const idx = ((wiSub.y + y) * menuTex.width + (wiSub.x + x)) * 4;
+        if (menuTex.rgba[idx + 3]! > 0) centerWingPx++;
+      }
+    }
+    expect(centerWingPx).toBeGreaterThanOrEqual(16);
+
+    // projector_top middle text band (y=8..21, x=24..575) is smooth uniform index 2 without rivet noise
+    const projTop = fallback.data.atlases.menusprites.sprites.projector_top!;
+    const ptSub = projTop.subs[0]!;
+    for (let y = 8; y <= 21; y++) {
+      for (let x = 24; x < 576; x += 8) {
+        const idx = ((ptSub.y + y) * menuTex.width + (ptSub.x + x)) * 4;
+        expect(menuTex.rgba[idx]).toBe(64); // palette index 2
+      }
+    }
   });
 });
 
