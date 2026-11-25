@@ -518,6 +518,7 @@ export class WebGL2Renderer implements IRenderer {
 
   public resize(width: number, height: number): void {
     if (!this.canvas) return;
+    if (!Number.isFinite(width) || !Number.isFinite(height)) return;
     const w = Math.max(1, Math.floor(width));
     const h = Math.max(1, Math.floor(height));
     if (this.canvas.width !== w || this.canvas.height !== h) {
@@ -686,14 +687,12 @@ export class WebGL2Renderer implements IRenderer {
           };
 
     // Resolve Act II Shader FX (strictly 0 in Vanilla 1:1 mode)
-    if (snapshot.activeMods?.moddedEnabled === false) {
+    if (!snapshot.activeMods?.moddedEnabled) {
       this.effectiveFx = { ...DEFAULT_SHADER_FX };
     } else if (this.shaderFxExplicit) {
       this.effectiveFx = { ...this.shaderFx };
-    } else if (snapshot.activeMods?.moddedEnabled) {
-      this.effectiveFx = { ...snapshot.activeMods.shaderFx };
     } else {
-      this.effectiveFx = { ...DEFAULT_SHADER_FX };
+      this.effectiveFx = { ...snapshot.activeMods.shaderFx };
     }
 
     this.renderElapsedSec = elapsedSec;
@@ -2344,6 +2343,88 @@ export class WebGL2Renderer implements IRenderer {
     gl.bindVertexArray(null);
   }
 
+  private getMenuContrastColors(pal: PaletteDefinition): {
+    isBright1: boolean;
+    panelDark: RgbaTuple;
+    selectedTextInk: RgbaTuple;
+    bannerPlateBg: RgbaTuple;
+    panelMidBg: RgbaTuple;
+    darkPanelFg: RgbaTuple;
+    darkPanelAccent: RgbaTuple;
+    midPanelInk: RgbaTuple;
+  } {
+    const luma1 =
+      0.299 * pal.colors[1][0] +
+      0.587 * pal.colors[1][1] +
+      0.114 * pal.colors[1][2];
+    const luma2 =
+      0.299 * pal.colors[2][0] +
+      0.587 * pal.colors[2][1] +
+      0.114 * pal.colors[2][2];
+    const luma3 =
+      0.299 * pal.colors[3][0] +
+      0.587 * pal.colors[3][1] +
+      0.114 * pal.colors[3][2];
+    const luma7 =
+      0.299 * pal.colors[7][0] +
+      0.587 * pal.colors[7][1] +
+      0.114 * pal.colors[7][2];
+    const backLuma =
+      0.299 * pal.backcol[0] +
+      0.587 * pal.backcol[1] +
+      0.114 * pal.backcol[2];
+    const darkInk: RgbaTuple = [0.08, 0.04, 0.12, 0.96];
+    const isBright1 = luma1 > 0.45;
+
+    const panelDark: RgbaTuple = isBright1
+      ? backLuma > 0.45
+        ? darkInk
+        : [
+            pal.backcol[0] * 0.55,
+            pal.backcol[1] * 0.55,
+            pal.backcol[2] * 0.55,
+            0.96,
+          ]
+      : pal.colors[1];
+    const selectedTextInk: RgbaTuple =
+      isBright1 && luma7 > 0.45 ? darkInk : pal.colors[1];
+    const bannerPlateBg: RgbaTuple =
+      isBright1 && luma2 > 0.45
+        ? [
+            pal.colors[2][0] * 0.42,
+            pal.colors[2][1] * 0.42,
+            pal.colors[2][2] * 0.42,
+            0.96,
+          ]
+        : pal.colors[2];
+    const panelMidBg: RgbaTuple =
+      isBright1 && luma3 > 0.45
+        ? [
+            pal.colors[3][0] * 0.35,
+            pal.colors[3][1] * 0.35,
+            pal.colors[3][2] * 0.35,
+            0.96,
+          ]
+        : pal.colors[3];
+    const darkPanelFg: RgbaTuple =
+      isBright1 && luma7 <= 0.45 ? pal.colors[1] : pal.colors[7];
+    const darkPanelAccent: RgbaTuple =
+      isBright1 && luma7 <= 0.45 ? pal.colors[1] : pal.colors[5];
+    const midPanelInk: RgbaTuple =
+      isBright1 && luma3 > 0.45 ? darkPanelFg : pal.colors[1];
+
+    return {
+      isBright1,
+      panelDark,
+      selectedTextInk,
+      bannerPlateBg,
+      panelMidBg,
+      darkPanelFg,
+      darkPanelAccent,
+      midPanelInk,
+    };
+  }
+
   private drawHudPass(
     gl: WebGL2RenderingContext,
     snapshot: SimSnapshot,
@@ -2354,34 +2435,58 @@ export class WebGL2Renderer implements IRenderer {
     // ZERO DOM health bar during vanilla play — only Score, Combo gauge, and Mission Toast!
     const pal = this.activePalette;
     const fg = pal.colors[7];
-    const shadow = pal.colors[1];
     const dim = pal.colors[3];
     const warn = pal.colors[2];
+    const hudShadow: RgbaTuple = [0.06, 0.03, 0.08, 0.85];
+    const luma1 =
+      0.299 * pal.colors[1][0] +
+      0.587 * pal.colors[1][1] +
+      0.114 * pal.colors[1][2];
+    const hudBoxBg: RgbaTuple =
+      luma1 > 0.45
+        ? [0.06, 0.03, 0.08, 0.9]
+        : [pal.colors[1][0], pal.colors[1][1], pal.colors[1][2], 0.86];
+    const hudTrackBg: RgbaTuple =
+      luma1 > 0.45 ? [0.06, 0.03, 0.08, 0.85] : pal.colors[1];
 
     const scoreFont = this.resolveFont('fntb', 'fntm');
     const smallFont = this.resolveFont('fnts', 'fntm');
+    const isDogfight = Boolean(snapshot.dogfight);
 
-    const scoreStr = String(Math.floor(snapshot.score)).padStart(6, '0');
     const scoreScale = scoreFont.spec === this.builtinFontSpec ? 2 : 1;
-    this.drawBitmapText(
-      gl,
-      scoreFont,
-      scoreStr,
-      12,
-      10,
-      scoreScale,
-      'left',
-      shadow,
-    );
-    this.drawBitmapText(gl, scoreFont, scoreStr, 11, 9, scoreScale, 'left', fg);
-
-    const smallScale = 1;
     const subHudStartY =
       scoreFont.spec === this.builtinFontSpec
         ? 28
         : 9 + Math.round(scoreFont.spec.lineHeight * scoreScale) - 2;
-    let leftHudY = subHudStartY;
+
+    if (!isDogfight) {
+      const scoreStr = String(Math.floor(snapshot.score)).padStart(6, '0');
+      this.drawBitmapText(
+        gl,
+        scoreFont,
+        scoreStr,
+        12,
+        10,
+        scoreScale,
+        'left',
+        hudShadow,
+      );
+      this.drawBitmapText(gl, scoreFont, scoreStr, 11, 9, scoreScale, 'left', fg);
+    }
+
+    const smallScale = 1;
+    let leftHudY = isDogfight ? 32 : subHudStartY;
     if (snapshot.mode === 'sfmt') {
+      this.drawBitmapText(
+        gl,
+        smallFont,
+        'SFMT',
+        13,
+        leftHudY + 1,
+        smallScale,
+        'left',
+        hudShadow,
+      );
       this.drawBitmapText(
         gl,
         smallFont,
@@ -2399,6 +2504,16 @@ export class WebGL2Renderer implements IRenderer {
         gl,
         smallFont,
         'ACE BOT',
+        13,
+        leftHudY + 1,
+        smallScale,
+        'left',
+        hudShadow,
+      );
+      this.drawBitmapText(
+        gl,
+        smallFont,
+        'ACE BOT',
         12,
         leftHudY,
         smallScale,
@@ -2408,8 +2523,8 @@ export class WebGL2Renderer implements IRenderer {
       leftHudY += 12;
     }
 
-    // Combo text using combofont.shader vertical barh decay
-    if (snapshot.combo > 1 || snapshot.comboTimer > 0) {
+    // Combo text using combofont.shader vertical barh decay (skipped in 1v1 Dogfight)
+    if (!isDogfight && (snapshot.combo > 1 || snapshot.comboTimer > 0)) {
       const comboText = `COMBO x${snapshot.combo}`;
       const comboScale = scoreFont.spec === this.builtinFontSpec ? 2 : 1;
       const timerRatio =
@@ -2431,7 +2546,7 @@ export class WebGL2Renderer implements IRenderer {
         comboY + 1,
         comboScale,
         'right',
-        shadow,
+        hudShadow,
       );
       // Draining barh combo shader
       this.drawComboText(
@@ -2453,18 +2568,18 @@ export class WebGL2Renderer implements IRenderer {
       const gx = Math.round(VIRTUAL_WIDTH * 0.5 + (snapshot.ghostPose.x - camX));
       const gy = Math.round(VIRTUAL_HEIGHT * 0.5 + (snapshot.ghostPose.y - camY) - 20);
       if (gx >= -24 && gx <= VIRTUAL_WIDTH + 24 && gy >= -12 && gy <= VIRTUAL_HEIGHT + 12) {
-        this.drawBitmapText(gl, smallFont, 'GHOST', gx + 1, gy + 1, 1, 'center', shadow);
+        this.drawBitmapText(gl, smallFont, 'GHOST', gx + 1, gy + 1, 1, 'center', hudShadow);
         this.drawBitmapText(gl, smallFont, 'GHOST', gx, gy, 1, 'center', pal.colors[6]);
       }
     }
 
-    // Act II 2P Co-op / 1v1 Dogfight HUD: P1 & P2 craft tags, P2 HP bar, Dogfight Scoreboard & Round KO banner
+    // Act II 2P Co-op / 1v1 Dogfight HUD: P1 & P2 craft tags, P1/P2 HP bars, Dogfight Scoreboard & Round KO banner
     if (snapshot.player2) {
       if (snapshot.player.alive) {
         const p1sx = Math.round(VIRTUAL_WIDTH * 0.5 + (snapshot.player.x - camX));
         const p1sy = Math.round(VIRTUAL_HEIGHT * 0.5 + (snapshot.player.y - camY) - 24);
         if (p1sx >= -20 && p1sx <= VIRTUAL_WIDTH + 20 && p1sy >= -12 && p1sy <= VIRTUAL_HEIGHT + 12) {
-          this.drawBitmapText(gl, smallFont, 'P1', p1sx + 1, p1sy + 1, 1, 'center', shadow);
+          this.drawBitmapText(gl, smallFont, 'P1', p1sx + 1, p1sy + 1, 1, 'center', hudShadow);
           this.drawBitmapText(gl, smallFont, 'P1', p1sx, p1sy, 1, 'center', fg);
         }
       }
@@ -2476,7 +2591,7 @@ export class WebGL2Renderer implements IRenderer {
             snapshot.activeMods?.multiplayerMode === 'dogfight1v1'
               ? warn
               : pal.colors[5];
-          this.drawBitmapText(gl, smallFont, 'P2', p2sx + 1, p2sy + 1, 1, 'center', shadow);
+          this.drawBitmapText(gl, smallFont, 'P2', p2sx + 1, p2sy + 1, 1, 'center', hudShadow);
           this.drawBitmapText(gl, smallFont, 'P2', p2sx, p2sy, 1, 'center', p2TagCol);
         }
       }
@@ -2492,50 +2607,76 @@ export class WebGL2Renderer implements IRenderer {
         1,
       );
 
+      const p1HudY = 12;
+      const p2HudY = isDogfight ? 12 : Math.max(48, subHudStartY + 2);
+      const p2BarY = p2HudY + 10;
+
       this.solidVerts.length = 0;
-      if (snapshot.dogfight) {
-        this.pushSolidRect(12, leftHudY + 10, 76, 6, shadow);
-        this.pushSolidRect(12, leftHudY + 10, Math.round(76 * p1Ratio), 6, fg);
-        this.pushSolidBorder(12, leftHudY + 10, 76, 6, 1, fg);
+      if (isDogfight) {
+        this.pushSolidRect(12, p1HudY + 10, 76, 6, hudTrackBg);
+        this.pushSolidRect(12, p1HudY + 10, Math.round(76 * p1Ratio), 6, fg);
+        this.pushSolidBorder(12, p1HudY + 10, 76, 6, 1, fg);
       }
-      const p2BarY = 44;
-      this.pushSolidRect(VIRTUAL_WIDTH - 88, p2BarY, 76, 6, shadow);
+      this.pushSolidRect(VIRTUAL_WIDTH - 88, p2BarY, 76, 6, hudTrackBg);
       this.pushSolidRect(
         VIRTUAL_WIDTH - 88,
         p2BarY,
         Math.round(76 * p2Ratio),
         6,
-        snapshot.dogfight ? warn : pal.colors[5],
+        isDogfight ? warn : pal.colors[5],
       );
       this.pushSolidBorder(VIRTUAL_WIDTH - 88, p2BarY, 76, 6, 1, fg);
       this.flushSolidArray(gl, this.solidVerts, this.screenProjMatrix);
 
-      if (snapshot.dogfight) {
-        this.drawBitmapText(gl, smallFont, 'P1 HP', 12, leftHudY, 1, 'left', fg);
+      if (isDogfight) {
+        this.drawBitmapText(gl, smallFont, 'P1 HP', 13, p1HudY + 1, 1, 'left', hudShadow);
+        this.drawBitmapText(gl, smallFont, 'P1 HP', 12, p1HudY, 1, 'left', fg);
       }
+      const p2Label = `P2 ${snapshot.player2.alive ? `${Math.round(p2Ratio * 100)}%` : 'KO'}`;
       this.drawBitmapText(
         gl,
         smallFont,
-        `P2 ${snapshot.player2.alive ? `${Math.round(p2Ratio * 100)}%` : 'KO'}`,
-        VIRTUAL_WIDTH - 12,
-        34,
+        p2Label,
+        VIRTUAL_WIDTH - 11,
+        p2HudY + 1,
         1,
         'right',
-        snapshot.dogfight ? warn : pal.colors[5],
+        hudShadow,
+      );
+      this.drawBitmapText(
+        gl,
+        smallFont,
+        p2Label,
+        VIRTUAL_WIDTH - 12,
+        p2HudY,
+        1,
+        'right',
+        isDogfight ? warn : pal.colors[5],
       );
     }
 
     if (snapshot.dogfight) {
       const df = snapshot.dogfight;
+      const scoreboardText = `P1 ${df.p1Wins} - ${df.p2Wins} P2  RD ${df.round}/${df.bestOf}`;
       this.solidVerts.length = 0;
-      this.pushSolidRect(190, 6, 220, 20, [shadow[0], shadow[1], shadow[2], 0.86]);
+      this.pushSolidRect(190, 6, 220, 20, hudBoxBg);
       this.pushSolidBorder(190, 6, 220, 20, 1, fg);
       this.flushSolidArray(gl, this.solidVerts, this.screenProjMatrix);
 
       this.drawBitmapText(
         gl,
         smallFont,
-        `P1 ${df.p1Wins} - ${df.p2Wins} P2  RD ${df.round}/${df.bestOf}`,
+        scoreboardText,
+        VIRTUAL_WIDTH * 0.5 + 1,
+        13,
+        1,
+        'center',
+        hudShadow,
+      );
+      this.drawBitmapText(
+        gl,
+        smallFont,
+        scoreboardText,
         VIRTUAL_WIDTH * 0.5,
         12,
         1,
@@ -2545,12 +2686,22 @@ export class WebGL2Renderer implements IRenderer {
 
       if (df.roundBannerTicks > 0 && df.winner === null) {
         this.solidVerts.length = 0;
-        this.pushSolidRect(160, 52, 280, 24, [shadow[0], shadow[1], shadow[2], 0.9]);
+        this.pushSolidRect(160, 52, 280, 24, hudBoxBg);
         this.pushSolidBorder(160, 52, 280, 24, 1, fg);
         this.flushSolidArray(gl, this.solidVerts, this.screenProjMatrix);
         const koLabel = df.lastScorer
           ? `ROUND KO!  P${df.lastScorer} SCORES`
           : `ROUND ${df.round} FIGHT!`;
+        this.drawBitmapText(
+          gl,
+          smallFont,
+          koLabel,
+          VIRTUAL_WIDTH * 0.5 + 1,
+          61,
+          1,
+          'center',
+          hudShadow,
+        );
         this.drawBitmapText(
           gl,
           smallFont,
@@ -2579,10 +2730,20 @@ export class WebGL2Renderer implements IRenderer {
 
       const toastY = snapshot.dogfight ? 30 : 8;
       this.solidVerts.length = 0;
-      this.pushSolidRect(150, toastY, 300, 22, shadow);
+      this.pushSolidRect(150, toastY, 300, 22, hudBoxBg);
       this.pushSolidBorder(150, toastY, 300, 22, 1, fg);
       this.flushSolidArray(gl, this.solidVerts, this.screenProjMatrix);
 
+      this.drawBitmapText(
+        gl,
+        smallFont,
+        label,
+        VIRTUAL_WIDTH * 0.5 + 1,
+        toastY + 8,
+        1,
+        'center',
+        hudShadow,
+      );
       this.drawBitmapText(
         gl,
         smallFont,
@@ -2598,6 +2759,7 @@ export class WebGL2Renderer implements IRenderer {
 
   private drawPausePass(gl: WebGL2RenderingContext): void {
     const pal = this.activePalette;
+    const contrast = this.getMenuContrastColors(pal);
     if (this.pauseLinesProg) {
       gl.useProgram(this.pauseLinesProg.program);
       gl.bindVertexArray(this.fullscreenVao);
@@ -2605,9 +2767,9 @@ export class WebGL2Renderer implements IRenderer {
         gl,
         this.pauseLinesProg,
         'uLineColor',
-        pal.colors[1][0],
-        pal.colors[1][1],
-        pal.colors[1][2],
+        contrast.panelDark[0],
+        contrast.panelDark[1],
+        contrast.panelDark[2],
         0.45,
       );
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
@@ -2616,7 +2778,7 @@ export class WebGL2Renderer implements IRenderer {
     }
 
     this.solidVerts.length = 0;
-    this.pushSolidRect(170, 158, 260, 74, pal.colors[1]);
+    this.pushSolidRect(170, 158, 260, 74, contrast.panelDark);
     this.pushSolidBorder(170, 158, 260, 74, 2, pal.colors[7]);
     this.flushSolidArray(gl, this.solidVerts, this.screenProjMatrix);
 
@@ -2631,7 +2793,7 @@ export class WebGL2Renderer implements IRenderer {
       172,
       bigScale,
       'center',
-      pal.colors[7],
+      contrast.darkPanelFg,
     );
     this.drawBitmapText(
       gl,
@@ -2641,7 +2803,7 @@ export class WebGL2Renderer implements IRenderer {
       208,
       1,
       'center',
-      pal.colors[5],
+      contrast.darkPanelAccent,
     );
   }
 
@@ -2651,6 +2813,7 @@ export class WebGL2Renderer implements IRenderer {
     elapsedSec: number,
   ): void {
     const pal = this.activePalette;
+    const contrast = this.getMenuContrastColors(pal);
     const isSfmt = snapshot.mode === 'sfmt';
     const highScore = isSfmt
       ? snapshot.profile.highScoreSfmt
@@ -2658,10 +2821,10 @@ export class WebGL2Renderer implements IRenderer {
 
     this.solidVerts.length = 0;
     this.pushSolidRect(120, 96, 360, 206, [
-      pal.colors[1][0],
-      pal.colors[1][1],
-      pal.colors[1][2],
-      0.92,
+      contrast.panelDark[0],
+      contrast.panelDark[1],
+      contrast.panelDark[2],
+      0.94,
     ]);
     this.pushSolidBorder(120, 96, 360, 206, 2, pal.colors[7]);
     this.pushSolidRect(132, 134, 336, 2, pal.colors[3]);
@@ -2692,7 +2855,7 @@ export class WebGL2Renderer implements IRenderer {
       titleY,
       titleScale,
       'center',
-      pal.colors[7],
+      contrast.darkPanelFg,
     );
 
     this.drawBitmapText(
@@ -2705,7 +2868,7 @@ export class WebGL2Renderer implements IRenderer {
       146,
       1,
       'center',
-      pal.colors[5],
+      contrast.darkPanelAccent,
     );
 
     const rows: [string, string][] = snapshot.dogfight
@@ -2724,8 +2887,26 @@ export class WebGL2Renderer implements IRenderer {
     for (let i = 0; i < rows.length; i++) {
       const [label, val] = rows[i]!;
       const ry = 172 + i * 20;
-      this.drawBitmapText(gl, smallFont, label, 154, ry, 1, 'left', pal.colors[3]);
-      this.drawBitmapText(gl, smallFont, val, 446, ry, 1, 'right', pal.colors[7]);
+      this.drawBitmapText(
+        gl,
+        smallFont,
+        label,
+        154,
+        ry,
+        1,
+        'left',
+        contrast.isBright1 ? contrast.darkPanelAccent : pal.colors[3],
+      );
+      this.drawBitmapText(
+        gl,
+        smallFont,
+        val,
+        446,
+        ry,
+        1,
+        'right',
+        contrast.darkPanelFg,
+      );
     }
 
     const blink = Math.floor(elapsedSec * 4) % 2 === 0;
@@ -2737,7 +2918,7 @@ export class WebGL2Renderer implements IRenderer {
       274,
       1,
       'center',
-      blink ? pal.colors[7] : pal.colors[5],
+      blink ? contrast.darkPanelFg : contrast.darkPanelAccent,
     );
   }
 
@@ -2748,6 +2929,7 @@ export class WebGL2Renderer implements IRenderer {
     elapsedSec: number,
   ): void {
     const pal = this.activePalette;
+    const contrast = this.getMenuContrastColors(pal);
     const isStudioOpen = Boolean(hangarUi.paletteStudio?.open);
     const isModDeckOpen = !isStudioOpen && Boolean(hangarUi.modDeckOpen);
     const previewPal =
@@ -2760,11 +2942,13 @@ export class WebGL2Renderer implements IRenderer {
     // 1. Projector screen backdrop and frame inside 600x400 FBO
     const screenBg: RgbaTuple = isSfmt
       ? [pal.colors[2][0] * 0.35, pal.colors[2][1] * 0.15, pal.colors[2][2] * 0.18, 0.94]
-      : [pal.colors[1][0], pal.colors[1][1], pal.colors[1][2], 0.92];
+      : contrast.isBright1
+        ? contrast.panelDark
+        : [pal.colors[1][0], pal.colors[1][1], pal.colors[1][2], 0.92];
 
     this.solidVerts.length = 0;
     // Projector top housing bar
-    this.pushSolidRect(0, 0, VIRTUAL_WIDTH, 18, pal.colors[1]);
+    this.pushSolidRect(0, 0, VIRTUAL_WIDTH, 18, contrast.panelDark);
     this.pushSolidRect(0, 18, VIRTUAL_WIDTH, 2, pal.colors[7]);
     // Pulldown projector canvas
     this.pushSolidRect(26, 22, 548, 352, screenBg);
@@ -2773,7 +2957,7 @@ export class WebGL2Renderer implements IRenderer {
     this.pushSolidRect(22, 374, 556, 4, pal.colors[7]);
     this.pushSolidRect(298, 378, 4, 18, pal.colors[3]);
     // Title banner plate
-    this.pushSolidRect(42, 30, 516, 30, pal.colors[2]);
+    this.pushSolidRect(42, 30, 516, 30, contrast.bannerPlateBg);
     this.pushSolidBorder(42, 30, 516, 30, 1, pal.colors[7]);
     // Aircraft preview stage box (top-right)
     this.pushSolidRect(318, 68, 240, 96, previewPal.backcol);
@@ -2864,7 +3048,7 @@ export class WebGL2Renderer implements IRenderer {
         5,
         1,
         'left',
-        pal.colors[5],
+        contrast.darkPanelAccent,
       );
     }
 
@@ -2876,7 +3060,7 @@ export class WebGL2Renderer implements IRenderer {
       5,
       1,
       'center',
-      pal.colors[7],
+      contrast.darkPanelFg,
     );
 
     this.drawBitmapText(
@@ -2887,14 +3071,22 @@ export class WebGL2Renderer implements IRenderer {
       5,
       1,
       'right',
-      moddedEnabled ? pal.colors[5] : pal.colors[7],
+      moddedEnabled ? contrast.darkPanelAccent : contrast.darkPanelFg,
     );
 
+    const isModCraft =
+      moddedEnabled &&
+      (hangarUi.loadout.weapon >= 6 ||
+        hangarUi.loadout.body >= 6 ||
+        hangarUi.loadout.engine >= 6);
+    const craftBanner = isModCraft
+      ? `[MOD] ${hangarUi.planeName.toUpperCase()}`
+      : hangarUi.planeName.toUpperCase();
     const bannerText = isStudioOpen
       ? 'LIVE PALETTE STUDIO'
       : isModDeckOpen
         ? 'ACT II MOD DECK'
-        : hangarUi.planeName.toUpperCase();
+        : craftBanner;
 
     this.drawBitmapText(
       gl,
@@ -2904,7 +3096,7 @@ export class WebGL2Renderer implements IRenderer {
       bannerY,
       medScale,
       'center',
-      pal.colors[7],
+      contrast.darkPanelFg,
     );
 
     if (isStudioOpen && hangarUi.paletteStudio) {
@@ -2924,6 +3116,20 @@ export class WebGL2Renderer implements IRenderer {
       hangarUi.modFlags &&
       hangarUi.modFlags.multiplayerMode !== 'solo'
     ) {
+      const pBackLuma =
+        0.299 * previewPal.backcol[0] +
+        0.587 * previewPal.backcol[1] +
+        0.114 * previewPal.backcol[2];
+      const p1Luma =
+        0.299 * previewPal.colors[1][0] +
+        0.587 * previewPal.colors[1][1] +
+        0.114 * previewPal.colors[1][2];
+      const p2PreviewCol: RgbaTuple =
+        pBackLuma > 0.45 && p1Luma > 0.45
+          ? [0.08, 0.04, 0.12, 0.96]
+          : pBackLuma <= 0.45 && p1Luma <= 0.45
+            ? previewPal.colors[7]
+            : previewPal.colors[1];
       this.drawBitmapText(
         gl,
         smallFont,
@@ -2932,7 +3138,7 @@ export class WebGL2Renderer implements IRenderer {
         151,
         1,
         'left',
-        previewPal.colors[1],
+        p2PreviewCol,
       );
     }
 
@@ -3018,15 +3224,19 @@ export class WebGL2Renderer implements IRenderer {
     }
 
     // Active part description bar
-    this.pushSolidRect(42, 300, 260, 32, pal.colors[3]);
+    this.pushSolidRect(42, 300, 260, 32, contrast.panelMidBg);
     this.flushSolidArray(gl, this.solidVerts, this.screenProjMatrix);
 
     for (let i = 0; i < rowDefs.length; i++) {
       const r = rowDefs[i]!;
       const ry = 70 + i * 38;
       const isSelected = hangarUi.activeRow === r.key;
-      const labelCol = isSelected ? pal.colors[1] : pal.colors[5];
-      const valCol = isSelected ? pal.colors[1] : pal.colors[7];
+      const labelCol = isSelected
+        ? contrast.selectedTextInk
+        : contrast.darkPanelAccent;
+      const valCol = isSelected
+        ? contrast.selectedTextInk
+        : contrast.darkPanelFg;
       const prefix = isSelected ? '> ' : '  ';
       this.drawBitmapText(
         gl,
@@ -3071,7 +3281,7 @@ export class WebGL2Renderer implements IRenderer {
         descrStartY + i * descrStepY,
         line.scale,
         'left',
-        pal.colors[1],
+        contrast.midPanelInk,
       );
     }
 
@@ -3083,7 +3293,13 @@ export class WebGL2Renderer implements IRenderer {
       const prog = hangarUi.missionProgress[m.id];
       const done = prog?.completed ?? false;
       const my = 172 + i * 52;
-      this.pushSolidRect(318, my, 240, 46, done ? pal.colors[2] : pal.colors[3]);
+      this.pushSolidRect(
+        318,
+        my,
+        240,
+        46,
+        done ? contrast.bannerPlateBg : contrast.panelMidBg,
+      );
       this.pushSolidBorder(318, my, 240, 46, 1, pal.colors[7]);
 
       const ratio =
@@ -3092,7 +3308,7 @@ export class WebGL2Renderer implements IRenderer {
           : done
             ? 1
             : 0;
-      this.pushSolidRect(326, my + 34, 224, 6, pal.colors[1]);
+      this.pushSolidRect(326, my + 34, 224, 6, contrast.panelDark);
       this.pushSolidRect(
         326,
         my + 34,
@@ -3133,7 +3349,7 @@ export class WebGL2Renderer implements IRenderer {
         titleY,
         titleScale,
         'left',
-        pal.colors[7],
+        contrast.darkPanelFg,
       );
       this.drawBitmapText(
         gl,
@@ -3143,7 +3359,7 @@ export class WebGL2Renderer implements IRenderer {
         titleY,
         1,
         'right',
-        pal.colors[7],
+        contrast.darkPanelFg,
       );
       if (descrLayout.lines.length === 1) {
         this.drawBitmapText(
@@ -3154,7 +3370,7 @@ export class WebGL2Renderer implements IRenderer {
           my + 18,
           descrLayout.scale,
           'left',
-          pal.colors[1],
+          contrast.midPanelInk,
         );
       } else {
         for (let lineIdx = 0; lineIdx < descrLayout.lines.length; lineIdx++) {
@@ -3166,7 +3382,7 @@ export class WebGL2Renderer implements IRenderer {
             my + 15 + lineIdx * 9,
             descrLayout.scale,
             'left',
-            pal.colors[1],
+            contrast.midPanelInk,
           );
         }
       }
@@ -3188,7 +3404,7 @@ export class WebGL2Renderer implements IRenderer {
       347,
       1,
       'left',
-      pal.colors[7],
+      contrast.darkPanelFg,
     );
     this.drawBitmapText(
       gl,
@@ -3198,7 +3414,7 @@ export class WebGL2Renderer implements IRenderer {
       347,
       1,
       'right',
-      pal.colors[5],
+      contrast.darkPanelAccent,
     );
     // Keep snapshot referenced cleanly
     if (snapshot.tick < 0) {
@@ -3212,6 +3428,7 @@ export class WebGL2Renderer implements IRenderer {
     smallFont: { spec: BitmapFontSpec; tex: UploadedTexture },
   ): void {
     const pal = this.activePalette;
+    const contrast = this.getMenuContrastColors(pal);
     const flags = hangarUi.modFlags ?? {
       moddedEnabled: false,
       arsenalBosses: false,
@@ -3297,7 +3514,7 @@ export class WebGL2Renderer implements IRenderer {
       {
         key: 'palettestudio',
         label: 'PAL STUDIO',
-        value: 'OPEN >',
+        value: 'OPEN',
         descr: 'OPEN THE LIVE 8-SLOT RGB PALETTE STUDIO WITH PRESETS AND JSON IMPORT/EXPORT.',
       },
       {
@@ -3321,7 +3538,7 @@ export class WebGL2Renderer implements IRenderer {
     }
 
     // Right inspector panel
-    this.pushSolidRect(318, 172, 240, 160, pal.colors[3]);
+    this.pushSolidRect(318, 172, 240, 160, contrast.panelMidBg);
     this.pushSolidBorder(318, 172, 240, 160, 1, pal.colors[7]);
     this.flushSolidArray(gl, this.solidVerts, this.screenProjMatrix);
 
@@ -3329,8 +3546,12 @@ export class WebGL2Renderer implements IRenderer {
       const r = modRows[i]!;
       const ry = 70 + i * 21;
       const isSelected = r.key === activeRow;
-      const labelCol = isSelected ? pal.colors[1] : pal.colors[5];
-      const valCol = isSelected ? pal.colors[1] : pal.colors[7];
+      const labelCol = isSelected
+        ? contrast.selectedTextInk
+        : contrast.darkPanelAccent;
+      const valCol = isSelected
+        ? contrast.selectedTextInk
+        : contrast.darkPanelFg;
       this.drawBitmapText(
         gl,
         smallFont,
@@ -3363,7 +3584,7 @@ export class WebGL2Renderer implements IRenderer {
       180,
       1,
       'left',
-      pal.colors[7],
+      contrast.darkPanelFg,
     );
     const wrapped = wrapBitmapTextLines(smallFont.spec, activeMeta.descr, 224, 1);
     for (let i = 0; i < Math.min(5, wrapped.length); i++) {
@@ -3375,7 +3596,7 @@ export class WebGL2Renderer implements IRenderer {
         196 + i * 11,
         1,
         'left',
-        pal.colors[1],
+        contrast.midPanelInk,
       );
     }
 
@@ -3386,17 +3607,20 @@ export class WebGL2Renderer implements IRenderer {
       hangarUi.pbGhostScore !== undefined
         ? `PB GHOST: ${Math.floor(hangarUi.pbGhostScore)}`
         : 'PB GHOST: READY';
-    this.drawBitmapText(gl, smallFont, dailyStr, 326, 278, 1, 'left', pal.colors[7]);
-    this.drawBitmapText(gl, smallFont, ghostStr, 326, 294, 1, 'left', pal.colors[7]);
+    this.drawBitmapText(gl, smallFont, dailyStr, 326, 278, 1, 'left', contrast.darkPanelFg);
+    this.drawBitmapText(gl, smallFont, ghostStr, 326, 294, 1, 'left', contrast.darkPanelFg);
+    const p2Hint = 'P1:WASD+F/SPC  P2:ARROWS+M/NUM0';
+    const p2HintW = measureBitmapText(smallFont.spec, p2Hint, 1).width;
+    const p2HintScale = p2HintW > 224 && p2HintW > 0 ? 224 / p2HintW : 1;
     this.drawBitmapText(
       gl,
       smallFont,
-      'P2 KEYS: I/J/K/L + RSHIFT',
+      p2Hint,
       326,
       310,
-      1,
+      p2HintScale,
       'left',
-      pal.colors[5],
+      contrast.darkPanelAccent,
     );
 
     this.drawBitmapText(
@@ -3407,7 +3631,7 @@ export class WebGL2Renderer implements IRenderer {
       347,
       1,
       'left',
-      pal.colors[7],
+      contrast.darkPanelFg,
     );
     this.drawBitmapText(
       gl,
@@ -3417,7 +3641,7 @@ export class WebGL2Renderer implements IRenderer {
       347,
       1,
       'right',
-      pal.colors[5],
+      contrast.darkPanelAccent,
     );
   }
 
@@ -3427,6 +3651,7 @@ export class WebGL2Renderer implements IRenderer {
     smallFont: { spec: BitmapFontSpec; tex: UploadedTexture },
   ): void {
     const pal = this.activePalette;
+    const contrast = this.getMenuContrastColors(pal);
     const studio = hangarUi.paletteStudio!;
     const sPal = studio.palette;
     const slotLabels = [
@@ -3444,7 +3669,7 @@ export class WebGL2Renderer implements IRenderer {
 
     this.solidVerts.length = 0;
     // Left header strip
-    this.pushSolidRect(42, 68, 260, 18, pal.colors[3]);
+    this.pushSolidRect(42, 68, 260, 18, contrast.panelMidBg);
     this.pushSolidBorder(42, 68, 260, 18, 1, pal.colors[7]);
 
     // 8 palette slot rows
@@ -3464,12 +3689,12 @@ export class WebGL2Renderer implements IRenderer {
         22,
         15,
         1,
-        isSelected ? pal.colors[1] : pal.colors[7],
+        isSelected ? contrast.selectedTextInk : pal.colors[7],
       );
     }
 
     // RGB channel bars at bottom-left
-    this.pushSolidRect(42, 284, 260, 48, pal.colors[3]);
+    this.pushSolidRect(42, 284, 260, 48, contrast.panelMidBg);
     this.pushSolidBorder(42, 284, 260, 48, 1, pal.colors[7]);
     const activeTuple = getSlotTuple(studio.selectedSlot);
     const barColors: [RgbaTuple, RgbaTuple, RgbaTuple] = [
@@ -3480,7 +3705,7 @@ export class WebGL2Renderer implements IRenderer {
     for (let ch = 0; ch < 3; ch++) {
       const by = 290 + ch * 14;
       const v = clamp(activeTuple[ch] ?? 0, 0, 1);
-      this.pushSolidRect(74, by + 1, 174, 8, pal.colors[1]);
+      this.pushSolidRect(74, by + 1, 174, 8, contrast.panelDark);
       this.pushSolidRect(74, by + 1, Math.round(174 * v), 8, barColors[ch]!);
       if (ch === studio.selectedChannel) {
         this.pushSolidBorder(73, by, 176, 10, 1, pal.colors[7]);
@@ -3501,36 +3726,46 @@ export class WebGL2Renderer implements IRenderer {
     this.pushSolidRect(430, 252, 10, 4, sPal.colors[6]); // bullet reflection
     this.pushSolidBorder(318, 172, 240, 112, 1, pal.colors[7]);
 
-    this.pushSolidRect(318, 288, 240, 44, pal.colors[3]);
+    this.pushSolidRect(318, 288, 240, 44, contrast.panelMidBg);
     this.pushSolidBorder(318, 288, 240, 44, 1, pal.colors[7]);
     this.flushSolidArray(gl, this.solidVerts, this.screenProjMatrix);
+
+    const slotsLabel = 'SLOTS';
+    const slotsW = measureBitmapText(smallFont.spec, slotsLabel, 1).width;
+    const palLabelMaxW = Math.max(80, 296 - (48 + slotsW + 8));
+    const palLabelText = sPal.name.toUpperCase().slice(0, 18);
+    const palLabelW = measureBitmapText(smallFont.spec, palLabelText, 1).width;
+    const palLabelScale =
+      palLabelW > palLabelMaxW && palLabelW > 0 ? palLabelMaxW / palLabelW : 1;
 
     this.drawBitmapText(
       gl,
       smallFont,
-      '8-SLOT PALETTE',
+      slotsLabel,
       48,
       73,
       1,
       'left',
-      pal.colors[7],
+      contrast.darkPanelFg,
     );
     this.drawBitmapText(
       gl,
       smallFont,
-      sPal.name.toUpperCase().slice(0, 14),
+      palLabelText,
       296,
       73,
-      1,
+      palLabelScale,
       'right',
-      pal.colors[1],
+      contrast.midPanelInk,
     );
 
     for (let i = 0; i < 8; i++) {
       const ry = 90 + i * 24;
       const isSelected = i === studio.selectedSlot;
       const col = getSlotTuple(i);
-      const textCol = isSelected ? pal.colors[1] : pal.colors[7];
+      const textCol = isSelected
+        ? contrast.selectedTextInk
+        : contrast.darkPanelFg;
       this.drawBitmapText(
         gl,
         smallFont,
@@ -3566,7 +3801,7 @@ export class WebGL2Renderer implements IRenderer {
         by + 2,
         1,
         'left',
-        isCh ? pal.colors[7] : pal.colors[1],
+        isCh ? contrast.darkPanelFg : contrast.midPanelInk,
       );
       this.drawBitmapText(
         gl,
@@ -3576,7 +3811,7 @@ export class WebGL2Renderer implements IRenderer {
         by + 2,
         1,
         'right',
-        isCh ? pal.colors[7] : pal.colors[1],
+        isCh ? contrast.darkPanelFg : contrast.midPanelInk,
       );
     }
 
@@ -3588,7 +3823,7 @@ export class WebGL2Renderer implements IRenderer {
       296,
       1,
       'left',
-      pal.colors[7],
+      contrast.darkPanelFg,
     );
     this.drawBitmapText(
       gl,
@@ -3598,7 +3833,7 @@ export class WebGL2Renderer implements IRenderer {
       312,
       1,
       'left',
-      pal.colors[1],
+      contrast.midPanelInk,
     );
 
     this.drawBitmapText(
@@ -3609,7 +3844,7 @@ export class WebGL2Renderer implements IRenderer {
       347,
       1,
       'left',
-      pal.colors[7],
+      contrast.darkPanelFg,
     );
     this.drawBitmapText(
       gl,
@@ -3619,7 +3854,7 @@ export class WebGL2Renderer implements IRenderer {
       347,
       1,
       'right',
-      pal.colors[5],
+      contrast.darkPanelAccent,
     );
   }
 
@@ -4374,13 +4609,22 @@ export class WebGL2Renderer implements IRenderer {
     }
 
     if (snapshot.phase === 'hangar' && hangarUi) {
-      ctx.fillStyle = rgbaToCss(pal.colors[1]);
+      const contrast = this.getMenuContrastColors(pal);
+      const isModCraft =
+        Boolean(hangarUi.modFlags?.moddedEnabled) &&
+        (hangarUi.loadout.weapon >= 6 ||
+          hangarUi.loadout.body >= 6 ||
+          hangarUi.loadout.engine >= 6);
+      const planeLabel = isModCraft
+        ? `[MOD] ${hangarUi.planeName.toUpperCase()}`
+        : hangarUi.planeName;
+      ctx.fillStyle = rgbaToCss(contrast.panelDark);
       ctx.fillRect(30, 24, 540, 352);
       ctx.strokeStyle = rgbaToCss(pal.colors[7]);
       ctx.strokeRect(30, 24, 540, 352);
-      ctx.fillStyle = rgbaToCss(pal.colors[7]);
+      ctx.fillStyle = rgbaToCss(contrast.darkPanelFg);
       ctx.font = 'bold 16px monospace';
-      ctx.fillText(hangarUi.planeName, 48, 52);
+      ctx.fillText(planeLabel, 48, 52);
       ctx.font = '12px monospace';
       ctx.fillText(
         `W:${hangarUi.weaponSpec.name} B:${hangarUi.bodySpec.name} E:${hangarUi.engineSpec.name}`,
@@ -4435,13 +4679,14 @@ export class WebGL2Renderer implements IRenderer {
       }
       ctx.fillStyle = rgbaToCss(pal.colors[7]);
       ctx.font = 'bold 14px monospace';
-      ctx.fillText(String(Math.floor(snapshot.score)).padStart(6, '0'), 12, 22);
       if (snapshot.dogfight) {
         ctx.fillText(
           `P1 ${snapshot.dogfight.p1Wins} - ${snapshot.dogfight.p2Wins} P2`,
           240,
           22,
         );
+      } else {
+        ctx.fillText(String(Math.floor(snapshot.score)).padStart(6, '0'), 12, 22);
       }
       this.frameDrawCalls++;
     }
