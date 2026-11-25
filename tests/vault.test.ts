@@ -862,4 +862,39 @@ describe('createProceduralFontTexture narrow glyph & control-char rasterization'
     const anyLit = tex.rgba.some((v) => v > 0);
     expect(anyLit).toBe(false);
   });
+
+  it('derives proportional AngelCode-style bounds for punctuation (-, ., ,, !, (, ), ~) in procedural fonts', () => {
+    const fallback = createProceduralFallbackBundle();
+    for (const fontName of ['fnts', 'fntm', 'fntb'] as const) {
+      const font = fallback.data.fonts[fontName]!;
+      const capA = font.glyphs[65]!;
+      const hyphen = font.glyphs[45]!;
+      const period = font.glyphs[46]!;
+      const comma = font.glyphs[44]!;
+      const bang = font.glyphs[33]!;
+      const lparen = font.glyphs[40]!;
+      const rparen = font.glyphs[41]!;
+      const tilde = font.glyphs[126]!;
+
+      // Hyphen must be thin & vertically centered, NEVER a full-height solid block
+      expect(hyphen.height).toBeLessThanOrEqual(Math.ceil(capA.height * 0.35));
+      expect(hyphen.yoffset).toBeGreaterThan(capA.yoffset);
+      expect(hyphen.yoffset + hyphen.height).toBeLessThan(capA.yoffset + capA.height);
+
+      // Period & comma must sit cleanly near the baseline with compact dimensions
+      expect(period.height).toBeLessThanOrEqual(Math.ceil(capA.height * 0.45));
+      expect(period.yoffset).toBeGreaterThan(capA.yoffset + Math.floor(capA.height * 0.4));
+      expect(comma.height).toBeLessThanOrEqual(Math.ceil(capA.height * 0.45));
+      expect(comma.width).toBeLessThan(capA.width);
+
+      // Narrow punctuation must stay slim rather than stretching across full cell width
+      expect(bang.width).toBeLessThanOrEqual(Math.ceil(capA.width * 0.4));
+      expect(lparen.width).toBeLessThan(capA.width);
+      expect(rparen.width).toBeLessThan(capA.width);
+
+      // Tilde must remain vertically compact in the middle band
+      expect(tilde.height).toBeLessThanOrEqual(Math.ceil(capA.height * 0.6));
+      expect(tilde.yoffset).toBeGreaterThan(capA.yoffset);
+    }
+  });
 });

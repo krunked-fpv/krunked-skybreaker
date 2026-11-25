@@ -443,37 +443,40 @@ class SpritePainter {
 
 // ============================================================================
 // Handcrafted 100% Original SKYBREAKER Aircraft Part Pixel Grids (24x24, +X)
+// Slim fighter-jet proportions: distinct tail/engine zone (x=0..8), crisp open
+// tail waist (x=5..10), slim 4px fuselage (y=10..13) to sharp nose (x=22..23),
+// and dramatic full-span wings (y=0..23) anchored forward (x=11..18).
 // ============================================================================
 
-// Player Engines (rear x=0..11, 12 top rows mirrored vertically to 24 rows)
+// Player Engines (rear x=0..8, 12 top rows mirrored vertically to 24 rows)
 const ENGINE_STANDARD_TOP: readonly string[] = [
   '........................',
   '........................',
   '........................',
   '........................',
   '........................',
-  '..111...................',
-  '...1111.................',
-  '....11111...............',
-  '....1111111.............',
-  '..5111111111............',
-  '.751111111111...........',
-  '.751111111111...........',
+  '........................',
+  '..11....................',
+  '...111..................',
+  '....111.................',
+  '....1111................',
+  '.51111111...............',
+  '751111111...............',
 ];
 
 const ENGINE_AFTERBURN_TOP: readonly string[] = [
   '........................',
   '........................',
   '........................',
+  '........................',
+  '........................',
+  '..1111..................',
+  '5111111.................',
+  '7511111.................',
+  '..11111.................',
+  '....111.................',
   '...111111...............',
-  '.5111111111.............',
-  '755111111111............',
-  '.5111111111.............',
-  '...11111111.............',
-  '.....1111111............',
-  '.....11111111...........',
-  '....1111111111..........',
-  '....1111111111..........',
+  '..1111111...............',
 ];
 
 const ENGINE_RECOILJET_TOP: readonly string[] = [
@@ -481,14 +484,14 @@ const ENGINE_RECOILJET_TOP: readonly string[] = [
   '........................',
   '........................',
   '........................',
-  '.....1111...............',
-  '....115111..............',
-  '....1111111.............',
-  '.51111111111............',
-  '....111111111...........',
-  '511111111111............',
-  '.111111111111...........',
-  '511111111111............',
+  '........................',
+  '........................',
+  '....111.................',
+  '...11511................',
+  '51111111................',
+  '...11111................',
+  '511111111...............',
+  '.11111111...............',
 ];
 
 const ENGINE_HYDROJET_TOP: readonly string[] = [
@@ -496,32 +499,32 @@ const ENGINE_HYDROJET_TOP: readonly string[] = [
   '........................',
   '........................',
   '........................',
+  '........................',
+  '........................',
+  '...11...................',
   '....111.................',
-  '.....1111...............',
-  '......11111.............',
-  '......111111............',
-  '.....111111111..........',
-  '....11151111111.........',
-  '...111111111111.........',
-  '..111111111111..........',
+  '.....111................',
+  '....1111................',
+  '...115111...............',
+  '..1111111...............',
 ];
 
 const ENGINE_GRAVDRIVE_TOP: readonly string[] = [
   '........................',
   '........................',
   '........................',
-  '....1111................',
-  '..1115711...............',
-  '.111..1111..............',
-  '.11....1111.............',
-  '115.....1111............',
-  '11......11111...........',
-  '11.......11111..........',
-  '115....1111111..........',
-  '117...11111111..........',
+  '........................',
+  '...111..................',
+  '.115711.................',
+  '.11..11.................',
+  '11....11................',
+  '115.....................',
+  '11......................',
+  '115..1111...............',
+  '117.11111...............',
 ];
 
-// Player Bodies (fuselage x=5..23, 12 top rows mirrored vertically to 24 rows)
+// Player Bodies (slim fuselage x=6..23, 12 top rows mirrored vertically to 24 rows)
 const BODY_STANDARD_TOP: readonly string[] = [
   '........................',
   '........................',
@@ -531,10 +534,10 @@ const BODY_STANDARD_TOP: readonly string[] = [
   '........................',
   '........................',
   '........................',
-  '.........111111.........',
-  '.......11111111111......',
-  '......111111551111111...',
-  '......11111157711111111.',
+  '........................',
+  '........................',
+  '......11111111111111....',
+  '......11111115771111111.',
 ];
 
 const BODY_BULWARK_TOP: readonly string[] = [
@@ -544,12 +547,12 @@ const BODY_BULWARK_TOP: readonly string[] = [
   '........................',
   '........................',
   '........................',
-  '.......111111111........',
-  '......111111111111......',
-  '......11511111151111....',
-  '.....1111111111111111...',
-  '.....11111111771111111..',
-  '.....111111115711111111.',
+  '........................',
+  '........................',
+  '..........11111111......',
+  '.........11511115111....',
+  '......1111111177111111..',
+  '......11111111571111111.',
 ];
 
 const BODY_RAMPROW_TOP: readonly string[] = [
@@ -560,10 +563,10 @@ const BODY_RAMPROW_TOP: readonly string[] = [
   '........................',
   '........................',
   '........................',
-  '.............111........',
-  '............111111......',
-  '........11111111155.....',
-  '.......11111151111157...',
+  '........................',
+  '................115.....',
+  '...............111157...',
+  '......1111111111111157..',
   '......111111571111111777',
 ];
 
@@ -575,11 +578,11 @@ const BODY_COREBLAST_TOP: readonly string[] = [
   '........................',
   '........................',
   '........................',
-  '.........111111.........',
-  '........111551111.......',
-  '.......111577511111.....',
-  '......111157751111111...',
-  '......1111155111111111..',
+  '........................',
+  '...........1111.........',
+  '..........1157111.......',
+  '......111115775111111...',
+  '......1111115511111111..',
 ];
 
 const BODY_PAYLOAD_TOP: readonly string[] = [
@@ -589,86 +592,86 @@ const BODY_PAYLOAD_TOP: readonly string[] = [
   '........................',
   '........................',
   '........................',
-  '........11111115........',
-  '.......1111111157.......',
-  '........11111111........',
-  '.......11111111111......',
-  '......111111551111111...',
-  '......11111157111111111.',
+  '........................',
+  '........................',
+  '...........111157.......',
+  '............11111.......',
+  '......111111155111111...',
+  '......11111115711111111.',
 ];
 
-// Player Wings / Weapons (rows 0..9 + 14..23, leaving body canopy window y=10..13 unobstructed!)
+// Player Wings / Weapons (full span y=0..9 + 14..23, anchored forward at x=11..18 for clean waist!)
 const WINGS_STANDARD_TOP: readonly string[] = [
-  '........................',
-  '........................',
-  '.....115................',
-  '......1111..............',
-  '.......11111............',
-  '........111111..........',
-  '........11111111........',
-  '.........111111111115...',
-  '.........111111111......',
-  '..........111111........',
+  '........115.............',
+  '.........1111...........',
+  '..........1111..........',
+  '...........1111.........',
+  '...........11111........',
+  '............11111.......',
+  '............111111......',
+  '............111111115...',
+  '.............111111.....',
+  '..............11111.....',
   '........................',
   '........................',
 ];
 
 const WINGS_PULSEBEAM_TOP: readonly string[] = [
-  '........................',
-  '...........11157........',
-  '..........1111115.......',
-  '.........111111.........',
-  '........111111..........',
-  '........11111...........',
-  '........111111111157....',
-  '.........11111111.......',
-  '.........1111111........',
-  '..........11111.........',
+  '................11157...',
+  '...............111115...',
+  '..............11111.....',
+  '.............11111......',
+  '............11111.......',
+  '............1111........',
+  '............111111157...',
+  '.............111111.....',
+  '.............11111......',
+  '..............1111......',
   '........................',
   '........................',
 ];
 
 const WINGS_SCATTER_TOP: readonly string[] = [
-  '.......11115............',
-  '.......111111...........',
-  '........111111..........',
-  '........11111115........',
-  '........1111111.........',
-  '.........1111111........',
-  '.........1111111115.....',
-  '.........11111111.......',
-  '.........1111111........',
-  '..........11111.........',
+  '...........1115.........',
+  '...........1111.........',
+  '............1111........',
+  '............111115......',
+  '............11111.......',
+  '.............11111......',
+  '.............1111115....',
+  '.............111111.....',
+  '..............11111.....',
+  '..............1111......',
   '........................',
   '........................',
 ];
 
 const WINGS_SEEKER_TOP: readonly string[] = [
-  '........................',
-  '........................',
-  '......1111..............',
-  '.......11111............',
-  '.......111111111157.....',
-  '.......111111111115.....',
-  '........111111111157....',
-  '.........111111111......',
-  '.........1111111........',
-  '..........11111.........',
+  '.........111............',
+  '..........1111..........',
+  '...........1111.........',
+  '...........11111........',
+  '...........1111111157...',
+  '...........1111111115...',
+  '............111111157...',
+  '.............111111.....',
+  '.............11111......',
+  '..............1111......',
   '........................',
   '........................',
 ];
 
 const WINGS_PLASMA_TOP: readonly string[] = [
-  '........................',
-  '.....11111..............',
-  '......111111............',
-  '.......1111111..........',
-  '.......11111111.........',
-  '........111111111.......',
-  '........111111111111115.',
-  '.........111111111157117',
-  '.........1111111111111..',
-  '..........1111111.......',
+  '........1111............',
+  '.........11111..........',
+  '..........11111.........',
+  '...........11111........',
+  '...........111111.......',
+  '............111111......',
+  '............11111111115.',
+  '.............11111157117',
+  '.............111111111..',
+  '..............11111.....',
   '........................',
   '........................',
 ];
@@ -1237,12 +1240,27 @@ function drawCloudFormation(p: SpritePainter, frameIdx: number, isParallax: bool
   const w = p.w;
   const h = p.h;
   const basePal = isParallax ? 6 : 7;
-  const shadePal = isParallax ? 6 : 6;
+  const shadePal = 6;
   const trimPal = 7;
 
-  // Deterministic sculpted cumulus domes per frame (distinct silhouettes across all 6 frames!)
+  // Deterministic sculpted cumulus formations with organic rounded base puffs (zero hard bars!)
   const domeCount = isParallax ? 4 : 6;
-  const baseY = h * 0.74;
+  const baseY = h * 0.7;
+
+  // 1. Soft overlapping lower cumulus base lobes (provides gentle curved shadow underside)
+  const baseLobes = domeCount + 1;
+  for (let i = 0; i < baseLobes; i++) {
+    const u = baseLobes > 1 ? i / (baseLobes - 1) : 0.5;
+    const arch = Math.sin(u * Math.PI);
+    const wave = Math.cos(i * 2.1 + frameIdx * 1.15);
+    const lx = w * (0.12 + u * 0.76);
+    const rx = w * (0.12 + 0.06 * arch);
+    const ry = h * (0.09 + 0.07 * arch + 0.02 * Math.abs(wave));
+    const ly = baseY + h * (0.015 * wave);
+    p.ellipse(lx, ly, rx, ry, shadePal);
+  }
+
+  // 2. Sculpted towering sunlit cumulus billows overlapping seamlessly above the base lobes
   for (let i = 0; i < domeCount; i++) {
     const u = domeCount > 1 ? i / (domeCount - 1) : 0.5;
     const wave = Math.sin((i + 1) * 1.9 + frameIdx * 1.37);
@@ -1250,21 +1268,13 @@ function drawCloudFormation(p: SpritePainter, frameIdx: number, isParallax: bool
     const arch = Math.sin(u * Math.PI);
     const rx = w * (0.14 + 0.08 * arch + 0.02 * Math.cos(i * 2.3 + frameIdx));
     const ry = h * (0.16 + 0.24 * arch + 0.05 * Math.abs(wave));
-    const dy = baseY - ry * 0.65;
+    const dy = baseY - ry * 0.58;
     p.ellipse(dx, dy, rx, ry, basePal);
     if (isParallax) {
       // Bright sunlit top rim on midground parallax clouds
-      p.ellipse(dx, dy - ry * 0.3, rx * 0.7, ry * 0.35, trimPal);
+      p.ellipse(dx, dy - ry * 0.28, rx * 0.68, ry * 0.34, trimPal);
     }
   }
-
-  // Flat stylized arcade cloud belly with subtle shaded underside band
-  p.rect(w * 0.1, baseY - h * 0.14, w * 0.8, h * 0.15, basePal);
-  if (!isParallax) {
-    p.rect(w * 0.12, baseY - h * 0.05, w * 0.76, h * 0.07, shadePal);
-  }
-  // Crisp flat cutoff bottom
-  p.rect(0, baseY + h * 0.02, w, h - baseY, 0);
 }
 
 function drawSpaceClouds(p: SpritePainter, frameIdx: number): void {
@@ -2137,6 +2147,34 @@ export function createProceduralFontTexture(font: BitmapFontSpec): DecodedTextur
   };
 }
 
+function computeGlyphBounds(bitmap: readonly number[]): {
+  minCol: number;
+  maxCol: number;
+  minRow: number;
+  maxRow: number;
+} | null {
+  let minCol = 5;
+  let maxCol = -1;
+  let minRow = 7;
+  let maxRow = -1;
+  for (let row = 0; row < 7; row++) {
+    const rowBits = bitmap[row] ?? 0;
+    if (rowBits === 0) continue;
+    for (let col = 0; col < 5; col++) {
+      if ((rowBits & (1 << (4 - col))) !== 0) {
+        if (col < minCol) minCol = col;
+        if (col > maxCol) maxCol = col;
+        if (row < minRow) minRow = row;
+        if (row > maxRow) maxRow = row;
+      }
+    }
+  }
+  if (maxCol < minCol || maxRow < minRow) {
+    return null;
+  }
+  return { minCol, maxCol, minRow, maxRow };
+}
+
 function createProceduralFontSpec(
   name: string,
   face: string,
@@ -2150,6 +2188,10 @@ function createProceduralFontSpec(
   const cellW = Math.max(5, Math.round(size * 0.55));
   const cellH = Math.max(7, Math.round(size * 0.72));
   const cols = Math.max(1, Math.floor(scaleW / (cellW + 1)));
+  const scaleX = cellW / 5;
+  const scaleY = cellH / 7;
+  const baseOffsetY = Math.max(0, Math.floor((lineHeight - cellH) * 0.5));
+  const advanceGap = Math.max(1, Math.round(size * 0.1));
 
   for (let code = 32; code <= 126; code++) {
     const idx = code - 32;
@@ -2157,31 +2199,55 @@ function createProceduralFontSpec(
     const row = Math.floor(idx / cols);
     const gx = col * (cellW + 1);
     const gy = row * (cellH + 1);
-    const isNarrow =
-      code === 33 ||
-      code === 39 ||
-      code === 44 ||
-      code === 46 ||
-      code === 58 ||
-      code === 59 ||
-      code === 73 ||
-      code === 105 ||
-      code === 108;
-    const w =
-      code === 32
-        ? Math.max(2, Math.floor(cellW * 0.4))
-        : isNarrow
-          ? Math.max(2, Math.floor(cellW * 0.45))
-          : cellW;
+
+    if (code === 32) {
+      const spaceW = Math.max(2, Math.floor(cellW * 0.4));
+      glyphs[code] = {
+        id: code,
+        x: gx,
+        y: gy,
+        width: spaceW,
+        height: 1,
+        xoffset: 0,
+        yoffset: baseOffsetY + cellH,
+        xadvance: Math.max(3, Math.round(cellW * 0.55)),
+      };
+      continue;
+    }
+
+    const bitmap = GLYPHS_5X7[code] ?? GLYPHS_5X7[63]!;
+    const bounds = computeGlyphBounds(bitmap);
+    if (!bounds) {
+      glyphs[code] = {
+        id: code,
+        x: gx,
+        y: gy,
+        width: 1,
+        height: 1,
+        xoffset: 0,
+        yoffset: baseOffsetY,
+        xadvance: advanceGap + 1,
+      };
+      continue;
+    }
+
+    // Derive tight AngelCode-style glyph box & vertical offset directly from the 5x7 lit bounds
+    // so short/narrow glyphs ('-', ',', '.', ':', '!', '(', ')', '~', lowercase) keep exact proportions.
+    const spanCols = bounds.maxCol - bounds.minCol + 1;
+    const spanRows = bounds.maxRow - bounds.minRow + 1;
+    const w = Math.min(cellW, Math.max(1, Math.round(spanCols * scaleX)));
+    const h = Math.min(cellH, Math.max(1, Math.round(spanRows * scaleY)));
+    const yoffset = baseOffsetY + Math.round(bounds.minRow * scaleY);
+
     glyphs[code] = {
       id: code,
       x: gx,
       y: gy,
       width: w,
-      height: code === 32 ? 1 : cellH,
+      height: h,
       xoffset: 0,
-      yoffset: Math.max(0, Math.floor((lineHeight - cellH) * 0.5)),
-      xadvance: w + Math.max(1, Math.round(size * 0.1)),
+      yoffset,
+      xadvance: w + advanceGap,
     };
   }
 
