@@ -92,7 +92,7 @@ export function computeDailySeed(date?: Date): { dateId: string; seed: number } 
   const dateId = `${year}${month}${day}`;
 
   // FNV-1a 32-bit hash + Murmur3 finalizer avalanche for wide seed dispersion
-  const key = `LUFTRAUSERS_DAILY:${dateId}`;
+  const key = `SKYBREAKER_DAILY:${dateId}`;
   let hash = 0x811c9dc5;
   for (let i = 0; i < key.length; i++) {
     hash ^= key.charCodeAt(i);

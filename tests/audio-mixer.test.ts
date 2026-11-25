@@ -1337,4 +1337,154 @@ describe('AudioEngine', () => {
 
     engine.dispose();
   });
+
+  it('hot-swaps AudioEngine.init(vault) cleanly between procedural-fallback and steam-local without losing unlocked state or drifting', async () => {
+    const mockCtx = createMockAudioContext('suspended', 44100);
+    const createContext = vi.fn(() => mockCtx as unknown as AudioContext);
+
+    const fakeSteamBuffer = createMockAudioBuffer(
+      1,
+      Math.round(44100 * SYNTH_LOOP_DURATION_SEC),
+      44100,
+    );
+    mockCtx.decodeAudioData = vi.fn(async () => fakeSteamBuffer);
+
+    const mockFetch = vi.fn(async () => {
+      const bytes = new Uint8Array(4);
+      return {
+        ok: true,
+        arrayBuffer: async () => bytes.buffer,
+      } as Response;
+    });
+
+    const engine = new AudioEngine({
+      createContext,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    // 1. Boot in SKYBREAKER procedural-fallback mode and unlock via user gesture
+    await engine.init(makeFallbackVault('procedural-fallback'));
+    expect(createContext).toHaveBeenCalledTimes(1);
+    engine.syncFromSnapshot(makeSnapshot({ tick: 1, phase: 'hangar' }));
+
+    mockCtx.currentTime = 2.0;
+    await engine.unlock();
+    let metrics = engine.getSyncMetrics();
+    expect(metrics.unlocked).toBe(true);
+    expect(metrics.source).toBe('synth-fallback');
+    expect(metrics.musicState).toBe('hangar');
+    expect(metrics.activeStems).toEqual(['luftrauser__hangar']);
+    expect(metrics.interStemDriftMs).toBeLessThan(1.0);
+
+    const sourcesBeforeSteamSwap = mockCtx._inspect.sources.length;
+    expect(sourcesBeforeSteamSwap).toBe(1);
+
+    // 2. Live hot-swap SKYBREAKER -> STEAM LOCAL in Hangar (NO second unlock() call!)
+    mockCtx.currentTime = 5.5;
+    await engine.init(
+      makeFallbackVault(
+        'steam-local',
+        {
+          luftrauser__hangar: '/steam-vault/bgm/luftrauser__hangar.ogg',
+          luftrauser_bass1: '/steam-vault/bgm/luftrauser_bass1.ogg',
+          luftrauser_drums1: '/steam-vault/bgm/luftrauser_drums1.ogg',
+          luftrauser_lead1: '/steam-vault/bgm/luftrauser_lead1.ogg',
+        },
+        {
+          sndswap: '/steam-vault/sfx/sndswap.wav',
+        },
+      ),
+    );
+
+    // AudioContext MUST be reused (never closed or recreated on hot-swap!)
+    expect(createContext).toHaveBeenCalledTimes(1);
+    expect(mockCtx.close).not.toHaveBeenCalled();
+    expect(mockCtx._inspect.sources[0]?.disconnected).toBe(true);
+
+    metrics = engine.getSyncMetrics();
+    expect(metrics.unlocked).toBe(true);
+    expect(metrics.source).toBe('steam-ogg');
+    expect(metrics.musicState).toBe('hangar');
+    expect(metrics.activeStems).toEqual(['luftrauser__hangar']);
+    expect(metrics.interStemDriftMs).toBeLessThan(1.0);
+
+    // Transition to 3-stem combat under steam-local and verify < 1ms drift
+    mockCtx.currentTime = 8.25;
+    engine.syncFromSnapshot(
+      makeSnapshot({
+        tick: 12,
+        phase: 'playing',
+        loadout: { weapon: 0, body: 0, engine: 0 },
+      }),
+    );
+    metrics = engine.getSyncMetrics();
+    expect(metrics.source).toBe('steam-ogg');
+    expect(metrics.activeStems).toEqual([
+      'luftrauser_bass1',
+      'luftrauser_drums1',
+      'luftrauser_lead1',
+    ]);
+    expect(metrics.interStemDriftMs).toBeLessThan(1.0);
+
+    // 3. Live hot-swap STEAM LOCAL -> SKYBREAKER procedural-fallback
+    mockCtx.currentTime = 12.75;
+    await engine.init(makeFallbackVault('procedural-fallback'));
+
+    expect(createContext).toHaveBeenCalledTimes(1);
+    expect(mockCtx.close).not.toHaveBeenCalled();
+    metrics = engine.getSyncMetrics();
+    expect(metrics.unlocked).toBe(true);
+    expect(metrics.source).toBe('synth-fallback');
+    expect(metrics.musicState).toBe('combat');
+    expect(metrics.activeStems).toEqual([
+      'luftrauser_bass1',
+      'luftrauser_drums1',
+      'luftrauser_lead1',
+    ]);
+    expect(metrics.interStemDriftMs).toBeLessThan(1.0);
+
+    // SFX still plays immediately after hot-swap without re-unlocking
+    engine.playSfx('sndswap');
+    expect(engine.getSyncMetrics().sfxPoolActive).toBe(1);
+
+    // 3b. If context temporarily suspended (e.g. tab throttled) while previously unlocked, init() resumes cleanly
+    mockCtx.state = 'suspended';
+    mockCtx.currentTime = 15.0;
+    await engine.init(makeFallbackVault('procedural-fallback'));
+    expect(mockCtx.resume).toHaveBeenCalledTimes(2);
+    expect(engine.getSyncMetrics().unlocked).toBe(true);
+    expect(engine.getSyncMetrics().interStemDriftMs).toBeLessThan(1.0);
+
+    // 4. Stale in-flight Steam decode is discarded if swapped back to procedural-fallback immediately
+    let resolveSlowFetch!: (res: Response) => void;
+    const slowFetch = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveSlowFetch = resolve;
+        }),
+    );
+    const raceCtx = createMockAudioContext('running', 44100);
+    const raceEngine = new AudioEngine({
+      context: raceCtx as unknown as AudioContext,
+      fetchFn: slowFetch as unknown as typeof fetch,
+    });
+    const slowSteamPromise = raceEngine.init(
+      makeFallbackVault('steam-local', {
+        luftrauser__hangar: '/steam-vault/bgm/luftrauser__hangar.ogg',
+      }),
+    );
+    await raceEngine.init(makeFallbackVault('procedural-fallback'));
+    resolveSlowFetch({
+      ok: true,
+      arrayBuffer: async () => new Uint8Array(4).buffer,
+    } as Response);
+    await slowSteamPromise;
+    expect(raceEngine.getSyncMetrics().source).toBe('synth-fallback');
+    expect(raceEngine.getSyncMetrics().unlocked).toBe(true);
+
+    // dispose() closes owned AudioContext cleanly
+    raceEngine.dispose();
+    engine.dispose();
+    expect(mockCtx.close).toHaveBeenCalledTimes(1);
+  });
 });

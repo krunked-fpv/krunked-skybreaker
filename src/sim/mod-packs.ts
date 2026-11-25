@@ -36,7 +36,7 @@ const TRANSPARENT: RgbaTuple = [0, 0, 0, 0];
 const DEFAULT_ORIGINAL_WEAPON: WeaponSpec = {
   id: 0,
   name: 'original',
-  descr: 'versatile machinegun',
+  descr: 'balanced rotary autocannon',
   sprite: 'wings_original',
   projectile: 'bullet',
   interval: 3,
@@ -50,7 +50,7 @@ const DEFAULT_ORIGINAL_WEAPON: WeaponSpec = {
 const DEFAULT_ORIGINAL_BODY: BodySpec = {
   id: 0,
   name: 'original',
-  descr: 'good all-round body',
+  descr: 'balanced interceptor airframe',
   sprite: 'body_original',
   speedmodifier: 1.0,
   healingspd: 0.16,
@@ -70,7 +70,7 @@ const DEFAULT_ORIGINAL_BODY: BodySpec = {
 const DEFAULT_ORIGINAL_ENGINE: EngineSpec = {
   id: 0,
   name: 'original',
-  descr: 'well-balanced engine',
+  descr: 'balanced vector thruster',
   sprite: 'engine_original',
   booststartsprite: 'fx_booststart',
   boostloopsprite: 'fx_boostloop',
@@ -104,7 +104,7 @@ const DEFAULT_ORIGINAL_ENGINE: EngineSpec = {
 };
 
 /**
- * Generates the 4 Act II bonus palettes (`cyberpunk`, `vaporwave`, `blueprint`, `goldrush`),
+ * Generates the 4 KRUNKED SKYBREAKER Act II bonus palettes (`cyberpunk`, `vaporwave`, `blueprint`, `goldrush`),
  * each with valid 8-color RGBA tuples and pairwise Euclidean RGB distances > 0.015.
  */
 export function createAct2BonusPalettes(): PaletteDefinition[] {
@@ -348,15 +348,15 @@ const ENGINE_NAME_TOKENS: Record<number, string> = {
 };
 
 const SPECIAL_MODDED_NAMES: Record<string, string> = {
-  '6:0:0': 'RAILRAUSER',
-  '7:0:0': 'FLAKRAUSER',
+  '6:0:0': 'RAILBREAKER',
+  '7:0:0': 'FLAKBREAKER',
   '8:0:0': 'THUNDERBOLT',
-  '0:6:0': 'AEGIS RAUSER',
-  '0:7:0': 'VAMPIRE RAUSER',
-  '0:8:0': 'OVERCLOCK RAUSER',
+  '0:6:0': 'AEGIS BREAKER',
+  '0:7:0': 'VAMPIRE BREAKER',
+  '0:8:0': 'OVERCLOCK BREAKER',
   '0:0:6': 'AFTERBURNER',
-  '0:0:7': 'VECTOR RAUSER',
-  '0:0:8': 'ION RAUSER',
+  '0:0:7': 'VECTOR BREAKER',
+  '0:0:8': 'ION BREAKER',
   '7:6:0': 'AEGIS FLAK',
   '0:7:7': 'VAMPIRE VECTOR',
   '0:8:8': 'OVERCLOCK ION',
@@ -366,8 +366,8 @@ const SPECIAL_MODDED_NAMES: Record<string, string> = {
 };
 
 /**
- * Resolves a distinct modded plane name whenever any slot is >= 6.
- * Returns `baseName` unchanged for vanilla loadouts (`weapon < 6 && body < 6 && engine < 6`).
+ * Resolves a distinct Skybreaker modded plane name whenever any slot is >= 6.
+ * Returns `baseName` unchanged for standard loadouts (`weapon < 6 && body < 6 && engine < 6`).
  */
 export function resolveModdedPlaneName(
   weapon: number,
@@ -388,7 +388,7 @@ export function resolveModdedPlaneName(
     WEAPON_NAME_TOKENS[weapon] ?? `W${weapon}`,
     ENGINE_NAME_TOKENS[engine] ?? `E${engine}`,
   ].filter((token) => token.length > 0);
-  return parts.length > 0 ? parts.join(' ') : 'MODRAUSER';
+  return parts.length > 0 ? parts.join(' ') : 'SKYBREAKER MK-X';
 }
 
 /**

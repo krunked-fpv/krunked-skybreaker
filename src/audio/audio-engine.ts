@@ -176,9 +176,16 @@ export class AudioEngine implements IAudioEngine {
     }
 
     const generation = ++this.initGeneration;
-    this.teardownAudioGraph();
+    const wasUnlocked = this.unlocked;
 
-    const ctx = this.acquireAudioContext();
+    // Tear down active nodes & cached buffers while preserving a live AudioContext
+    // so live Hangar hot-swaps (SKYBREAKER <-> STEAM LOCAL) never lose unlocked playback.
+    this.teardownAudioGraph(false);
+
+    const ctx =
+      this.ctx && this.ctx.state !== 'closed'
+        ? this.ctx
+        : this.acquireAudioContext();
     this.ctx = ctx;
     if (!ctx) {
       this.unlocked = false;
@@ -186,10 +193,42 @@ export class AudioEngine implements IAudioEngine {
     }
 
     this.buildRoutingGraph(ctx);
-    this.unlocked = ctx.state === 'running';
+    if (
+      wasUnlocked &&
+      ctx.state === 'suspended' &&
+      typeof ctx.resume === 'function'
+    ) {
+      try {
+        await ctx.resume();
+      } catch {
+        // Check final context state below.
+      }
+      if (generation !== this.initGeneration || this.disposed || this.ctx !== ctx) {
+        return;
+      }
+    }
+
+    const currentState: AudioContextState = (this.ctx ?? ctx).state;
+    if (currentState === 'running') {
+      this.unlocked = true;
+    } else if (
+      wasUnlocked &&
+      !isNativeAudioContextInstance(ctx) &&
+      currentState !== 'closed'
+    ) {
+      this.unlocked = true;
+    } else {
+      this.unlocked = false;
+    }
 
     // Pre-warm hangar stem so initial transition is instant even before Steam decode finishes.
     this.getOrCreateStemBuffer('luftrauser__hangar');
+
+    // Immediately resume phase-locked music on hot-swap so there is zero dead air
+    // while optional Steam OGG stems decode asynchronously.
+    if (this.unlocked && this.pendingStemIds.length > 0) {
+      this.applyActiveStems(this.pendingStemIds);
+    }
 
     if (vault.audioManifest.source === 'steam-local') {
       await this.loadSteamManifest(vault.audioManifest, generation);
@@ -327,7 +366,7 @@ export class AudioEngine implements IAudioEngine {
     }
     this.disposed = true;
     this.initGeneration++;
-    this.teardownAudioGraph();
+    this.teardownAudioGraph(true);
     this.pendingStemIds = [];
     this.lastAudioEventsRef = null;
     this.unlocked = false;
@@ -485,7 +524,7 @@ export class AudioEngine implements IAudioEngine {
     this.sfxBus = sfxBus;
   }
 
-  private teardownAudioGraph(): void {
+  private teardownAudioGraph(closeContext = true): void {
     for (const stem of this.activeStems.values()) {
       safeStop(stem.source);
       safeDisconnect(stem.source);
@@ -519,16 +558,22 @@ export class AudioEngine implements IAudioEngine {
     this.compressor = null;
     this.masterGain = null;
 
-    if (
-      this.ctx &&
-      this.ownsContext &&
-      this.ctx.state !== 'closed' &&
-      typeof this.ctx.close === 'function'
-    ) {
-      void this.ctx.close().catch(() => {});
+    if (closeContext) {
+      if (
+        this.ctx &&
+        this.ownsContext &&
+        this.ctx.state !== 'closed' &&
+        typeof this.ctx.close === 'function'
+      ) {
+        void this.ctx.close().catch(() => {});
+      }
+      this.ctx = null;
+      this.ownsContext = false;
+    } else if (this.ctx && this.ctx.state === 'closed') {
+      this.ctx = null;
+      this.ownsContext = false;
     }
-    this.ctx = null;
-    this.ownsContext = false;
+
     this.startedEpoch = false;
     this.epochTime = 0;
 
@@ -700,6 +745,13 @@ export class AudioEngine implements IAudioEngine {
     entry: ActiveStemNode,
     now: number,
   ): void {
+    if (now < entry.startTime) {
+      safeStop(entry.source);
+      safeDisconnect(entry.source);
+      safeDisconnect(entry.gainNode);
+      this.activeStems.delete(stemId);
+      return;
+    }
     const fadeProgress =
       this.fadeDurationSec > 0 && now > entry.startTime
         ? Math.min(1, (now - entry.startTime) / this.fadeDurationSec)

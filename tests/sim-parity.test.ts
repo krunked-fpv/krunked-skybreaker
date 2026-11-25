@@ -1841,4 +1841,118 @@ describe('Deterministic 60Hz Simulation Parity', () => {
     expect(uraExitSnap.player.planeName).toBe('URAUSER');
     expect(uraExitSnap.player.isUrauser).toBe(true);
   });
+
+  it('22. Live Hot-Swap Simulation.setGameData(...) swaps plane names, missions, and difficulty while preserving profile, loadout, mode & modFlags', () => {
+    const skybreakerData = createTestGameDataBundle();
+    skybreakerData.vaultSource = 'procedural-fallback';
+    skybreakerData.global.planenames = skybreakerData.global.planenames
+      .filter((entry) => !(entry.weapon === 5 && entry.body === 5 && entry.engine === 5))
+      .map((entry) => {
+        if (entry.weapon === 0 && entry.body === 0 && entry.engine === 0) {
+          return { ...entry, name: 'SKYBREAKER' };
+        }
+        if (entry.weapon === 1 && entry.body === 0 && entry.engine === 0) {
+          return { ...entry, name: 'SOLAR LANCE' };
+        }
+        return entry;
+      });
+    skybreakerData.global.missions = skybreakerData.global.missions.map((m) => ({
+      ...m,
+      title: `SKY-${m.id}`,
+    }));
+    skybreakerData.spawnCoordinator.initialDifficulty = 60;
+    skybreakerData.spawnCoordinatorSfmt.initialDifficulty = 85;
+
+    const steamLikeData = createTestGameDataBundle();
+    steamLikeData.vaultSource = 'steam-local';
+    steamLikeData.global.planenames = steamLikeData.global.planenames.map((entry) => {
+      if (entry.weapon === 1 && entry.body === 0 && entry.engine === 0) {
+        return { ...entry, name: 'beamrauser' };
+      }
+      if (entry.weapon === 5 && entry.body === 5 && entry.engine === 5) {
+        return { ...entry, name: 'URAUSER' };
+      }
+      return entry;
+    });
+    steamLikeData.global.missions = steamLikeData.global.missions.map((m) => ({
+      ...m,
+      title: `STEAM-${m.id}`,
+    }));
+    steamLikeData.spawnCoordinator.initialDifficulty = 60;
+    steamLikeData.spawnCoordinatorSfmt.initialDifficulty = 95;
+
+    const profile = createDefaultProfile();
+    profile.unlockedWeapons = [0, 1, 2, 3, 4, 5];
+    profile.unlockedBodies = [0, 1, 2, 3, 4, 5];
+    profile.unlockedEngines = [0, 1, 2, 3, 4, 5];
+    profile.completedMissions = [0, 1];
+    profile.highScoreNormal = 12345;
+    profile.highScoreSfmt = 67890;
+    profile.selectedPaletteId = 'synthdusk';
+    profile.sfmtUnlocked = true;
+
+    const sim = new Simulation(skybreakerData, undefined, profile);
+    sim.setModFlags({
+      moddedEnabled: true,
+      arsenalBosses: true,
+      multiplayerMode: 'coop2p',
+      p2BotEnabled: false,
+    });
+    sim.setMode('sfmt');
+    sim.setLoadout({ weapon: 1, body: 0, engine: 0 });
+
+    const beforeSwap = sim.getSnapshot();
+    expect(beforeSwap.phase).toBe('hangar');
+    expect(beforeSwap.player.planeName).toBe('SOLAR LANCE');
+    expect(beforeSwap.activeMissions.every((m) => m.title.startsWith('SKY-'))).toBe(true);
+    expect(beforeSwap.profile.highScoreNormal).toBe(12345);
+    expect(beforeSwap.profile.highScoreSfmt).toBe(67890);
+
+    // Hot-swap SKYBREAKER -> STEAM LOCAL in Hangar
+    sim.setGameData(steamLikeData);
+    const afterSteamSwap = sim.getSnapshot();
+    expect(afterSteamSwap.phase).toBe('hangar');
+    expect(afterSteamSwap.player.planeName).toBe('beamrauser');
+    expect(afterSteamSwap.player.loadout).toEqual({ weapon: 1, body: 0, engine: 0 });
+    expect(afterSteamSwap.mode).toBe('sfmt');
+    expect(afterSteamSwap.difficulty).toBe(95);
+    expect(afterSteamSwap.activeMissions.every((m) => m.title.startsWith('STEAM-'))).toBe(true);
+    expect(afterSteamSwap.profile.completedMissions).toEqual([0, 1]);
+    expect(afterSteamSwap.profile.highScoreNormal).toBe(12345);
+    expect(afterSteamSwap.profile.highScoreSfmt).toBe(67890);
+    expect(afterSteamSwap.profile.selectedPaletteId).toBe('synthdusk');
+    expect(afterSteamSwap.activeMods?.moddedEnabled).toBe(true);
+    expect(afterSteamSwap.activeMods?.arsenalBosses).toBe(true);
+    expect(afterSteamSwap.activeMods?.multiplayerMode).toBe('coop2p');
+
+    // [5,5,5] shows Steam JSON name ('URAUSER') under Steam data, and falls back to 'APEX OMEGA' under Skybreaker data
+    sim.setLoadout({ weapon: 5, body: 5, engine: 5 });
+    expect(sim.getSnapshot().player.planeName).toBe('URAUSER');
+    expect(sim.getSnapshot().player.isUrauser).toBe(true);
+
+    sim.setGameData(skybreakerData);
+    const backToSkybreaker = sim.getSnapshot();
+    expect(backToSkybreaker.player.planeName).toBe('APEX OMEGA');
+    expect(backToSkybreaker.player.isUrauser).toBe(true);
+    expect(backToSkybreaker.player.maxHealth).toBe(120);
+    expect(backToSkybreaker.difficulty).toBe(85);
+    expect(backToSkybreaker.activeMissions.every((m) => m.title.startsWith('SKY-'))).toBe(true);
+
+    // Hot-swap during active 2P Co-op sortie rebuilds both P1 and P2 while preserving pose & loadout
+    sim.setP2Loadout({ weapon: 1, body: 0, engine: 0 });
+    sim.launch({ weapon: 5, body: 5, engine: 5 }, 'normal', 2201);
+    sim.step2P(IDLE_INPUT, IDLE_INPUT);
+    const preMidSwap = sim.getSnapshot();
+    expect(preMidSwap.player.planeName).toBe('APEX OMEGA');
+    expect(preMidSwap.player2?.planeName).toBe('SOLAR LANCE');
+
+    sim.setGameData(steamLikeData);
+    const postMidSwap = sim.getSnapshot();
+    expect(postMidSwap.player.planeName).toBe('URAUSER');
+    expect(postMidSwap.player.x).toBe(preMidSwap.player.x);
+    expect(postMidSwap.player.y).toBe(preMidSwap.player.y);
+    expect(postMidSwap.player2?.planeName).toBe('beamrauser');
+    expect(postMidSwap.player2?.x).toBe(preMidSwap.player2?.x);
+    expect(postMidSwap.player2?.y).toBe(preMidSwap.player2?.y);
+  });
 });

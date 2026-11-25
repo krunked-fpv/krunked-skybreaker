@@ -175,9 +175,16 @@ describe('Act II Simulation Mod Packs', () => {
         }
       }
 
-      // Modded plane names are distinct and non-empty across all 513 modded combos
-      expect(resolveModdedPlaneName(6, 0, 0, 'original')).toBe('RAILRAUSER');
+      // Modded Skybreaker plane names are distinct, non-empty, and free of legacy trademark names across all 513 combos
+      expect(resolveModdedPlaneName(6, 0, 0, 'original')).toBe('RAILBREAKER');
+      expect(resolveModdedPlaneName(7, 0, 0, 'original')).toBe('FLAKBREAKER');
       expect(resolveModdedPlaneName(8, 0, 0, 'original')).toBe('THUNDERBOLT');
+      expect(resolveModdedPlaneName(0, 6, 0, 'original')).toBe('AEGIS BREAKER');
+      expect(resolveModdedPlaneName(0, 7, 0, 'original')).toBe('VAMPIRE BREAKER');
+      expect(resolveModdedPlaneName(0, 8, 0, 'original')).toBe('OVERCLOCK BREAKER');
+      expect(resolveModdedPlaneName(0, 0, 6, 'original')).toBe('AFTERBURNER');
+      expect(resolveModdedPlaneName(0, 0, 7, 'original')).toBe('VECTOR BREAKER');
+      expect(resolveModdedPlaneName(0, 0, 8, 'original')).toBe('ION BREAKER');
       expect(resolveModdedPlaneName(7, 6, 0, 'original')).toBe('AEGIS FLAK');
       expect(resolveModdedPlaneName(0, 7, 7, 'original')).toBe('VAMPIRE VECTOR');
       expect(resolveModdedPlaneName(0, 8, 8, 'original')).toBe('OVERCLOCK ION');
@@ -190,6 +197,7 @@ describe('Act II Simulation Mod Packs', () => {
             if (w < 6 && b < 6 && e < 6) continue;
             const name = resolveModdedPlaneName(w, b, e, 'original');
             expect(name.length).toBeGreaterThan(0);
+            expect(name.toUpperCase()).not.toContain('RAUSER');
             expect(seen.has(name)).toBe(false);
             seen.add(name);
           }
