@@ -24,6 +24,14 @@ import {
   sanitizeCustomPalette,
 } from './render';
 import {
+  HANGAR_HUD_PASS,
+  getSelectedPauseAction,
+  movePauseMenuSelection,
+  notifyProjectorTransition,
+  setPauseMenuSelection,
+  type HangarHudPass,
+} from './render/hangar-hud-pass';
+import {
   ModRegistry,
   Simulation,
   computeCoopP2BotInput,
@@ -40,8 +48,8 @@ import {
   clearStoredProfileKeys,
   cloneStoredModFlags,
   computeCampaignUnlockedProfile,
+  loadExplicitStoredAssetMode,
   loadProgressionLockMode,
-  loadStoredAssetMode,
   loadStoredCustomPalette,
   loadStoredModFlags,
   loadStoredPbGhost,
@@ -92,9 +100,15 @@ async function bootstrap(): Promise<void> {
 
   const vaultLoader = new VaultLoader();
   const steamAvailable = (await vaultLoader.isSteamAvailable?.()) ?? false;
-  const storedAssetMode = loadStoredAssetMode();
+  const explicitAssetMode = loadExplicitStoredAssetMode();
   const initialRequestedMode: AssetPackMode =
-    storedAssetMode === 'steam-local' && steamAvailable ? 'steam-local' : 'skybreaker';
+    explicitAssetMode !== null
+      ? explicitAssetMode === 'steam-local' && steamAvailable
+        ? 'steam-local'
+        : 'skybreaker'
+      : steamAvailable
+        ? 'steam-local'
+        : 'skybreaker';
   let vault: VaultAssetBundle = await vaultLoader.load(initialRequestedMode);
   let activeAssetMode: AssetPackMode =
     vault.data.vaultSource === 'steam-local' ? 'steam-local' : 'skybreaker';
@@ -109,6 +123,10 @@ async function bootstrap(): Promise<void> {
 
   const renderer = new WebGL2Renderer();
   renderer.init(canvas, vault);
+  const rendererWithHudPass = renderer as WebGL2Renderer & {
+    setHangarHudPass?: (pass: HangarHudPass | null) => void;
+  };
+  rendererWithHudPass.setHangarHudPass?.(HANGAR_HUD_PASS);
 
   for (const bonus of ACT2_BONUS_PALETTES) {
     renderer.registerCustomPalette(bonus);
@@ -263,15 +281,41 @@ async function bootstrap(): Promise<void> {
     applyPaletteId(sanitized.id);
   };
 
-  const launchCurrentSortie = (explicitSeed?: number): void => {
+  const launchCurrentSortie = (
+    explicitSeed?: number,
+    animateProjector = true,
+  ): void => {
     const snap = sim.getSnapshot();
+    const fromHangar = snap.phase === 'hangar';
     if (pbGhostReplay && modFlags.moddedEnabled && modFlags.replayGhost) {
       sim.setGhostReplay(pbGhostReplay);
     }
     sim.launch(snap.player.loadout, snap.mode, explicitSeed);
+    setPauseMenuSelection(0);
+    if (fromHangar && animateProjector) {
+      notifyProjectorTransition('launch', elapsedSec);
+    } else {
+      notifyProjectorTransition('settled', elapsedSec);
+    }
     currSnapshot = sim.getSnapshot();
     prevSnapshot = currSnapshot;
     audio.playSfx('sndlaunch');
+    audio.syncFromSnapshot(currSnapshot);
+    persistCurrentProfile();
+  };
+
+  const returnToHangarUi = (animateProjector = true): void => {
+    sim.setPaused(false);
+    sim.returnToHangar();
+    hangar.setActiveRow('weapon');
+    setPauseMenuSelection(0);
+    notifyProjectorTransition(
+      animateProjector ? 'enter-hangar' : 'settled',
+      elapsedSec,
+    );
+    currSnapshot = sim.getSnapshot();
+    prevSnapshot = currSnapshot;
+    audio.playSfx('sndhangar');
     audio.syncFromSnapshot(currSnapshot);
     persistCurrentProfile();
   };
@@ -457,6 +501,8 @@ async function bootstrap(): Promise<void> {
     }
     currSnapshot = sim.getSnapshot();
     if (res.action === 'launch') {
+      setPauseMenuSelection(0);
+      notifyProjectorTransition('launch', elapsedSec);
       prevSnapshot = currSnapshot;
       audio.syncFromSnapshot(currSnapshot);
     }
@@ -537,47 +583,64 @@ async function bootstrap(): Promise<void> {
 
     if (e.code === 'KeyP' || e.code === 'Escape') {
       if (snap.phase === 'playing' || snap.phase === 'launching') {
-        sim.setPaused(!snap.paused);
+        const nextPaused = !snap.paused;
+        sim.setPaused(nextPaused);
+        if (nextPaused) {
+          setPauseMenuSelection(0);
+        }
         currSnapshot = sim.getSnapshot();
         audio.playSfx('sndmove');
         audio.syncFromSnapshot(currSnapshot);
         return;
       }
       if (snap.phase === 'gameover') {
-        sim.returnToHangar();
-        hangar.setActiveRow('weapon');
-        currSnapshot = sim.getSnapshot();
-        prevSnapshot = currSnapshot;
-        audio.playSfx('sndhangar');
-        audio.syncFromSnapshot(currSnapshot);
-        persistCurrentProfile();
+        returnToHangarUi(true);
         return;
       }
     }
 
-    if (snap.paused && (e.code === 'KeyH' || e.code === 'Backspace' || e.code === 'KeyX')) {
-      sim.setPaused(false);
-      sim.returnToHangar();
-      hangar.setActiveRow('weapon');
-      currSnapshot = sim.getSnapshot();
-      prevSnapshot = currSnapshot;
-      audio.playSfx('sndhangar');
-      audio.syncFromSnapshot(currSnapshot);
-      persistCurrentProfile();
-      return;
+    if (snap.paused) {
+      if (e.code === 'KeyR') {
+        sim.setPaused(false);
+        launchCurrentSortie(undefined, false);
+        return;
+      }
+      if (e.code === 'KeyH' || e.code === 'Backspace' || e.code === 'KeyX') {
+        returnToHangarUi(true);
+        return;
+      }
+      if (e.code === 'ArrowUp' || e.code === 'KeyW') {
+        movePauseMenuSelection(-1);
+        audio.playSfx('sndmove');
+        return;
+      }
+      if (e.code === 'ArrowDown' || e.code === 'KeyS') {
+        movePauseMenuSelection(1);
+        audio.playSfx('sndmove');
+        return;
+      }
+      if (e.code === 'Enter' || e.code === 'Space') {
+        const action = getSelectedPauseAction();
+        if (action === 'resume') {
+          sim.setPaused(false);
+          currSnapshot = sim.getSnapshot();
+          audio.playSfx('sndmove');
+          audio.syncFromSnapshot(currSnapshot);
+        } else if (action === 'retry') {
+          sim.setPaused(false);
+          launchCurrentSortie(undefined, false);
+        } else {
+          returnToHangarUi(true);
+        }
+        return;
+      }
     }
 
     if (snap.phase === 'gameover') {
-      if (e.code === 'Enter' || e.code === 'KeyX' || e.code === 'Space' || e.code === 'KeyZ') {
-        launchCurrentSortie();
+      if (e.code === 'Enter' || e.code === 'KeyX' || e.code === 'Space' || e.code === 'KeyZ' || e.code === 'KeyR') {
+        launchCurrentSortie(undefined, false);
       } else if (e.code === 'KeyH' || e.code === 'Backspace') {
-        sim.returnToHangar();
-        hangar.setActiveRow('weapon');
-        currSnapshot = sim.getSnapshot();
-        prevSnapshot = currSnapshot;
-        audio.playSfx('sndhangar');
-        audio.syncFromSnapshot(currSnapshot);
-        persistCurrentProfile();
+        returnToHangarUi(true);
       }
     }
   });
@@ -665,17 +728,43 @@ async function bootstrap(): Promise<void> {
         else if (rising & 64) handleHangarKeyAction('Escape');
       } else if (snap.phase === 'gameover') {
         if (rising & (16 | 32)) {
-          launchCurrentSortie();
+          launchCurrentSortie(undefined, false);
         } else if (rising & 64) {
-          sim.returnToHangar();
+          returnToHangarUi(true);
+        }
+      } else if (snap.paused) {
+        if (rising & 1) {
+          movePauseMenuSelection(-1);
+          audio.playSfx('sndmove');
+        } else if (rising & 2) {
+          movePauseMenuSelection(1);
+          audio.playSfx('sndmove');
+        } else if (rising & 32) {
+          sim.setPaused(false);
           currSnapshot = sim.getSnapshot();
-          prevSnapshot = currSnapshot;
-          audio.playSfx('sndhangar');
+          audio.playSfx('sndmove');
           audio.syncFromSnapshot(currSnapshot);
+        } else if (rising & 16) {
+          const action = getSelectedPauseAction();
+          if (action === 'resume') {
+            sim.setPaused(false);
+            currSnapshot = sim.getSnapshot();
+            audio.playSfx('sndmove');
+            audio.syncFromSnapshot(currSnapshot);
+          } else if (action === 'retry') {
+            sim.setPaused(false);
+            launchCurrentSortie(undefined, false);
+          } else {
+            returnToHangarUi(true);
+          }
+        } else if (rising & 64) {
+          returnToHangarUi(true);
         }
       } else if (rising & 32) {
-        sim.setPaused(!snap.paused);
+        sim.setPaused(true);
+        setPauseMenuSelection(0);
         currSnapshot = sim.getSnapshot();
+        audio.playSfx('sndmove');
         audio.syncFromSnapshot(currSnapshot);
       }
     }
@@ -937,15 +1026,11 @@ async function bootstrap(): Promise<void> {
       renderFrame(1);
     },
     launch(seed?: number): void {
-      launchCurrentSortie(seed);
+      launchCurrentSortie(seed, false);
       renderFrame(1);
     },
     returnToHangar(): void {
-      sim.returnToHangar();
-      currSnapshot = sim.getSnapshot();
-      prevSnapshot = currSnapshot;
-      audio.syncFromSnapshot(currSnapshot);
-      persistCurrentProfile();
+      returnToHangarUi(false);
       renderFrame(1);
     },
     toggleAutopilot(enabled: boolean): void {

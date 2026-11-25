@@ -461,16 +461,25 @@ export function saveStoredPbGhost(
   }
 }
 
+export function loadExplicitStoredAssetMode(
+  storage: StorageLike | null = getDefaultStorage(),
+): AssetPackMode | null {
+  if (!storage) return null;
+  try {
+    const raw = storage.getItem(ASSET_MODE_STORAGE_KEY);
+    if (raw === 'steam-local' || raw === 'skybreaker') {
+      return raw;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export function loadStoredAssetMode(
   storage: StorageLike | null = getDefaultStorage(),
 ): AssetPackMode {
-  if (!storage) return 'skybreaker';
-  try {
-    const raw = storage.getItem(ASSET_MODE_STORAGE_KEY);
-    return raw === 'steam-local' ? 'steam-local' : 'skybreaker';
-  } catch {
-    return 'skybreaker';
-  }
+  return loadExplicitStoredAssetMode(storage) ?? 'skybreaker';
 }
 
 export function saveStoredAssetMode(
