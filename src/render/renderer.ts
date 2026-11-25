@@ -3181,7 +3181,13 @@ export class WebGL2Renderer implements IRenderer {
       this.vault?.data.atlases.sprites,
       ['sprites', 'sheet1grey', 'sheet1grey.png'],
     );
-    const previewX = 438;
+    const previewBoxX = 318;
+    const previewBoxY = 68;
+    const previewBoxW = 240;
+    const previewBoxH = 96;
+    const previewCenterX = previewBoxX + previewBoxW * 0.5;
+    const previewCenterY = previewBoxY + previewBoxH * 0.5;
+    const previewX = previewCenterX;
     const previewY = 112 + Math.sin(elapsedSec * 2.4) * 3;
     const previewAngle = Math.sin(elapsedSec * 1.5) * 0.08 - 0.15;
     const previewSprites: SpriteInstance[] = [];
@@ -3194,18 +3200,46 @@ export class WebGL2Renderer implements IRenderer {
     const addPreviewPart = (name: string | undefined): void => {
       const entry = name ? sprites[name] : undefined;
       if (entry) {
-        previewSprites.push({
-          entry,
-          frame: 0,
-          x: previewX,
-          y: previewY,
-          angleRad: previewAngle,
-          scaleX: isApexCraft ? 0.55 : 2.2,
-          scaleY: isApexCraft ? 0.55 : 2.2,
-          depth: 0.2,
-          flash: 0,
-          clipSea: false,
-        });
+        if (isApexCraft) {
+          const apexAngle = Math.sin(elapsedSec * 1.5) * 0.06;
+          const apexScale = Math.min(
+            0.26,
+            (previewBoxW - 24) / Math.max(1, entry.size[0]),
+            (previewBoxH - 18) / Math.max(1, entry.size[1]),
+          );
+          const localMidX = (entry.size[0] * 0.5 - entry.center[0]) * apexScale;
+          const localMidY = (entry.size[1] * 0.5 - entry.center[1]) * apexScale;
+          const c = Math.cos(apexAngle);
+          const s = Math.sin(apexAngle);
+          const rotMidX = localMidX * c - localMidY * s;
+          const rotMidY = localMidX * s + localMidY * c;
+          const bobY = Math.sin(elapsedSec * 2.4) * 2;
+          previewSprites.push({
+            entry,
+            frame: 0,
+            x: previewCenterX - rotMidX,
+            y: previewCenterY + bobY - rotMidY,
+            angleRad: apexAngle,
+            scaleX: apexScale,
+            scaleY: apexScale,
+            depth: 0.2,
+            flash: 0,
+            clipSea: false,
+          });
+        } else {
+          previewSprites.push({
+            entry,
+            frame: 0,
+            x: previewX,
+            y: previewY,
+            angleRad: previewAngle,
+            scaleX: 2.2,
+            scaleY: 2.2,
+            depth: 0.2,
+            flash: 0,
+            clipSea: false,
+          });
+        }
       }
     };
 
