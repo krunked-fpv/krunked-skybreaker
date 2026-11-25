@@ -34,7 +34,7 @@ Open `http://127.0.0.1:5173/`.
 
 ```bash
 npm run typecheck        # Strict TypeScript check (tsc --noEmit)
-npm test                 # Act I + Act II subsystem unit tests (89 tests)
+npm test                 # Act I + Act II subsystem unit tests (96 tests)
 npm run test:playtesters # 100-Playtester adversarial chaos gauntlet (PT-001..PT-100)
 npm run test:parity      # Live Steam E2E 1:1 parity proofs + 12 x 3,600-tick sorties (25 tests)
 npm run audit:parity     # Clean-room IP git hygiene + Steam JSON diff scorecard (19 checks)

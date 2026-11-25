@@ -13,6 +13,8 @@
 - `npm start` mounts local Steam `data/` read-only (`LUFTRAUSERS_STEAM_DIR`, Windows default) or falls back cleanly to deterministic procedural vector/synth assets.
 - **CLI:** `npm start` | `npm run build` | `npm run typecheck` | `npm test` | `npm run test:playtesters` | `npm run test:parity` | `npm run audit:parity`.
 
-## 3. Act III Extension Seams
+## 3. Ready-to-Sprint Seams (Next Sprint Cold-Boot)
+- **Cold-Boot Anchor:** Read only `ARCHITECTURE.md`, `SPEC.md`, and `HANDOFF.md`; keep `VANILLA_1TO1_PROFILE` regression-locked (`npm run typecheck`, `npm test`, `npm run test:playtesters`, `npm run test:parity`, `npm run audit:parity`).
 - **FPV / Acro Flight Mutators:** Wire optional Betaflight-style rate/airmode `FlightMutator`s behind `ModRegistry`.
 - **Online Netplay & Leaderboards:** Feed deterministic `ReplayFrame` bitmasks over WebRTC/WebSocket rollback or submit verified Daily Seed replays.
+- **Playtest Tuning & New Content:** Add new weapons/bodies/engines/bosses/palettes cleanly inside `src/sim/mod-packs.ts` and `src/render/palettes.ts` without touching Act I invariants.
