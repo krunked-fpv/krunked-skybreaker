@@ -153,7 +153,13 @@ describe('parseAngelCodeFnt & getKeyCI', () => {
 
 describe('loadVaultFromDisk (live read-only Steam bridge)', () => {
   it('loads Steam local bundle, decodes sheet1grey.png TGA, and normalizes all vanilla schemas', () => {
+    const steamDir = process.env.LUFTRAUSERS_STEAM_DIR?.trim() || DEFAULT_STEAM_DATA_DIR;
     const bundle = loadVaultFromDisk();
+    if (!fs.existsSync(steamDir)) {
+      expect(bundle.data.vaultSource).toBe('procedural-fallback');
+      expect(bundle.data.steamDir).toBeNull();
+      return;
+    }
     expect(bundle.data.vaultSource).toBe('steam-local');
 
     // sheet1grey.png decoded TGA
@@ -373,6 +379,7 @@ describe('Vite Steam Bridge Middleware & VaultLoader', () => {
 
   it('rejects path traversal with 403, enforces read-only methods, and serves manifest & files', async () => {
     const steamDir = process.env.LUFTRAUSERS_STEAM_DIR?.trim() || DEFAULT_STEAM_DATA_DIR;
+    const hasSteam = fs.existsSync(steamDir);
     expect(resolveSafeSteamFilePath(steamDir, '../secret.txt')).toBeNull();
     expect(resolveSafeSteamFilePath(steamDir, 'res/%2e%2e/secret.txt')).toBeNull();
     expect(resolveSafeSteamFilePath(steamDir, 'C:\\Windows\\win.ini')).toBeNull();
@@ -398,18 +405,25 @@ describe('Vite Steam Bridge Middleware & VaultLoader', () => {
       bgm: string[];
       sfx: string[];
     };
-    expect(manifest.available).toBe(true);
-    expect(manifest.res).toContain('player.json');
-    expect(manifest.bgm).toHaveLength(20);
-    expect(manifest.sfx).toHaveLength(52);
+    if (hasSteam) {
+      expect(manifest.available).toBe(true);
+      expect(manifest.res).toContain('player.json');
+      expect(manifest.bgm).toHaveLength(20);
+      expect(manifest.sfx).toHaveLength(52);
 
-    const roomRes = await invokeMiddleware(mw, 'GET', '/steam-vault/file/res/room.json');
-    expect(roomRes.status).toBe(200);
-    expect(roomRes.headers['cache-control']).toBe('no-store');
-    expect(roomRes.body.toString('utf8')).toContain('sealevel');
+      const roomRes = await invokeMiddleware(mw, 'GET', '/steam-vault/file/res/room.json');
+      expect(roomRes.status).toBe(200);
+      expect(roomRes.headers['cache-control']).toBe('no-store');
+      expect(roomRes.body.toString('utf8')).toContain('sealevel');
+    } else {
+      expect(manifest.available).toBe(false);
+      expect(manifest.res).toEqual([]);
+    }
   });
 
   it('VaultLoader loads from Steam bridge middleware and falls back cleanly when unavailable', async () => {
+    const steamDir = process.env.LUFTRAUSERS_STEAM_DIR?.trim() || DEFAULT_STEAM_DATA_DIR;
+    const hasSteam = fs.existsSync(steamDir);
     const mw = createSteamBridgeMiddleware();
 
     const fetchViaMiddleware: typeof fetch = async (input) => {
@@ -440,8 +454,13 @@ describe('Vite Steam Bridge Middleware & VaultLoader', () => {
 
     const liveLoader = new VaultLoader({ fetchImpl: fetchViaMiddleware });
     const liveBundle = await liveLoader.load();
-    expect(liveBundle.data.vaultSource).toBe('steam-local');
-    expect(liveBundle.textures.sprites?.source).toBe('steam-tga');
+    if (hasSteam) {
+      expect(liveBundle.data.vaultSource).toBe('steam-local');
+      expect(liveBundle.textures.sprites?.source).toBe('steam-tga');
+    } else {
+      expect(liveBundle.data.vaultSource).toBe('procedural-fallback');
+      expect(liveBundle.textures.sprites?.source).toBe('procedural');
+    }
 
     const offlineLoader = new VaultLoader({
       fetchImpl: async () => new Response('Not Found', { status: 404 }),
