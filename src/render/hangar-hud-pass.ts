@@ -784,6 +784,23 @@ function measureGlyphVerticalBounds(
   return { minY, maxY };
 }
 
+function drawOutlinedHeaderText(
+  ctx: HangarHudDrawContext,
+  font: ResolvedFont,
+  text: string,
+  x: number,
+  y: number,
+  align: TextAlign,
+  fg: RgbaTuple,
+  outline: RgbaTuple,
+): void {
+  ctx.drawBitmapText(font, text, x - 1, y, 1, align, outline);
+  ctx.drawBitmapText(font, text, x + 1, y, 1, align, outline);
+  ctx.drawBitmapText(font, text, x, y - 1, 1, align, outline);
+  ctx.drawBitmapText(font, text, x, y + 1, 1, align, outline);
+  ctx.drawBitmapText(font, text, x, y, 1, align, fg);
+}
+
 function computeRankBadgeIndex(completedMissions: number): number {
   return clamp(Math.floor(completedMissions / 9), 0, 10);
 }
@@ -809,6 +826,11 @@ export function drawInGameHudPass(
   camX: number,
   camY: number,
 ): void {
+  // Never bleed live HUD Score / Combo / Mission Toast behind the Game Over projector debrief
+  if (snapshot.phase === 'gameover') {
+    return;
+  }
+
   // Smoothly retracting Hangar projector during 'launching' phase (live browser only)
   if (
     snapshot.phase === 'launching' &&
@@ -1521,9 +1543,9 @@ export function drawGameOverDebriefPass(
     !snapshot.dogfight && snapshot.score > 0 && snapshot.score >= highScore;
 
   const projX = 36;
-  const projY = 24;
+  const projY = 22;
   const projW = 528;
-  const projH = 336;
+  const projH = 338;
 
   const { sprites: menuSprites, tex: menuTex } = getMenuSprites(ctx);
   const menuBatch: SpriteInstance[] = [];
@@ -1695,6 +1717,15 @@ export function drawGameOverDebriefPass(
   );
 
   // Enemy icon sprites (`enemy_icons` 40x16) inside kill breakdown grid (2 cols x 4 rows)
+  // Zero-kill cells use a lighter mid-tan/rose interior so dark [1] silhouettes (`f10..f17`) pop cleanly!
+  const zeroKillBg: RgbaTuple = !contrast.isBright1
+    ? luma(pal.colors[3]) >= 0.4
+      ? pal.colors[3]
+      : pal.colors[2]
+    : withAlpha(contrast.panelDark, 0.72);
+  const zeroKillInk: RgbaTuple =
+    luma(zeroKillBg) > 0.45 ? contrast.selectedTextInk : contrast.midPanelInk;
+
   for (let i = 0; i < DEBRIEF_ENEMY_ROWS.length; i++) {
     const def = DEBRIEF_ENEMY_ROWS[i]!;
     let count = 0;
@@ -1711,14 +1742,14 @@ export function drawGameOverDebriefPass(
       cellY,
       108,
       24,
-      withAlpha(contrast.panelDark, count > 0 ? 0.85 : 0.45),
+      count > 0 ? withAlpha(contrast.panelDark, 0.92) : zeroKillBg,
     );
     pushMenuSprite(
       menuBatch,
       menuSprites,
       'enemy_icons',
       count > 0 ? def.activeFrame : def.dimFrame,
-      cellX + 4,
+      cellX + 2,
       cellY + 4,
       1,
       1,
@@ -1760,24 +1791,16 @@ export function drawGameOverDebriefPass(
       ? 'NUKED ALL!'
       : 'SHOT DOWN';
 
-  // Top projector housing header with crisp 1px dark shadow over metallic projector_top
-  ctx.drawBitmapText(
-    smallFont,
-    'SORTIE DEBRIEF  //  RESULTS',
-    VIRTUAL_WIDTH * 0.5 + 1,
-    7,
-    1,
-    'center',
-    contrast.panelDark,
-  );
-  ctx.drawBitmapText(
+  // Top projector housing header with crisp 4-way 1px dark outline over metallic projector_top
+  drawOutlinedHeaderText(
+    ctx,
     smallFont,
     'SORTIE DEBRIEF  //  RESULTS',
     VIRTUAL_WIDTH * 0.5,
     6,
-    1,
     'center',
     contrast.darkPanelFg,
+    contrast.panelDark,
   );
 
   // Bold Game Over title (NOTE: 'SHOT DOWN' has length 9; ensure NO later text has exact length 9!)
@@ -1869,20 +1892,20 @@ export function drawGameOverDebriefPass(
     ctx.drawBitmapText(
       smallFont,
       `x${count}`,
-      cellX + 100,
+      cellX + 104,
       cellY + 8,
       1,
       'right',
-      count > 0 ? contrast.darkPanelFg : contrast.midPanelInk,
+      count > 0 ? contrast.darkPanelFg : zeroKillInk,
     );
     ctx.drawBitmapText(
       smallFont,
       def.label,
-      cellX + 48,
+      cellX + 44,
       cellY + 8,
-      0.85,
+      1,
       'left',
-      count > 0 ? contrast.darkPanelAccent : contrast.midPanelInk,
+      count > 0 ? contrast.darkPanelAccent : zeroKillInk,
     );
   }
 
@@ -2175,11 +2198,11 @@ function renderHangarProjectorInternal(
     const entry = name ? sprites[name] : undefined;
     if (!entry) return;
     if (isApexCraft) {
-      const apexAngle = Math.sin(elapsedSec * 1.5) * 0.06;
+      const apexAngle = Math.sin(elapsedSec * 1.5) * 0.05;
       const apexScale = Math.min(
-        0.26,
+        0.24,
         (previewBoxW - 24) / Math.max(1, entry.size[0]),
-        (previewBoxH - 18) / Math.max(1, entry.size[1]),
+        (previewBoxH - 26) / Math.max(1, entry.size[1]),
       );
       const localMidX = (entry.size[0] * 0.5 - entry.center[0]) * apexScale;
       const localMidY = (entry.size[1] * 0.5 - entry.center[1]) * apexScale;
@@ -2187,12 +2210,14 @@ function renderHangarProjectorInternal(
       const s = Math.sin(apexAngle);
       const rotMidX = localMidX * c - localMidY * s;
       const rotMidY = localMidX * s + localMidY * c;
-      const bobY = Math.sin(elapsedSec * 2.4) * 2;
+      const bobY = Math.sin(elapsedSec * 2.4) * 1.5;
+      // Lift visual center ~7px above preview box midpoint so silhouette clears the y=148 horizon line cleanly
+      const apexCenterY = previewCenterY - 7;
       previewSprites.push({
         entry,
         frame: 0,
         x: previewCenterX - rotMidX,
-        y: previewCenterY + bobY - rotMidY,
+        y: apexCenterY + bobY - rotMidY,
         angleRad: apexAngle,
         scaleX: apexScale,
         scaleY: apexScale,
@@ -2262,7 +2287,7 @@ function renderHangarProjectorInternal(
     ctx.flushSolids(previewFallback);
   }
 
-  // Mini plane_icon badges in top-left of preview bay showing installed Weapon / Body / Engine icons
+  // Crisp 1:1 native-scale plane_icon badges in left of preview bay showing installed Weapon / Body / Engine icons
   if (
     !isStudioOpen &&
     !isModDeckOpen &&
@@ -2271,39 +2296,41 @@ function renderHangarProjectorInternal(
     menuSprites['plane_icon_engine']
   ) {
     const iconBatch: SpriteInstance[] = [];
-    pushMenuSprite(
-      iconBatch,
-      menuSprites,
-      'plane_icon_weapon',
-      clamp(hangarUi.loadout.weapon, 0, 5),
-      previewBoxX + 16,
-      previewBoxY + 18,
-      0.75,
-      0.75,
-      0.52,
-    );
-    pushMenuSprite(
-      iconBatch,
-      menuSprites,
-      'plane_icon_body',
-      clamp(hangarUi.loadout.body, 0, 5),
-      previewBoxX + 16,
-      previewBoxY + 40,
-      0.75,
-      0.75,
-      0.52,
-    );
-    pushMenuSprite(
-      iconBatch,
-      menuSprites,
-      'plane_icon_engine',
-      clamp(hangarUi.loadout.engine, 0, 5),
-      previewBoxX + 16,
-      previewBoxY + 62,
-      0.75,
-      0.75,
-      0.52,
-    );
+    if (!isApexCraft) {
+      pushMenuSprite(
+        iconBatch,
+        menuSprites,
+        'plane_icon_weapon',
+        clamp(hangarUi.loadout.weapon, 0, 5),
+        previewBoxX + 16,
+        previewBoxY + 15,
+        1,
+        1,
+        0.52,
+      );
+      pushMenuSprite(
+        iconBatch,
+        menuSprites,
+        'plane_icon_body',
+        clamp(hangarUi.loadout.body, 0, 5),
+        previewBoxX + 16,
+        previewBoxY + 40,
+        1,
+        1,
+        0.52,
+      );
+      pushMenuSprite(
+        iconBatch,
+        menuSprites,
+        'plane_icon_engine',
+        clamp(hangarUi.loadout.engine, 0, 5),
+        previewBoxX + 16,
+        previewBoxY + 65,
+        1,
+        1,
+        0.52,
+      );
+    }
     if (isSfmt && menuSprites['skulls_stuff']) {
       pushMenuSprite(
         iconBatch,
@@ -2317,7 +2344,9 @@ function renderHangarProjectorInternal(
         0.52,
       );
     }
-    ctx.drawSpriteBatch(menuTex, iconBatch, previewPal, true);
+    if (iconBatch.length > 0) {
+      ctx.drawSpriteBatch(menuTex, iconBatch, previewPal, true);
+    }
   }
 
   // 3. Top Header Bar & Aircraft Name Banner
@@ -2330,68 +2359,76 @@ function renderHangarProjectorInternal(
 
   if (moddedEnabled && hangarUi.modFlags?.dailySeed && hangarUi.dailySeedId) {
     if (menuSprites['projector_top']) {
+      drawOutlinedHeaderText(
+        ctx,
+        smallFont,
+        `DAILY ${hangarUi.dailySeedId}`,
+        26,
+        headerTextY,
+        'left',
+        contrast.darkPanelAccent,
+        contrast.panelDark,
+      );
+    } else {
       ctx.drawBitmapText(
         smallFont,
         `DAILY ${hangarUi.dailySeedId}`,
-        27,
-        headerTextY + 1,
+        26,
+        headerTextY,
         1,
         'left',
-        contrast.panelDark,
+        contrast.darkPanelAccent,
       );
     }
-    ctx.drawBitmapText(
-      smallFont,
-      `DAILY ${hangarUi.dailySeedId}`,
-      26,
-      headerTextY,
-      1,
-      'left',
-      contrast.darkPanelAccent,
-    );
   }
 
   if (menuSprites['projector_top']) {
+    drawOutlinedHeaderText(
+      ctx,
+      smallFont,
+      'KRUNKED SKYBREAKER  //  HANGAR MK-I',
+      VIRTUAL_WIDTH * 0.5,
+      headerTextY,
+      'center',
+      contrast.darkPanelFg,
+      contrast.panelDark,
+    );
+  } else {
     ctx.drawBitmapText(
       smallFont,
       'KRUNKED SKYBREAKER  //  HANGAR MK-I',
-      VIRTUAL_WIDTH * 0.5 + 1,
-      headerTextY + 1,
+      VIRTUAL_WIDTH * 0.5,
+      headerTextY,
       1,
       'center',
-      contrast.panelDark,
+      contrast.darkPanelFg,
     );
   }
-  ctx.drawBitmapText(
-    smallFont,
-    'KRUNKED SKYBREAKER  //  HANGAR MK-I',
-    VIRTUAL_WIDTH * 0.5,
-    headerTextY,
-    1,
-    'center',
-    contrast.darkPanelFg,
-  );
 
+  const modTabLabel = moddedEnabled ? '[TAB] MODDED' : '[TAB] VANILLA 1:1';
+  const modTabCol = moddedEnabled ? contrast.darkPanelAccent : contrast.darkPanelFg;
   if (menuSprites['projector_top']) {
+    drawOutlinedHeaderText(
+      ctx,
+      smallFont,
+      modTabLabel,
+      574,
+      headerTextY,
+      'right',
+      modTabCol,
+      contrast.panelDark,
+    );
+  } else {
     ctx.drawBitmapText(
       smallFont,
-      moddedEnabled ? '[TAB] MODDED' : '[TAB] VANILLA 1:1',
-      575,
-      headerTextY + 1,
+      modTabLabel,
+      574,
+      headerTextY,
       1,
       'right',
-      contrast.panelDark,
+      modTabCol,
     );
   }
-  ctx.drawBitmapText(
-    smallFont,
-    moddedEnabled ? '[TAB] MODDED' : '[TAB] VANILLA 1:1',
-    574,
-    headerTextY,
-    1,
-    'right',
-    moddedEnabled ? contrast.darkPanelAccent : contrast.darkPanelFg,
-  );
 
   const isModCraft =
     moddedEnabled &&
@@ -2611,7 +2648,7 @@ function renderHangarProjectorInternal(
     if (r.iconSprite && r.partIdx !== undefined) {
       const tileCenterX = 166;
       const tileCenterY = ry + 14;
-      const tileScale = 0.72; // 32x32 -> ~23x23 crisp inside 28px row!
+      const tileScale = 0.75; // Exact 3/4 ratio: 32x32 -> 24x24 crisp inside 28px row!
       pushMenuSprite(
         rowTileSprites,
         menuSprites,
@@ -2876,8 +2913,21 @@ function renderHangarProjectorInternal(
         : done
           ? 1
           : 0;
-    const barY = hasMissionFrames ? my + 38 : my + 34;
-    const barH = hasMissionFrames ? 5 : 6;
+    const descrLayout = layoutMissionCardDescription(
+      smallFont.spec,
+      m.description,
+      224,
+    );
+    const barY = hasMissionFrames
+      ? descrLayout.lines.length > 1
+        ? my + 41
+        : my + 38
+      : my + 34;
+    const barH = hasMissionFrames
+      ? descrLayout.lines.length > 1
+        ? 3
+        : 5
+      : 6;
     pushSolidRect(missionSolids, 326, barY, 224, barH, contrast.panelDark);
     if (ratio > 0) {
       if (menuSprites['mission_frame_progress']) {
@@ -2969,8 +3019,8 @@ function renderHangarProjectorInternal(
             smallFont,
             descrLayout.lines[lineIdx]!,
             326,
-            my + 24 + lineIdx * 7,
-            Math.min(descrLayout.scale, 0.85),
+            my + 24 + lineIdx * 8,
+            descrLayout.scale,
             'left',
             contrast.midPanelInk,
           );
