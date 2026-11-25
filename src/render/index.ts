@@ -1,10 +1,15 @@
 export {
+  ACT2_BONUS_PALETTES,
+  CUSTOM_PALETTE_ID,
   DEFAULT_PALETTE_ID,
   PALETTES,
+  createDefaultCustomPalette,
   getPaletteById,
   getPaletteIndexById,
   hexToRgba,
   isPaletteUnlocked,
+  rgbaToHex,
+  sanitizeCustomPalette,
 } from './palettes';
 export {
   BATCH_FRAG,

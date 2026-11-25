@@ -1,9 +1,14 @@
 import {
+  DEFAULT_SHADER_FX,
+  type ShaderFxConfig,
+} from '../contracts/mod';
+import {
   VIRTUAL_HEIGHT,
   VIRTUAL_WIDTH,
   type FrameMetrics,
   type HangarUiState,
   type IRenderer,
+  type ModDeckRow,
   type PaletteDefinition,
   type PostShaderUniforms,
   type RgbaTuple,
@@ -11,6 +16,7 @@ import {
 import type {
   EnemyEntity,
   ParticleEntity,
+  PlayerState,
   ProjectileEntity,
   SimSnapshot,
 } from '../contracts/sim';
@@ -22,10 +28,13 @@ import type {
   VaultAssetBundle,
 } from '../contracts/vault';
 import {
+  ACT2_BONUS_PALETTES,
   DEFAULT_PALETTE_ID,
   PALETTES,
   getPaletteById,
   isPaletteUnlocked,
+  rgbaToHex,
+  sanitizeCustomPalette,
 } from './palettes';
 import {
   BUILTIN_FONT_HEIGHT,
@@ -136,6 +145,8 @@ const UPRIGHT_HULL_KINDS = new Set<EnemyEntity['kind']>([
   'Submarine',
   'AceMarine',
   'Blimp',
+  'Dreadnought',
+  'SkyCarrier',
 ]);
 
 /**
@@ -310,6 +321,17 @@ export class WebGL2Renderer implements IRenderer {
   private vault: VaultAssetBundle | null = null;
   private customPalettes: PaletteDefinition[] = [];
   private activePalette: PaletteDefinition = getPaletteById(DEFAULT_PALETTE_ID);
+  private shaderFx: ShaderFxConfig = { ...DEFAULT_SHADER_FX };
+  private shaderFxExplicit = false;
+  private effectiveFx: ShaderFxConfig = { ...DEFAULT_SHADER_FX };
+  private renderShockwaves: [number, number, number, number][] = [
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
+  ];
+  private renderSpeedNorm = 0;
+  private renderElapsedSec = 0;
 
   private camX = 0;
   private camY = -120;
@@ -447,13 +469,37 @@ export class WebGL2Renderer implements IRenderer {
     this.customPalettes = [...palettes];
   }
 
-  public listPalettes(): readonly PaletteDefinition[] {
-    if (this.customPalettes.length === 0) {
-      return PALETTES;
+  public registerCustomPalette(palette: PaletteDefinition): void {
+    const sanitized = sanitizeCustomPalette(palette);
+    if (!sanitized) return;
+    const idx = this.customPalettes.findIndex((p) => p.id === sanitized.id);
+    if (idx >= 0) {
+      this.customPalettes[idx] = sanitized;
+    } else {
+      this.customPalettes.push(sanitized);
     }
-    const merged = [...PALETTES];
+    if (this.activePalette.id === sanitized.id) {
+      this.activePalette = sanitized;
+    }
+  }
+
+  public setShaderFx(fx: ShaderFxConfig): void {
+    this.shaderFx = {
+      crtScanlines: Boolean(fx.crtScanlines),
+      phosphorBloom: Boolean(fx.phosphorBloom),
+      speedWarp: Boolean(fx.speedWarp),
+      shockwaves: Boolean(fx.shockwaves),
+    };
+    this.shaderFxExplicit = true;
+  }
+
+  public listPalettes(): readonly PaletteDefinition[] {
+    const merged: PaletteDefinition[] = [...PALETTES, ...ACT2_BONUS_PALETTES];
     for (const p of this.customPalettes) {
-      if (!merged.some((existing) => existing.id === p.id)) {
+      const existingIdx = merged.findIndex((existing) => existing.id === p.id);
+      if (existingIdx >= 0) {
+        merged[existingIdx] = p;
+      } else {
         merged.push(p);
       }
     }
@@ -546,10 +592,57 @@ export class WebGL2Renderer implements IRenderer {
       );
     }
 
+    let interpPlayer2: PlayerState | null | undefined = snapshot.player2;
+    if (snapshot.player2) {
+      const prevP2 = prevSnapshot.player2;
+      if (!snapChangedPhase && snapshot.phase !== 'hangar' && prevP2) {
+        interpPlayer2 = {
+          ...snapshot.player2,
+          x: lerp(prevP2.x, snapshot.player2.x, clampedAlpha),
+          y: lerp(prevP2.y, snapshot.player2.y, clampedAlpha),
+          angleDeg: lerpAngleDeg(
+            prevP2.angleDeg,
+            snapshot.player2.angleDeg,
+            clampedAlpha,
+          ),
+        };
+      }
+    }
+
+    const is2PCameraMode =
+      Boolean(interpPlayer2 && interpPlayer2.alive && snapshot.player.alive) &&
+      (snapshot.activeMods === undefined ||
+        (snapshot.activeMods.moddedEnabled &&
+          (snapshot.activeMods.multiplayerMode === 'coop2p' ||
+            snapshot.activeMods.multiplayerMode === 'dogfight1v1')));
+
     if (snapshot.phase === 'hangar') {
       this.camX = elapsedSec * 18;
       this.camY = -120;
       this.cameraInitialized = true;
+    } else if (is2PCameraMode && interpPlayer2) {
+      const midX = (playerX + interpPlayer2.x) * 0.5;
+      const midY = (playerY + interpPlayer2.y) * 0.5;
+      const clampedMidX = clamp(midX, playerX - 210, playerX + 210);
+      const clampedMidY = clamp(midY, playerY - 135, playerY + 135);
+      const targetCamX = clamp(
+        clampedMidX + snapshot.player.vx * 6,
+        playerX - 220,
+        playerX + 220,
+      );
+      const targetCamY = clamp(
+        clamp(clampedMidY, snapshot.spaceLevel + 160, 120),
+        playerY - 140,
+        playerY + 140,
+      );
+      if (!this.cameraInitialized || snapChangedPhase) {
+        this.camX = targetCamX;
+        this.camY = targetCamY;
+        this.cameraInitialized = true;
+      } else {
+        this.camX = lerp(this.camX, targetCamX, 0.14);
+        this.camY = lerp(this.camY, targetCamY, 0.14);
+      }
     } else {
       const targetCamX = playerX + snapshot.player.vx * 14;
       const targetCamY = clamp(
@@ -589,7 +682,50 @@ export class WebGL2Renderer implements IRenderer {
               y: playerY,
               angleDeg: playerAngleDeg,
             },
+            player2: interpPlayer2,
           };
+
+    // Resolve Act II Shader FX (strictly 0 in Vanilla 1:1 mode)
+    if (snapshot.activeMods?.moddedEnabled === false) {
+      this.effectiveFx = { ...DEFAULT_SHADER_FX };
+    } else if (this.shaderFxExplicit) {
+      this.effectiveFx = { ...this.shaderFx };
+    } else if (snapshot.activeMods?.moddedEnabled) {
+      this.effectiveFx = { ...snapshot.activeMods.shaderFx };
+    } else {
+      this.effectiveFx = { ...DEFAULT_SHADER_FX };
+    }
+
+    this.renderElapsedSec = elapsedSec;
+    const pSpd = Math.hypot(snapshot.player.vx, snapshot.player.vy);
+    const pMaxSpd = Math.max(4, snapshot.player.engineSpec.maximumspeed || 10);
+    this.renderSpeedNorm =
+      snapshot.phase === 'hangar' ? 0 : clamp(pSpd / pMaxSpd, 0, 1);
+
+    this.renderShockwaves = [
+      [0, 0, 0, 0],
+      [0, 0, 0, 0],
+      [0, 0, 0, 0],
+      [0, 0, 0, 0],
+    ];
+    if (
+      this.effectiveFx.shockwaves &&
+      snapshot.phase !== 'hangar' &&
+      snapshot.shockwaves &&
+      snapshot.shockwaves.length > 0
+    ) {
+      const activeSw = snapshot.shockwaves
+        .filter((sw) => sw.intensity > 0.001)
+        .slice(0, 4);
+      for (let i = 0; i < activeSw.length; i++) {
+        const sw = activeSw[i]!;
+        const uvX = 0.5 + (sw.x - renderCamX) / VIRTUAL_WIDTH;
+        const uvY = 0.5 + (renderCamY - sw.y) / VIRTUAL_HEIGHT;
+        const radiusNorm = Math.max(0, sw.radius) / VIRTUAL_HEIGHT;
+        const intensity = clamp(sw.intensity, 0, 2);
+        this.renderShockwaves[i] = [uvX, uvY, radiusNorm, intensity];
+      }
+    }
 
     const viewportW = this.canvas?.width ?? VIRTUAL_WIDTH;
     const viewportH = this.canvas?.height ?? VIRTUAL_HEIGHT;
@@ -812,7 +948,7 @@ export class WebGL2Renderer implements IRenderer {
     if (snapshot.phase === 'hangar' && hangarUi) {
       this.drawMenuPass(gl, snapshot, hangarUi, elapsedSec);
     } else {
-      this.drawHudPass(gl, snapshot, elapsedSec);
+      this.drawHudPass(gl, snapshot, elapsedSec, camX, camY);
       if (snapshot.paused) {
         this.drawPausePass(gl);
       }
@@ -1008,7 +1144,12 @@ export class WebGL2Renderer implements IRenderer {
       return;
     }
 
-    // 6. Enemies
+    // 6. PB Ghost Silhouette & dotted index-4 trail (Act II)
+    if (snapshot.ghostPose?.alive) {
+      this.collectGhostPose(snapshot.ghostPose, solidWorldOut);
+    }
+
+    // 7. Enemies
     const prevEnemyMap = new Map<number, EnemyEntity>();
     for (const pe of prevSnapshot.enemies) {
       prevEnemyMap.set(pe.id, pe);
@@ -1028,10 +1169,26 @@ export class WebGL2Renderer implements IRenderer {
       );
     }
 
-    // 7. Player
+    // 8. Player 1 & Player 2
     if (snapshot.player.alive) {
-      this.collectPlayerSprites(
-        snapshot,
+      this.collectCraftSprites(
+        snapshot.player,
+        snapshot.tick,
+        false,
+        snapshot.activeMods?.multiplayerMode ?? 'solo',
+        sprites,
+        mainOut,
+        underwaterOut,
+        reflectOut,
+        solidWorldOut,
+      );
+    }
+    if (snapshot.player2?.alive) {
+      this.collectCraftSprites(
+        snapshot.player2,
+        snapshot.tick,
+        true,
+        snapshot.activeMods?.multiplayerMode ?? 'coop2p',
         sprites,
         mainOut,
         underwaterOut,
@@ -1040,7 +1197,7 @@ export class WebGL2Renderer implements IRenderer {
       );
     }
 
-    // 8. Projectiles
+    // 9. Projectiles
     const prevProjMap = new Map<number, ProjectileEntity>();
     for (const pp of prevSnapshot.projectiles) {
       prevProjMap.set(pp.id, pp);
@@ -1060,7 +1217,7 @@ export class WebGL2Renderer implements IRenderer {
       );
     }
 
-    // 9. Particles & explosions
+    // 10. Particles & explosions
     for (const part of snapshot.particles) {
       this.collectParticleSprites(
         part,
@@ -1070,6 +1227,35 @@ export class WebGL2Renderer implements IRenderer {
         reflectOut,
         solidWorldOut,
       );
+    }
+  }
+
+  private collectGhostPose(
+    ghost: NonNullable<SimSnapshot['ghostPose']>,
+    solidWorldOut: number[],
+  ): void {
+    const c4 = this.activePalette.colors[4];
+    const c6 = this.activePalette.colors[6];
+    const trailCol: RgbaTuple = [c4[0], c4[1], c4[2], 0.72];
+    const bodyCol: RgbaTuple = [c4[0], c4[1], c4[2], 0.82];
+    const trimCol: RgbaTuple = [c6[0], c6[1], c6[2], 0.65];
+
+    // Dotted index-4 trail markers
+    const step = ghost.trail.length > 36 ? 2 : 1;
+    for (let i = 0; i < ghost.trail.length; i += step) {
+      const pt = ghost.trail[i];
+      if (!pt) continue;
+      this.pushWorldFallbackRect(solidWorldOut, pt.x, pt.y, 3, 3, 0, trailCol);
+    }
+
+    // Ghost craft silhouette
+    const rad = ghost.angleDeg * DEG_TO_RAD;
+    this.pushWorldFallbackRect(solidWorldOut, ghost.x, ghost.y, 20, 7, rad, bodyCol);
+    this.pushWorldFallbackRect(solidWorldOut, ghost.x, ghost.y, 9, 20, rad, trimCol);
+    if (ghost.boosting) {
+      const tailX = ghost.x - Math.cos(rad) * 14;
+      const tailY = ghost.y - Math.sin(rad) * 14;
+      this.pushWorldFallbackRect(solidWorldOut, tailX, tailY, 8, 4, rad, trimCol);
     }
   }
 
@@ -1142,7 +1328,9 @@ export class WebGL2Renderer implements IRenderer {
       }
     };
 
-    if (enemy.kind === 'Blimp') {
+    if (enemy.kind === 'Blimp' || enemy.kind === 'SkyCarrier') {
+      const isCarrier = enemy.kind === 'SkyCarrier';
+      const scaleMult = isCarrier ? 1.1 : 1.0;
       const bodyName =
         enemy.state === 'sinking' || enemy.state === 'falling'
           ? 'blimp_die'
@@ -1153,11 +1341,11 @@ export class WebGL2Renderer implements IRenderer {
         ey,
         hullTransform.angleRad,
         0,
-        260,
-        96,
+        isCarrier ? 580 : 260,
+        isCarrier ? 220 : 96,
         this.activePalette.colors[2],
-        hullTransform.scaleX,
-        hullTransform.scaleY,
+        hullTransform.scaleX * scaleMult,
+        hullTransform.scaleY * scaleMult,
       );
       const prop = sprites['blimp_anim'];
       if (prop && enemy.state !== 'sinking' && enemy.state !== 'falling') {
@@ -1167,8 +1355,8 @@ export class WebGL2Renderer implements IRenderer {
           x: ex,
           y: ey,
           angleRad: hullTransform.angleRad,
-          scaleX: hullTransform.scaleX,
-          scaleY: hullTransform.scaleY,
+          scaleX: hullTransform.scaleX * scaleMult,
+          scaleY: hullTransform.scaleY * scaleMult,
           depth: 0.42,
           flash,
           clipSea: true,
@@ -1176,21 +1364,53 @@ export class WebGL2Renderer implements IRenderer {
         mainOut.push(inst);
         reflectOut.push(inst);
       }
-      pushOrFallback(
-        enemy.spriteGun || 'big_boat_gun',
-        ex,
-        ey + 68,
-        enemy.gunAngleDeg * DEG_TO_RAD,
-        0,
-        24,
-        6,
-        this.activePalette.colors[2],
-      );
+      if (isCarrier) {
+        if (enemy.state !== 'sinking' && enemy.state !== 'falling') {
+          const gunName = enemy.spriteGun || 'big_boat_gun';
+          pushOrFallback(
+            gunName,
+            ex - 90 * hullTransform.scaleX,
+            ey + 74,
+            enemy.gunAngleDeg * DEG_TO_RAD,
+            0,
+            26,
+            7,
+            this.activePalette.colors[2],
+          );
+          pushOrFallback(
+            gunName,
+            ex + 90 * hullTransform.scaleX,
+            ey + 74,
+            enemy.gunAngleDeg * DEG_TO_RAD,
+            0,
+            26,
+            7,
+            this.activePalette.colors[2],
+          );
+        }
+      } else {
+        pushOrFallback(
+          enemy.spriteGun || 'big_boat_gun',
+          ex,
+          ey + 68,
+          enemy.gunAngleDeg * DEG_TO_RAD,
+          0,
+          24,
+          6,
+          this.activePalette.colors[2],
+        );
+      }
       return;
     }
 
-    if (enemy.kind === 'Boat' || enemy.kind === 'BigBoat') {
-      const isBig = enemy.kind === 'BigBoat';
+    if (
+      enemy.kind === 'Boat' ||
+      enemy.kind === 'BigBoat' ||
+      enemy.kind === 'Dreadnought'
+    ) {
+      const isDread = enemy.kind === 'Dreadnought';
+      const isBig = enemy.kind === 'BigBoat' || isDread;
+      const scaleMult = isDread ? 1.3 : 1.0;
       const defaultName = isBig ? 'big_boat' : 'small_boat';
       const sinkName = isBig ? 'big_boat_sink' : 'small_boat_sink';
       const bodyName =
@@ -1203,36 +1423,42 @@ export class WebGL2Renderer implements IRenderer {
         ey,
         hullTransform.angleRad,
         0,
-        isBig ? 220 : 56,
-        isBig ? 42 : 16,
+        isDread ? 390 : isBig ? 220 : 56,
+        isDread ? 66 : isBig ? 42 : 16,
         this.activePalette.colors[2],
-        hullTransform.scaleX,
-        hullTransform.scaleY,
+        hullTransform.scaleX * scaleMult,
+        hullTransform.scaleY * scaleMult,
       );
 
       if (enemy.state !== 'sinking') {
         const gunName =
           enemy.spriteGun || (isBig ? 'big_boat_gun' : 'small_boat_gun');
         if (isBig) {
+          const turretSpread = isDread ? 72 : 55;
+          const turretY = isDread ? ey - 36 : ey - 28;
           pushOrFallback(
             gunName,
-            ex - 55 * hullTransform.scaleX,
-            ey - 28,
+            ex - turretSpread * hullTransform.scaleX,
+            turretY,
             enemy.gunAngleDeg * DEG_TO_RAD,
             0,
             24,
             6,
             this.activePalette.colors[2],
+            isDread ? 1.2 : 1,
+            isDread ? 1.2 : 1,
           );
           pushOrFallback(
             gunName,
-            ex + 55 * hullTransform.scaleX,
-            ey - 28,
+            ex + turretSpread * hullTransform.scaleX,
+            turretY,
             enemy.gunAngleDeg * DEG_TO_RAD,
             0,
             24,
             6,
             this.activePalette.colors[2],
+            isDread ? 1.2 : 1,
+            isDread ? 1.2 : 1,
           );
         } else {
           pushOrFallback(
@@ -1402,15 +1628,17 @@ export class WebGL2Renderer implements IRenderer {
     }
   }
 
-  private collectPlayerSprites(
-    snapshot: SimSnapshot,
+  private collectCraftSprites(
+    p: PlayerState,
+    tick: number,
+    isPlayer2: boolean,
+    multiplayerMode: string,
     sprites: Record<string, SpriteEntry>,
     mainOut: SpriteInstance[],
     underwaterOut: SpriteInstance[],
     reflectOut: SpriteInstance[],
     solidWorldOut: number[],
   ): void {
-    const p = snapshot.player;
     const rad = p.angleDeg * DEG_TO_RAD;
     const flash = p.flashTicks > 0 ? 1 : 0;
     const isSubmerged = p.y > -12;
@@ -1443,6 +1671,9 @@ export class WebGL2Renderer implements IRenderer {
           reflectOut.push(inst);
         }
       } else {
+        const fallbackColor = isPlayer2
+          ? this.activePalette.colors[multiplayerMode === 'dogfight1v1' ? 2 : 5]
+          : this.activePalette.colors[1];
         this.pushWorldFallbackRect(
           solidWorldOut,
           p.x,
@@ -1450,7 +1681,7 @@ export class WebGL2Renderer implements IRenderer {
           fallbackW,
           fallbackH,
           rad,
-          flash > 0 ? this.activePalette.colors[7] : this.activePalette.colors[1],
+          flash > 0 ? this.activePalette.colors[7] : fallbackColor,
         );
       }
     };
@@ -1495,7 +1726,7 @@ export class WebGL2Renderer implements IRenderer {
       if (idleEntry) {
         const inst: SpriteInstance = {
           entry: idleEntry,
-          frame: snapshot.tick >> 1,
+          frame: tick >> 1,
           x: p.x,
           y: p.y,
           angleRad: rad,
@@ -1510,7 +1741,7 @@ export class WebGL2Renderer implements IRenderer {
     }
 
     if (p.isUrauser) {
-      pushPart('urauser', 80, 60, snapshot.tick >> 1, 0.25);
+      pushPart('urauser', 80, 60, tick >> 1, 0.25);
     } else {
       const engineFallbacks = [
         'engine_original',
@@ -1518,6 +1749,9 @@ export class WebGL2Renderer implements IRenderer {
         'engine_gungine',
         'engine_underwater',
         'engine_hover',
+        'engine_original',
+        'engine_original',
+        'engine_original',
         'engine_original',
       ];
       const bodyFallbacks = [
@@ -1527,6 +1761,9 @@ export class WebGL2Renderer implements IRenderer {
         'body_nuke',
         'body_bomb',
         'body_original',
+        'body_original',
+        'body_original',
+        'body_original',
       ];
       const wingFallbacks = [
         'wings_original',
@@ -1534,6 +1771,9 @@ export class WebGL2Renderer implements IRenderer {
         'wings_spread',
         'wings_missiles',
         'wings_cannon',
+        'wings_original',
+        'wings_original',
+        'wings_original',
         'wings_original',
       ];
 
@@ -1559,6 +1799,37 @@ export class WebGL2Renderer implements IRenderer {
         0.28,
       );
     }
+
+    // Distinct P2 diamond halo accent so P2 is distinguishable from P1 even with identical sprite color
+    if (isPlayer2) {
+      const cAccent =
+        this.activePalette.colors[multiplayerMode === 'dogfight1v1' ? 2 : 5];
+      this.pushWorldHexRing(
+        solidWorldOut,
+        p.x,
+        p.y,
+        16,
+        1.5,
+        [cAccent[0], cAccent[1], cAccent[2], 0.85],
+        4,
+      );
+    }
+
+    // Act II Aegis Shield crisp pixelated hex halo
+    if (p.shieldReady) {
+      const c7 = this.activePalette.colors[7];
+      const c5 = this.activePalette.colors[5];
+      const pulseCol = tick % 12 < 6 ? c7 : c5;
+      this.pushWorldHexRing(
+        solidWorldOut,
+        p.x,
+        p.y,
+        22,
+        2,
+        [pulseCol[0], pulseCol[1], pulseCol[2], 0.9],
+        6,
+      );
+    }
   }
 
   private collectProjectileSprites(
@@ -1581,6 +1852,172 @@ export class WebGL2Renderer implements IRenderer {
     const isUnderwater = py > 0;
     const target = isUnderwater ? underwaterOut : mainOut;
     const clipSea = !isUnderwater;
+
+    if (proj.kind === 'lightningarc') {
+      const points =
+        proj.arcPoints && proj.arcPoints.length >= 2
+          ? proj.arcPoints
+          : [
+              { x: px, y: py },
+              {
+                x: px + Math.cos(rad) * Math.max(40, proj.beamLength ?? 120),
+                y: py + Math.sin(rad) * Math.max(40, proj.beamLength ?? 120),
+              },
+            ];
+      const cGlow = this.activePalette.colors[6];
+      const cMid = this.activePalette.colors[5];
+      const cCore = this.activePalette.colors[7];
+      const outerCol: RgbaTuple = [cGlow[0], cGlow[1], cGlow[2], 0.65];
+
+      for (let i = 0; i < points.length - 1; i++) {
+        const a = points[i]!;
+        const b = points[i + 1]!;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const segLen = Math.hypot(dx, dy);
+        if (segLen < 0.01) continue;
+        const nx = -dy / segLen;
+        const ny = dx / segLen;
+
+        // 3 sub-segments with deterministic jagged crackle
+        const subPts: Array<{ x: number; y: number }> = [a];
+        for (let s = 1; s <= 2; s++) {
+          const frac = s / 3;
+          const jitter =
+            Math.sin(tick * 1.9 + proj.id * 7.3 + i * 3.1 + s * 5.7) * 5.5;
+          subPts.push({
+            x: a.x + dx * frac + nx * jitter,
+            y: a.y + dy * frac + ny * jitter,
+          });
+        }
+        subPts.push(b);
+
+        for (let s = 0; s < subPts.length - 1; s++) {
+          const p0 = subPts[s]!;
+          const p1 = subPts[s + 1]!;
+          this.pushWorldLineSegment(solidWorldOut, p0.x, p0.y, p1.x, p1.y, 5, outerCol);
+          this.pushWorldLineSegment(solidWorldOut, p0.x, p0.y, p1.x, p1.y, 3, cMid);
+          this.pushWorldLineSegment(solidWorldOut, p0.x, p0.y, p1.x, p1.y, 1.5, cCore);
+          if (p0.y < 0 && p1.y < 0) {
+            this.pushWorldLineSegment(
+              solidWorldOut,
+              p0.x,
+              -p0.y,
+              p1.x,
+              -p1.y,
+              2,
+              [cGlow[0], cGlow[1], cGlow[2], 0.5],
+            );
+          }
+        }
+      }
+      return;
+    }
+
+    if (proj.kind === 'railslug') {
+      const len =
+        proj.beamLength && proj.beamLength > 0
+          ? proj.beamLength
+          : Math.max(56, Math.hypot(proj.vx, proj.vy) * 2.5);
+      const midX =
+        proj.beamLength && proj.beamLength > 0
+          ? px + Math.cos(rad) * (len * 0.5)
+          : px;
+      const midY =
+        proj.beamLength && proj.beamLength > 0
+          ? py + Math.sin(rad) * (len * 0.5)
+          : py;
+      const outerCol =
+        proj.owner === 'player'
+          ? this.activePalette.colors[5]
+          : this.activePalette.colors[2];
+      const coreCol = this.activePalette.colors[7];
+      this.pushWorldFallbackRect(solidWorldOut, midX, midY, len, 10, rad, outerCol);
+      this.pushWorldFallbackRect(solidWorldOut, midX, midY, len, 4, rad, coreCol);
+      if (!isUnderwater && midY < 0) {
+        this.pushWorldFallbackRect(
+          solidWorldOut,
+          midX,
+          -midY,
+          len,
+          6,
+          -rad,
+          this.activePalette.colors[6],
+        );
+      }
+      return;
+    }
+
+    if (proj.kind === 'flakshell') {
+      const entry = sprites['projectile_plasmaball'];
+      if (entry) {
+        const inst: SpriteInstance = {
+          entry,
+          frame: tick,
+          x: px,
+          y: py,
+          angleRad: rad,
+          scaleX: 1.3,
+          scaleY: 1.3,
+          depth: 0.36,
+          flash: 0,
+          clipSea,
+        };
+        target.push(inst);
+        if (!isUnderwater) reflectOut.push(inst);
+      } else {
+        this.pushWorldFallbackRect(
+          solidWorldOut,
+          px,
+          py,
+          10,
+          10,
+          rad,
+          this.activePalette.colors[5],
+        );
+        this.pushWorldFallbackRect(
+          solidWorldOut,
+          px,
+          py,
+          5,
+          5,
+          rad + 0.785,
+          this.activePalette.colors[7],
+        );
+      }
+      return;
+    }
+
+    if (proj.kind === 'flakshard') {
+      const entry = sprites['projectile_spreadbullet'];
+      if (entry) {
+        const inst: SpriteInstance = {
+          entry,
+          frame: tick,
+          x: px,
+          y: py,
+          angleRad: rad,
+          scaleX: 0.9,
+          scaleY: 0.9,
+          depth: 0.37,
+          flash: 0,
+          clipSea,
+        };
+        target.push(inst);
+        if (!isUnderwater) reflectOut.push(inst);
+      } else {
+        this.pushWorldFallbackRect(
+          solidWorldOut,
+          px,
+          py,
+          8,
+          4,
+          rad,
+          this.activePalette.colors[7],
+        );
+      }
+      return;
+    }
 
     if (proj.kind === 'laser' || proj.kind === 'elaser') {
       const len = Math.max(24, proj.beamLength ?? 520);
@@ -1775,9 +2212,11 @@ export class WebGL2Renderer implements IRenderer {
     viewProj: Float32Array,
     instances: readonly SpriteInstance[],
     clipSea: boolean,
+    paletteOverride?: PaletteDefinition,
   ): void {
     if (instances.length === 0) return;
 
+    const pal = paletteOverride ?? this.activePalette;
     gl.useProgram(prog.program);
     gl.bindVertexArray(this.spriteVao);
 
@@ -1787,7 +2226,7 @@ export class WebGL2Renderer implements IRenderer {
     this.setUniformMatrix4fv(gl, prog, 'uViewProjMatrix', viewProj);
     this.setUniform2f(gl, prog, 'uSpritesheetSize', tex.width, tex.height);
     this.setUniform1f(gl, prog, 'uClipSea', clipSea ? 1.0 : 0.0);
-    this.setColorsUniform(gl, prog, 'uniform_colors', this.activePalette.colors);
+    this.setColorsUniform(gl, prog, 'uniform_colors', pal.colors);
 
     let offset = 0;
     while (offset < instances.length) {
@@ -1909,6 +2348,8 @@ export class WebGL2Renderer implements IRenderer {
     gl: WebGL2RenderingContext,
     snapshot: SimSnapshot,
     elapsedSec: number,
+    camX: number,
+    camY: number,
   ): void {
     // ZERO DOM health bar during vanilla play — only Score, Combo gauge, and Mission Toast!
     const pal = this.activePalette;
@@ -1939,17 +2380,19 @@ export class WebGL2Renderer implements IRenderer {
       scoreFont.spec === this.builtinFontSpec
         ? 28
         : 9 + Math.round(scoreFont.spec.lineHeight * scoreScale) - 2;
+    let leftHudY = subHudStartY;
     if (snapshot.mode === 'sfmt') {
       this.drawBitmapText(
         gl,
         smallFont,
         'SFMT',
         12,
-        subHudStartY,
+        leftHudY,
         smallScale,
         'left',
         warn,
       );
+      leftHudY += 12;
     }
     if (snapshot.autopilotEnabled) {
       this.drawBitmapText(
@@ -1957,11 +2400,12 @@ export class WebGL2Renderer implements IRenderer {
         smallFont,
         'ACE BOT',
         12,
-        snapshot.mode === 'sfmt' ? subHudStartY + 12 : subHudStartY,
+        leftHudY,
         smallScale,
         'left',
         pal.colors[2],
       );
+      leftHudY += 12;
     }
 
     // Combo text using combofont.shader vertical barh decay
@@ -2004,6 +2448,122 @@ export class WebGL2Renderer implements IRenderer {
       );
     }
 
+    // Act II Ghost world tag
+    if (snapshot.ghostPose?.alive) {
+      const gx = Math.round(VIRTUAL_WIDTH * 0.5 + (snapshot.ghostPose.x - camX));
+      const gy = Math.round(VIRTUAL_HEIGHT * 0.5 + (snapshot.ghostPose.y - camY) - 20);
+      if (gx >= -24 && gx <= VIRTUAL_WIDTH + 24 && gy >= -12 && gy <= VIRTUAL_HEIGHT + 12) {
+        this.drawBitmapText(gl, smallFont, 'GHOST', gx + 1, gy + 1, 1, 'center', shadow);
+        this.drawBitmapText(gl, smallFont, 'GHOST', gx, gy, 1, 'center', pal.colors[6]);
+      }
+    }
+
+    // Act II 2P Co-op / 1v1 Dogfight HUD: P1 & P2 craft tags, P2 HP bar, Dogfight Scoreboard & Round KO banner
+    if (snapshot.player2) {
+      if (snapshot.player.alive) {
+        const p1sx = Math.round(VIRTUAL_WIDTH * 0.5 + (snapshot.player.x - camX));
+        const p1sy = Math.round(VIRTUAL_HEIGHT * 0.5 + (snapshot.player.y - camY) - 24);
+        if (p1sx >= -20 && p1sx <= VIRTUAL_WIDTH + 20 && p1sy >= -12 && p1sy <= VIRTUAL_HEIGHT + 12) {
+          this.drawBitmapText(gl, smallFont, 'P1', p1sx + 1, p1sy + 1, 1, 'center', shadow);
+          this.drawBitmapText(gl, smallFont, 'P1', p1sx, p1sy, 1, 'center', fg);
+        }
+      }
+      if (snapshot.player2.alive) {
+        const p2sx = Math.round(VIRTUAL_WIDTH * 0.5 + (snapshot.player2.x - camX));
+        const p2sy = Math.round(VIRTUAL_HEIGHT * 0.5 + (snapshot.player2.y - camY) - 24);
+        if (p2sx >= -20 && p2sx <= VIRTUAL_WIDTH + 20 && p2sy >= -12 && p2sy <= VIRTUAL_HEIGHT + 12) {
+          const p2TagCol =
+            snapshot.activeMods?.multiplayerMode === 'dogfight1v1'
+              ? warn
+              : pal.colors[5];
+          this.drawBitmapText(gl, smallFont, 'P2', p2sx + 1, p2sy + 1, 1, 'center', shadow);
+          this.drawBitmapText(gl, smallFont, 'P2', p2sx, p2sy, 1, 'center', p2TagCol);
+        }
+      }
+
+      const p2Ratio = clamp(
+        snapshot.player2.health / Math.max(1, snapshot.player2.maxHealth),
+        0,
+        1,
+      );
+      const p1Ratio = clamp(
+        snapshot.player.health / Math.max(1, snapshot.player.maxHealth),
+        0,
+        1,
+      );
+
+      this.solidVerts.length = 0;
+      if (snapshot.dogfight) {
+        this.pushSolidRect(12, leftHudY + 10, 76, 6, shadow);
+        this.pushSolidRect(12, leftHudY + 10, Math.round(76 * p1Ratio), 6, fg);
+        this.pushSolidBorder(12, leftHudY + 10, 76, 6, 1, fg);
+      }
+      const p2BarY = 44;
+      this.pushSolidRect(VIRTUAL_WIDTH - 88, p2BarY, 76, 6, shadow);
+      this.pushSolidRect(
+        VIRTUAL_WIDTH - 88,
+        p2BarY,
+        Math.round(76 * p2Ratio),
+        6,
+        snapshot.dogfight ? warn : pal.colors[5],
+      );
+      this.pushSolidBorder(VIRTUAL_WIDTH - 88, p2BarY, 76, 6, 1, fg);
+      this.flushSolidArray(gl, this.solidVerts, this.screenProjMatrix);
+
+      if (snapshot.dogfight) {
+        this.drawBitmapText(gl, smallFont, 'P1 HP', 12, leftHudY, 1, 'left', fg);
+      }
+      this.drawBitmapText(
+        gl,
+        smallFont,
+        `P2 ${snapshot.player2.alive ? `${Math.round(p2Ratio * 100)}%` : 'KO'}`,
+        VIRTUAL_WIDTH - 12,
+        34,
+        1,
+        'right',
+        snapshot.dogfight ? warn : pal.colors[5],
+      );
+    }
+
+    if (snapshot.dogfight) {
+      const df = snapshot.dogfight;
+      this.solidVerts.length = 0;
+      this.pushSolidRect(190, 6, 220, 20, [shadow[0], shadow[1], shadow[2], 0.86]);
+      this.pushSolidBorder(190, 6, 220, 20, 1, fg);
+      this.flushSolidArray(gl, this.solidVerts, this.screenProjMatrix);
+
+      this.drawBitmapText(
+        gl,
+        smallFont,
+        `P1 ${df.p1Wins} - ${df.p2Wins} P2  RD ${df.round}/${df.bestOf}`,
+        VIRTUAL_WIDTH * 0.5,
+        12,
+        1,
+        'center',
+        fg,
+      );
+
+      if (df.roundBannerTicks > 0 && df.winner === null) {
+        this.solidVerts.length = 0;
+        this.pushSolidRect(160, 52, 280, 24, [shadow[0], shadow[1], shadow[2], 0.9]);
+        this.pushSolidBorder(160, 52, 280, 24, 1, fg);
+        this.flushSolidArray(gl, this.solidVerts, this.screenProjMatrix);
+        const koLabel = df.lastScorer
+          ? `ROUND KO!  P${df.lastScorer} SCORES`
+          : `ROUND ${df.round} FIGHT!`;
+        this.drawBitmapText(
+          gl,
+          smallFont,
+          koLabel,
+          VIRTUAL_WIDTH * 0.5,
+          60,
+          1,
+          'center',
+          fg,
+        );
+      }
+    }
+
     // Mission completion toast popup
     if (snapshot.completedMissionsThisSortie.length > 0) {
       const lastId =
@@ -2017,9 +2577,10 @@ export class WebGL2Renderer implements IRenderer {
         ? `MISSION COMPLETE: ${mission.title.toUpperCase()}`
         : `MISSION #${lastId} COMPLETE`;
 
+      const toastY = snapshot.dogfight ? 30 : 8;
       this.solidVerts.length = 0;
-      this.pushSolidRect(150, 8, 300, 22, shadow);
-      this.pushSolidBorder(150, 8, 300, 22, 1, fg);
+      this.pushSolidRect(150, toastY, 300, 22, shadow);
+      this.pushSolidBorder(150, toastY, 300, 22, 1, fg);
       this.flushSolidArray(gl, this.solidVerts, this.screenProjMatrix);
 
       this.drawBitmapText(
@@ -2027,7 +2588,7 @@ export class WebGL2Renderer implements IRenderer {
         smallFont,
         label,
         VIRTUAL_WIDTH * 0.5,
-        15,
+        toastY + 7,
         1,
         'center',
         fg,
@@ -2112,7 +2673,17 @@ export class WebGL2Renderer implements IRenderer {
     const titleY = Math.round(
       98 + (36 - bigFont.spec.lineHeight * titleScale) * 0.5,
     );
-    const title = snapshot.player.nukeTriggered ? 'NUKED ALL!' : 'SHOT DOWN';
+    const title = snapshot.dogfight
+      ? snapshot.dogfight.winner === 1
+        ? 'PLAYER 1 WINS!'
+        : snapshot.dogfight.winner === 2
+          ? 'PLAYER 2 WINS!'
+          : snapshot.dogfight.p1Wins >= snapshot.dogfight.p2Wins
+            ? 'PLAYER 1 WINS!'
+            : 'PLAYER 2 WINS!'
+      : snapshot.player.nukeTriggered
+        ? 'NUKED ALL!'
+        : 'SHOT DOWN';
     this.drawBitmapText(
       gl,
       bigFont,
@@ -2127,7 +2698,9 @@ export class WebGL2Renderer implements IRenderer {
     this.drawBitmapText(
       gl,
       smallFont,
-      snapshot.player.planeName.toUpperCase(),
+      snapshot.dogfight
+        ? `1V1 DOGFIGHT // BEST OF ${snapshot.dogfight.bestOf}`
+        : snapshot.player.planeName.toUpperCase(),
       VIRTUAL_WIDTH * 0.5,
       146,
       1,
@@ -2135,12 +2708,19 @@ export class WebGL2Renderer implements IRenderer {
       pal.colors[5],
     );
 
-    const rows: [string, string][] = [
-      ['SCORE', String(Math.floor(snapshot.score))],
-      ['BEST', String(Math.floor(Math.max(highScore, snapshot.score)))],
-      ['KILLS', String(snapshot.killsThisSortie)],
-      ['MISSIONS', `${snapshot.profile.completedMissions.length} / 90`],
-    ];
+    const rows: [string, string][] = snapshot.dogfight
+      ? [
+          ['MATCH', `P1 ${snapshot.dogfight.p1Wins} - ${snapshot.dogfight.p2Wins} P2`],
+          ['ROUND', `${snapshot.dogfight.round} / ${snapshot.dogfight.bestOf}`],
+          ['SCORE', String(Math.floor(snapshot.score))],
+          ['KILLS', String(snapshot.killsThisSortie)],
+        ]
+      : [
+          ['SCORE', String(Math.floor(snapshot.score))],
+          ['BEST', String(Math.floor(Math.max(highScore, snapshot.score)))],
+          ['KILLS', String(snapshot.killsThisSortie)],
+          ['MISSIONS', `${snapshot.profile.completedMissions.length} / 90`],
+        ];
     for (let i = 0; i < rows.length; i++) {
       const [label, val] = rows[i]!;
       const ry = 172 + i * 20;
@@ -2168,7 +2748,14 @@ export class WebGL2Renderer implements IRenderer {
     elapsedSec: number,
   ): void {
     const pal = this.activePalette;
+    const isStudioOpen = Boolean(hangarUi.paletteStudio?.open);
+    const isModDeckOpen = !isStudioOpen && Boolean(hangarUi.modDeckOpen);
+    const previewPal =
+      isStudioOpen && hangarUi.paletteStudio?.palette
+        ? hangarUi.paletteStudio.palette
+        : pal;
     const isSfmt = hangarUi.mode === 'sfmt';
+    const moddedEnabled = Boolean(hangarUi.modFlags?.moddedEnabled);
 
     // 1. Projector screen backdrop and frame inside 600x400 FBO
     const screenBg: RgbaTuple = isSfmt
@@ -2189,7 +2776,7 @@ export class WebGL2Renderer implements IRenderer {
     this.pushSolidRect(42, 30, 516, 30, pal.colors[2]);
     this.pushSolidBorder(42, 30, 516, 30, 1, pal.colors[7]);
     // Aircraft preview stage box (top-right)
-    this.pushSolidRect(318, 68, 240, 96, pal.backcol);
+    this.pushSolidRect(318, 68, 240, 96, previewPal.backcol);
     this.pushSolidBorder(318, 68, 240, 96, 1, pal.colors[7]);
     // Bottom divider
     this.pushSolidRect(42, 338, 516, 1, pal.colors[3]);
@@ -2245,6 +2832,7 @@ export class WebGL2Renderer implements IRenderer {
         this.screenProjMatrix,
         previewSprites,
         false,
+        previewPal,
       );
     } else {
       this.pushWorldFallbackRect(
@@ -2254,12 +2842,12 @@ export class WebGL2Renderer implements IRenderer {
         44,
         24,
         previewAngle,
-        pal.colors[1],
+        previewPal.colors[1],
       );
       this.flushSolidArray(gl, previewFallback, this.screenProjMatrix);
     }
 
-    // 3. Left customization rows
+    // 3. Header & Banner
     const smallFont = this.resolveFont('fnts', 'fntm');
     const medFont = this.resolveFont('fntm', 'fnts');
     const medScale = medFont.spec === this.builtinFontSpec ? 2 : 1;
@@ -2267,7 +2855,19 @@ export class WebGL2Renderer implements IRenderer {
       30 + (30 - medFont.spec.lineHeight * medScale) * 0.5,
     );
 
-    // Header
+    if (moddedEnabled && hangarUi.modFlags?.dailySeed && hangarUi.dailySeedId) {
+      this.drawBitmapText(
+        gl,
+        smallFont,
+        `DAILY ${hangarUi.dailySeedId}`,
+        26,
+        5,
+        1,
+        'left',
+        pal.colors[5],
+      );
+    }
+
     this.drawBitmapText(
       gl,
       smallFont,
@@ -2279,17 +2879,62 @@ export class WebGL2Renderer implements IRenderer {
       pal.colors[7],
     );
 
-    // Dynamic plane name banner
+    this.drawBitmapText(
+      gl,
+      smallFont,
+      moddedEnabled ? '[TAB] MODDED' : '[TAB] VANILLA 1:1',
+      574,
+      5,
+      1,
+      'right',
+      moddedEnabled ? pal.colors[5] : pal.colors[7],
+    );
+
+    const bannerText = isStudioOpen
+      ? 'LIVE PALETTE STUDIO'
+      : isModDeckOpen
+        ? 'ACT II MOD DECK'
+        : hangarUi.planeName.toUpperCase();
+
     this.drawBitmapText(
       gl,
       medFont,
-      hangarUi.planeName.toUpperCase(),
+      bannerText,
       VIRTUAL_WIDTH * 0.5,
       bannerY,
       medScale,
       'center',
       pal.colors[7],
     );
+
+    if (isStudioOpen && hangarUi.paletteStudio) {
+      this.drawPaletteStudioPanel(gl, hangarUi, smallFont);
+      if (snapshot.tick < 0) this.frameDrawCalls++;
+      return;
+    }
+
+    if (isModDeckOpen) {
+      this.drawModDeckPanel(gl, hangarUi, smallFont);
+      if (snapshot.tick < 0) this.frameDrawCalls++;
+      return;
+    }
+
+    if (
+      moddedEnabled &&
+      hangarUi.modFlags &&
+      hangarUi.modFlags.multiplayerMode !== 'solo'
+    ) {
+      this.drawBitmapText(
+        gl,
+        smallFont,
+        `P2: ${(hangarUi.p2PlaneName ?? (hangarUi.modFlags.p2BotEnabled ? 'ACE BOT' : 'HUMAN')).toUpperCase()}`,
+        324,
+        151,
+        1,
+        'left',
+        previewPal.colors[1],
+      );
+    }
 
     const activeSpecDescr =
       hangarUi.activeRow === 'weapon'
@@ -2548,7 +3193,7 @@ export class WebGL2Renderer implements IRenderer {
     this.drawBitmapText(
       gl,
       smallFont,
-      `UP/DN:ROW  LT/RT:CYCLE  SPACE:LAUNCH  ~HUD`,
+      `UP/DN:ROW LT/RT:CYC TAB:MODS SPC:GO ~HUD`,
       558,
       347,
       1,
@@ -2559,6 +3204,423 @@ export class WebGL2Renderer implements IRenderer {
     if (snapshot.tick < 0) {
       this.frameDrawCalls++;
     }
+  }
+
+  private drawModDeckPanel(
+    gl: WebGL2RenderingContext,
+    hangarUi: HangarUiState,
+    smallFont: { spec: BitmapFontSpec; tex: UploadedTexture },
+  ): void {
+    const pal = this.activePalette;
+    const flags = hangarUi.modFlags ?? {
+      moddedEnabled: false,
+      arsenalBosses: false,
+      replayGhost: false,
+      dailySeed: false,
+      shaderFx: { ...DEFAULT_SHADER_FX },
+      multiplayerMode: 'solo' as const,
+      p2BotEnabled: true,
+    };
+    const activeRow = hangarUi.activeModRow ?? 'modprofile';
+
+    const modRows: Array<{
+      key: ModDeckRow;
+      label: string;
+      value: string;
+      descr: string;
+    }> = [
+      {
+        key: 'modprofile',
+        label: 'PROFILE',
+        value: flags.moddedEnabled ? 'MODDED' : 'VANILLA 1:1',
+        descr: 'MASTER LOCK SWITCH. VANILLA 1:1 GUARANTEES EXACT ORIGINAL PHYSICS AND SHADERS.',
+      },
+      {
+        key: 'modarsenal',
+        label: 'ARSENAL+BOSS',
+        value: flags.arsenalBosses ? 'ON' : 'OFF',
+        descr: 'UNLOCKS RAILGUN, FLAK, CHAIN LIGHTNING, AEGIS SHIELD, DREADNOUGHT AND SKYCARRIER.',
+      },
+      {
+        key: 'modghost',
+        label: 'REPLAY GHOST',
+        value: flags.replayGhost ? 'ON' : 'OFF',
+        descr: 'RACES YOUR PERSONAL BEST GHOST SILHOUETTE AND TRAIL DURING LIVE SORTIES.',
+      },
+      {
+        key: 'moddaily',
+        label: 'DAILY SEED',
+        value: flags.dailySeed ? 'ON' : 'OFF',
+        descr: 'LOCKS THE RNG SEED TO TODAYS GLOBAL DATE FOR COMPETITIVE DAILY LEADERBOARDS.',
+      },
+      {
+        key: 'modshader_crt',
+        label: 'FX: CRT',
+        value: flags.shaderFx.crtScanlines ? 'ON' : 'OFF',
+        descr: 'MODULATES SUBTLE HORIZONTAL CRT SCANLINES AND VIGNETTE OVER THE 600X400 OUTPUT.',
+      },
+      {
+        key: 'modshader_bloom',
+        label: 'FX: BLOOM',
+        value: flags.shaderFx.phosphorBloom ? 'ON' : 'OFF',
+        descr: '8-TAP PHOSPHOR GLOW HALO AROUND EXPLOSIONS, LASERS, AND BRIGHT UI HIGHLIGHTS.',
+      },
+      {
+        key: 'modshader_warp',
+        label: 'FX: WARP',
+        value: flags.shaderFx.speedWarp ? 'ON' : 'OFF',
+        descr: 'SPEED-REACTIVE PERIPHERAL WARP AND CONTRAST BOOST SCALING WITH AIRSPEED.',
+      },
+      {
+        key: 'modshader_shock',
+        label: 'FX: SHOCKWAVE',
+        value: flags.shaderFx.shockwaves ? 'ON' : 'OFF',
+        descr: 'RADIAL SHOCKWAVE DISTORTION RINGS AROUND HEAVY DETONATIONS AND BOSS KILLS.',
+      },
+      {
+        key: 'modmulti',
+        label: 'MULTIPLAYER',
+        value:
+          flags.multiplayerMode === 'coop2p'
+            ? '2P CO-OP'
+            : flags.multiplayerMode === 'dogfight1v1'
+              ? '1V1 FIGHT'
+              : 'SOLO',
+        descr: 'SWITCHES BETWEEN SOLO, 2P CO-OP SURVIVAL, AND 1V1 BEST-OF-5 DOGFIGHT ARENA.',
+      },
+      {
+        key: 'modp2bot',
+        label: 'P2 PILOT',
+        value: flags.p2BotEnabled ? 'BOT' : 'HUMAN',
+        descr: 'SELECTS WHETHER PLAYER 2 IS FLOWN BY AI WINGMAN/RIVAL OR LOCAL KEYBOARD.',
+      },
+      {
+        key: 'palettestudio',
+        label: 'PAL STUDIO',
+        value: 'OPEN >',
+        descr: 'OPEN THE LIVE 8-SLOT RGB PALETTE STUDIO WITH PRESETS AND JSON IMPORT/EXPORT.',
+      },
+      {
+        key: 'modback',
+        label: 'LOADOUT',
+        value: 'BACK',
+        descr: 'RETURN TO THE HANGAR WEAPON, BODY, ENGINE, AND SORTIE LAUNCH SCREEN.',
+      },
+    ];
+
+    this.solidVerts.length = 0;
+    for (let i = 0; i < modRows.length; i++) {
+      const r = modRows[i]!;
+      const ry = 70 + i * 21;
+      const isSelected = r.key === activeRow;
+      if (isSelected) {
+        this.pushSolidRect(42, ry, 260, 19, pal.colors[7]);
+      } else {
+        this.pushSolidBorder(42, ry, 260, 19, 1, pal.colors[3]);
+      }
+    }
+
+    // Right inspector panel
+    this.pushSolidRect(318, 172, 240, 160, pal.colors[3]);
+    this.pushSolidBorder(318, 172, 240, 160, 1, pal.colors[7]);
+    this.flushSolidArray(gl, this.solidVerts, this.screenProjMatrix);
+
+    for (let i = 0; i < modRows.length; i++) {
+      const r = modRows[i]!;
+      const ry = 70 + i * 21;
+      const isSelected = r.key === activeRow;
+      const labelCol = isSelected ? pal.colors[1] : pal.colors[5];
+      const valCol = isSelected ? pal.colors[1] : pal.colors[7];
+      this.drawBitmapText(
+        gl,
+        smallFont,
+        `${isSelected ? '> ' : '  '}${r.label}`,
+        48,
+        ry + 6,
+        1,
+        'left',
+        labelCol,
+      );
+      this.drawBitmapText(
+        gl,
+        smallFont,
+        isSelected ? `< ${r.value} >` : r.value,
+        296,
+        ry + 6,
+        1,
+        'right',
+        valCol,
+      );
+    }
+
+    const activeMeta =
+      modRows.find((m) => m.key === activeRow) ?? modRows[0]!;
+    this.drawBitmapText(
+      gl,
+      smallFont,
+      activeMeta.label,
+      326,
+      180,
+      1,
+      'left',
+      pal.colors[7],
+    );
+    const wrapped = wrapBitmapTextLines(smallFont.spec, activeMeta.descr, 224, 1);
+    for (let i = 0; i < Math.min(5, wrapped.length); i++) {
+      this.drawBitmapText(
+        gl,
+        smallFont,
+        wrapped[i]!,
+        326,
+        196 + i * 11,
+        1,
+        'left',
+        pal.colors[1],
+      );
+    }
+
+    const dailyStr = hangarUi.dailySeedId
+      ? `DAILY: ${hangarUi.dailySeedId} (BEST ${hangarUi.dailyBestScore ?? 0})`
+      : 'DAILY: READY';
+    const ghostStr =
+      hangarUi.pbGhostScore !== undefined
+        ? `PB GHOST: ${Math.floor(hangarUi.pbGhostScore)}`
+        : 'PB GHOST: READY';
+    this.drawBitmapText(gl, smallFont, dailyStr, 326, 278, 1, 'left', pal.colors[7]);
+    this.drawBitmapText(gl, smallFont, ghostStr, 326, 294, 1, 'left', pal.colors[7]);
+    this.drawBitmapText(
+      gl,
+      smallFont,
+      'P2 KEYS: I/J/K/L + RSHIFT',
+      326,
+      310,
+      1,
+      'left',
+      pal.colors[5],
+    );
+
+    this.drawBitmapText(
+      gl,
+      smallFont,
+      flags.moddedEnabled ? 'MODE: ACT II MODDED' : 'MODE: VANILLA 1:1 LOCKED',
+      42,
+      347,
+      1,
+      'left',
+      pal.colors[7],
+    );
+    this.drawBitmapText(
+      gl,
+      smallFont,
+      'UP/DN:ROW  SPC/LR:SET  TAB:CLOSE',
+      558,
+      347,
+      1,
+      'right',
+      pal.colors[5],
+    );
+  }
+
+  private drawPaletteStudioPanel(
+    gl: WebGL2RenderingContext,
+    hangarUi: HangarUiState,
+    smallFont: { spec: BitmapFontSpec; tex: UploadedTexture },
+  ): void {
+    const pal = this.activePalette;
+    const studio = hangarUi.paletteStudio!;
+    const sPal = studio.palette;
+    const slotLabels = [
+      'SKY/SEA',
+      'PLAYER',
+      'ENEMY',
+      'REFLECT',
+      'BG PROP',
+      'BULLET',
+      'CLOUD',
+      'GLOW/HP',
+    ];
+    const getSlotTuple = (slot: number): RgbaTuple =>
+      slot === 0 ? sPal.backcol : (sPal.colors[slot] ?? sPal.colors[7]);
+
+    this.solidVerts.length = 0;
+    // Left header strip
+    this.pushSolidRect(42, 68, 260, 18, pal.colors[3]);
+    this.pushSolidBorder(42, 68, 260, 18, 1, pal.colors[7]);
+
+    // 8 palette slot rows
+    for (let i = 0; i < 8; i++) {
+      const ry = 90 + i * 24;
+      const isSelected = i === studio.selectedSlot;
+      if (isSelected) {
+        this.pushSolidRect(42, ry, 260, 21, pal.colors[7]);
+      } else {
+        this.pushSolidBorder(42, ry, 260, 21, 1, pal.colors[3]);
+      }
+      const col = getSlotTuple(i);
+      this.pushSolidRect(48, ry + 3, 22, 15, col);
+      this.pushSolidBorder(
+        48,
+        ry + 3,
+        22,
+        15,
+        1,
+        isSelected ? pal.colors[1] : pal.colors[7],
+      );
+    }
+
+    // RGB channel bars at bottom-left
+    this.pushSolidRect(42, 284, 260, 48, pal.colors[3]);
+    this.pushSolidBorder(42, 284, 260, 48, 1, pal.colors[7]);
+    const activeTuple = getSlotTuple(studio.selectedSlot);
+    const barColors: [RgbaTuple, RgbaTuple, RgbaTuple] = [
+      [1, 0.28, 0.28, 1],
+      [0.28, 1, 0.38, 1],
+      [0.32, 0.62, 1, 1],
+    ];
+    for (let ch = 0; ch < 3; ch++) {
+      const by = 290 + ch * 14;
+      const v = clamp(activeTuple[ch] ?? 0, 0, 1);
+      this.pushSolidRect(74, by + 1, 174, 8, pal.colors[1]);
+      this.pushSolidRect(74, by + 1, Math.round(174 * v), 8, barColors[ch]!);
+      if (ch === studio.selectedChannel) {
+        this.pushSolidBorder(73, by, 176, 10, 1, pal.colors[7]);
+      }
+    }
+
+    // Bottom-right miniature diorama preview showing edited palette live
+    this.pushSolidRect(318, 172, 240, 112, sPal.backcol);
+    this.pushSolidRect(318, 240, 240, 44, sPal.backcol);
+    this.pushSolidRect(318, 238, 240, 2, sPal.colors[7]); // ocean_line
+    this.pushSolidRect(336, 184, 48, 12, sPal.colors[6]); // midground cloud
+    this.pushSolidRect(458, 180, 56, 14, sPal.colors[7]); // foreground cloud
+    this.pushSolidRect(348, 224, 34, 14, sPal.colors[4]); // bg prop
+    this.pushSolidRect(472, 210, 22, 12, sPal.colors[2]); // enemy
+    this.pushSolidRect(430, 214, 10, 4, sPal.colors[5]); // bullet
+    this.pushSolidRect(376, 212, 24, 10, sPal.colors[1]); // player
+    this.pushSolidRect(376, 250, 24, 10, sPal.colors[3]); // reflection
+    this.pushSolidRect(430, 252, 10, 4, sPal.colors[6]); // bullet reflection
+    this.pushSolidBorder(318, 172, 240, 112, 1, pal.colors[7]);
+
+    this.pushSolidRect(318, 288, 240, 44, pal.colors[3]);
+    this.pushSolidBorder(318, 288, 240, 44, 1, pal.colors[7]);
+    this.flushSolidArray(gl, this.solidVerts, this.screenProjMatrix);
+
+    this.drawBitmapText(
+      gl,
+      smallFont,
+      '8-SLOT PALETTE',
+      48,
+      73,
+      1,
+      'left',
+      pal.colors[7],
+    );
+    this.drawBitmapText(
+      gl,
+      smallFont,
+      sPal.name.toUpperCase().slice(0, 14),
+      296,
+      73,
+      1,
+      'right',
+      pal.colors[1],
+    );
+
+    for (let i = 0; i < 8; i++) {
+      const ry = 90 + i * 24;
+      const isSelected = i === studio.selectedSlot;
+      const col = getSlotTuple(i);
+      const textCol = isSelected ? pal.colors[1] : pal.colors[7];
+      this.drawBitmapText(
+        gl,
+        smallFont,
+        `${i}: ${slotLabels[i] ?? ''}`,
+        76,
+        ry + 7,
+        1,
+        'left',
+        textCol,
+      );
+      this.drawBitmapText(
+        gl,
+        smallFont,
+        rgbaToHex(col).toUpperCase(),
+        296,
+        ry + 7,
+        1,
+        'right',
+        textCol,
+      );
+    }
+
+    const chNames = ['R', 'G', 'B'];
+    for (let ch = 0; ch < 3; ch++) {
+      const by = 290 + ch * 14;
+      const isCh = ch === studio.selectedChannel;
+      const v = clamp(activeTuple[ch] ?? 0, 0, 1);
+      this.drawBitmapText(
+        gl,
+        smallFont,
+        isCh ? `[${chNames[ch]}]` : ` ${chNames[ch]} `,
+        46,
+        by + 2,
+        1,
+        'left',
+        isCh ? pal.colors[7] : pal.colors[1],
+      );
+      this.drawBitmapText(
+        gl,
+        smallFont,
+        v.toFixed(2),
+        296,
+        by + 2,
+        1,
+        'right',
+        isCh ? pal.colors[7] : pal.colors[1],
+      );
+    }
+
+    this.drawBitmapText(
+      gl,
+      smallFont,
+      '1-4:PRESET  R:RESET',
+      326,
+      296,
+      1,
+      'left',
+      pal.colors[7],
+    );
+    this.drawBitmapText(
+      gl,
+      smallFont,
+      'Q/E:RGB  LT/RT:+-0.05',
+      326,
+      312,
+      1,
+      'left',
+      pal.colors[1],
+    );
+
+    this.drawBitmapText(
+      gl,
+      smallFont,
+      `STUDIO SAVED: ${studio.savedCount}`,
+      42,
+      347,
+      1,
+      'left',
+      pal.colors[7],
+    );
+    this.drawBitmapText(
+      gl,
+      smallFont,
+      'UP/DN:SLOT  ENTER:SAVE  ESC:BACK',
+      558,
+      347,
+      1,
+      'right',
+      pal.colors[5],
+    );
   }
 
   private drawOutpass(
@@ -2576,6 +3638,40 @@ export class WebGL2Renderer implements IRenderer {
     this.setUniform1i(gl, prog, 'colorTexture', 0);
     this.setUniform2f(gl, prog, 'viewport', canvasW, canvasH);
     this.setColorsUniform(gl, prog, 'uniform_colors', this.activePalette.colors);
+
+    const fx = this.effectiveFx;
+    this.setUniform4f(
+      gl,
+      prog,
+      'uFxFlags',
+      fx.crtScanlines ? 1 : 0,
+      fx.phosphorBloom ? 1 : 0,
+      fx.speedWarp ? 1 : 0,
+      fx.shockwaves ? 1 : 0,
+    );
+    this.setUniform4f(
+      gl,
+      prog,
+      'uFxParams',
+      this.renderElapsedSec,
+      this.renderSpeedNorm,
+      0,
+      0,
+    );
+    const swLoc =
+      this.getUniformLocation(gl, prog, 'uShockwaves[0]') ??
+      this.getUniformLocation(gl, prog, 'uShockwaves');
+    if (swLoc !== null) {
+      const flat = new Float32Array(16);
+      for (let i = 0; i < 4; i++) {
+        const sw = this.renderShockwaves[i] ?? [0, 0, 0, 0];
+        flat[i * 4 + 0] = sw[0];
+        flat[i * 4 + 1] = sw[1];
+        flat[i * 4 + 2] = sw[2];
+        flat[i * 4 + 3] = sw[3];
+      }
+      gl.uniform4fv(swLoc, flat);
+    }
 
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     this.frameDrawCalls++;
@@ -2715,6 +3811,57 @@ export class WebGL2Renderer implements IRenderer {
     this.pushSolidRect(x, y + h - t, w, t, color);
     this.pushSolidRect(x, y, t, h, color);
     this.pushSolidRect(x + w - t, y, t, h, color);
+  }
+
+  private pushWorldLineSegment(
+    out: number[],
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+    thickness: number,
+    color: RgbaTuple,
+  ): void {
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const len = Math.hypot(dx, dy);
+    if (len < 0.001 || thickness <= 0) return;
+    const nx = (-dy / len) * (thickness * 0.5);
+    const ny = (dx / len) * (thickness * 0.5);
+    const [r, g, b, a] = color;
+    out.push(
+      x0 + nx, y0 + ny, r, g, b, a,
+      x1 + nx, y1 + ny, r, g, b, a,
+      x0 - nx, y0 - ny, r, g, b, a,
+      x1 + nx, y1 + ny, r, g, b, a,
+      x1 - nx, y1 - ny, r, g, b, a,
+      x0 - nx, y0 - ny, r, g, b, a,
+    );
+  }
+
+  private pushWorldHexRing(
+    out: number[],
+    cx: number,
+    cy: number,
+    radius: number,
+    thickness: number,
+    color: RgbaTuple,
+    segments = 6,
+  ): void {
+    const step = (Math.PI * 2) / Math.max(3, segments);
+    for (let i = 0; i < segments; i++) {
+      const a0 = i * step;
+      const a1 = (i + 1) * step;
+      this.pushWorldLineSegment(
+        out,
+        cx + Math.cos(a0) * radius,
+        cy + Math.sin(a0) * radius,
+        cx + Math.cos(a1) * radius,
+        cy + Math.sin(a1) * radius,
+        thickness,
+        color,
+      );
+    }
   }
 
   private pushWorldFallbackRect(
@@ -3245,8 +4392,21 @@ export class WebGL2Renderer implements IRenderer {
         48,
         106,
       );
+      if (hangarUi.modDeckOpen) {
+        ctx.fillText('ACT II MOD DECK', 48, 132);
+      }
+      if (hangarUi.paletteStudio?.open) {
+        ctx.fillText('LIVE PALETTE STUDIO', 48, 154);
+      }
       this.frameDrawCalls++;
     } else {
+      if (snapshot.ghostPose?.alive) {
+        const gx = VIRTUAL_WIDTH * 0.5 + (snapshot.ghostPose.x - camX);
+        const gy = VIRTUAL_HEIGHT * 0.5 + (snapshot.ghostPose.y - camY);
+        ctx.fillStyle = rgbaToCss(pal.colors[4]);
+        ctx.fillRect(gx - 8, gy - 4, 16, 8);
+      }
+
       const px = VIRTUAL_WIDTH * 0.5 + (snapshot.player.x - camX);
       const py = VIRTUAL_HEIGHT * 0.5 + (snapshot.player.y - camY);
       ctx.save();
@@ -3255,6 +4415,17 @@ export class WebGL2Renderer implements IRenderer {
       ctx.fillStyle = rgbaToCss(pal.colors[1]);
       ctx.fillRect(-10, -5, 20, 10);
       ctx.restore();
+
+      if (snapshot.player2?.alive) {
+        const p2x = VIRTUAL_WIDTH * 0.5 + (snapshot.player2.x - camX);
+        const p2y = VIRTUAL_HEIGHT * 0.5 + (snapshot.player2.y - camY);
+        ctx.save();
+        ctx.translate(p2x, p2y);
+        ctx.rotate(snapshot.player2.angleDeg * DEG_TO_RAD);
+        ctx.fillStyle = rgbaToCss(pal.colors[5]);
+        ctx.fillRect(-10, -5, 20, 10);
+        ctx.restore();
+      }
 
       for (const e of snapshot.enemies) {
         const ex = VIRTUAL_WIDTH * 0.5 + (e.x - camX);
@@ -3265,6 +4436,13 @@ export class WebGL2Renderer implements IRenderer {
       ctx.fillStyle = rgbaToCss(pal.colors[7]);
       ctx.font = 'bold 14px monospace';
       ctx.fillText(String(Math.floor(snapshot.score)).padStart(6, '0'), 12, 22);
+      if (snapshot.dogfight) {
+        ctx.fillText(
+          `P1 ${snapshot.dogfight.p1Wins} - ${snapshot.dogfight.p2Wins} P2`,
+          240,
+          22,
+        );
+      }
       this.frameDrawCalls++;
     }
 
