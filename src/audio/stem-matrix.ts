@@ -110,7 +110,8 @@ export interface SpatialSfxResolution {
 
 function clampPartToStemIndex(part: PartIndex): number {
   if (!Number.isFinite(part)) return 1;
-  return Math.max(0, Math.min(4, Math.trunc(part))) + 1;
+  const normalized = Math.max(0, Math.trunc(part));
+  return (normalized % 5) + 1;
 }
 
 function clamp(value: number, min: number, max: number): number {

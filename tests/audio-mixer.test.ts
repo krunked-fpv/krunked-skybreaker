@@ -9,8 +9,9 @@ import {
   resolveActiveStems,
   resolveSpatialSfx,
 } from '../src/audio';
+import { DEFAULT_ACT2_MOD_FLAGS } from '../src/contracts/mod';
 import type { AudioCueId } from '../src/contracts/audio';
-import type { Loadout, PartIndex, SimSnapshot } from '../src/contracts/sim';
+import type { Loadout, PartIndex, PlayerState, SimSnapshot } from '../src/contracts/sim';
 import type { VaultAssetBundle } from '../src/contracts/vault';
 
 interface MockAudioParam {
@@ -228,6 +229,62 @@ function makeFallbackVault(
   };
 }
 
+function makePlayerState(overrides: {
+  loadout?: Loadout;
+  health?: number;
+  maxHealth?: number;
+  alive?: boolean;
+  x?: number;
+  playerIndex?: 1 | 2;
+} = {}): PlayerState {
+  const loadout: Loadout = overrides.loadout ?? {
+    weapon: 0,
+    body: 0,
+    engine: 0,
+  };
+  return {
+    x: overrides.x ?? 0,
+    y: -150,
+    prevX: 0,
+    prevY: -150,
+    vx: 0,
+    vy: 0,
+    angleDeg: 0,
+    prevAngleDeg: 0,
+    health: overrides.health ?? 10,
+    maxHealth: overrides.maxHealth ?? 10,
+    alive: overrides.alive ?? true,
+    boosting: false,
+    wasBoosting: false,
+    firing: false,
+    healing: false,
+    healingTicks: 0,
+    underwater: false,
+    inSpace: false,
+    fireCooldown: 0,
+    gungineCooldown: 0,
+    bombCooldown: 0,
+    flashTicks: 0,
+    burnTicks: 0,
+    envWaterFactor: 0,
+    envSpaceFactor: 0,
+    nukeTriggered: false,
+    nukeRadius: 0,
+    nukeTicks: 0,
+    isUrauser:
+      loadout.weapon === 5 && loadout.body === 5 && loadout.engine === 5,
+    loadout,
+    planeName: 'ORIGINAL',
+    engineSpec: {} as PlayerState['engineSpec'],
+    bodySpec: {} as PlayerState['bodySpec'],
+    weaponSpec: {} as PlayerState['weaponSpec'],
+    boostAnimFrame: 0,
+    ...(overrides.playerIndex !== undefined
+      ? { playerIndex: overrides.playerIndex }
+      : {}),
+  };
+}
+
 function makeSnapshot(overrides: {
   tick?: number;
   phase?: SimSnapshot['phase'];
@@ -235,15 +292,21 @@ function makeSnapshot(overrides: {
   loadout?: Loadout;
   health?: number;
   maxHealth?: number;
+  playerAlive?: boolean;
+  player2?: PlayerState | null;
+  activeMods?: SimSnapshot['activeMods'];
+  dogfight?: SimSnapshot['dogfight'];
   cameraTargetX?: number;
   playerX?: number;
   audioEvents?: SimSnapshot['audioEvents'];
 } = {}): SimSnapshot {
-  const loadout: Loadout = overrides.loadout ?? {
-    weapon: 0,
-    body: 0,
-    engine: 0,
-  };
+  const player = makePlayerState({
+    loadout: overrides.loadout,
+    health: overrides.health,
+    maxHealth: overrides.maxHealth,
+    alive: overrides.playerAlive,
+    x: overrides.playerX,
+  });
   return {
     tick: overrides.tick ?? 1,
     phase: overrides.phase ?? 'playing',
@@ -262,44 +325,7 @@ function makeSnapshot(overrides: {
     difficulty: 60,
     killsThisSortie: 0,
     killsByKind: {},
-    player: {
-      x: overrides.playerX ?? 0,
-      y: -150,
-      prevX: 0,
-      prevY: -150,
-      vx: 0,
-      vy: 0,
-      angleDeg: 0,
-      prevAngleDeg: 0,
-      health: overrides.health ?? 10,
-      maxHealth: overrides.maxHealth ?? 10,
-      alive: true,
-      boosting: false,
-      wasBoosting: false,
-      firing: false,
-      healing: false,
-      healingTicks: 0,
-      underwater: false,
-      inSpace: false,
-      fireCooldown: 0,
-      gungineCooldown: 0,
-      bombCooldown: 0,
-      flashTicks: 0,
-      burnTicks: 0,
-      envWaterFactor: 0,
-      envSpaceFactor: 0,
-      nukeTriggered: false,
-      nukeRadius: 0,
-      nukeTicks: 0,
-      isUrauser:
-        loadout.weapon === 5 && loadout.body === 5 && loadout.engine === 5,
-      loadout,
-      planeName: 'ORIGINAL',
-      engineSpec: {} as SimSnapshot['player']['engineSpec'],
-      bodySpec: {} as SimSnapshot['player']['bodySpec'],
-      weaponSpec: {} as SimSnapshot['player']['weaponSpec'],
-      boostAnimFrame: 0,
-    },
+    player,
     enemies: [],
     projectiles: [],
     particles: [],
@@ -315,6 +341,13 @@ function makeSnapshot(overrides: {
     spaceLevel: -1300,
     autopilotEnabled: false,
     seed: 1,
+    ...(overrides.player2 !== undefined ? { player2: overrides.player2 } : {}),
+    ...(overrides.activeMods !== undefined
+      ? { activeMods: overrides.activeMods }
+      : {}),
+    ...(overrides.dogfight !== undefined
+      ? { dogfight: overrides.dogfight }
+      : {}),
   };
 }
 
@@ -437,6 +470,94 @@ describe('resolveActiveStems', () => {
     ).toEqual({
       musicState: 'pause',
       stems: ['luftrauser__pause'],
+      alarmActive: false,
+    });
+  });
+
+  it('maps Act II modded part indices 6..8 cleanly into valid stems 1..5 via ((index % 5) + 1) and keeps alarm below 0.333333 HP', () => {
+    const validStemSet = new Set<string>(ALL_STEM_IDS);
+    const moddedParts: PartIndex[] = [6, 7, 8];
+
+    // Direct 6->2, 7->3, 8->4 mapping check across all 27 6..8 combos
+    for (const weapon of moddedParts) {
+      for (const body of moddedParts) {
+        for (const engine of moddedParts) {
+          const res = resolveActiveStems(
+            'playing',
+            false,
+            { weapon, body, engine },
+            0.8,
+          );
+          expect(res.musicState).toBe('combat');
+          expect(res.alarmActive).toBe(false);
+          expect(res.stems).toEqual([
+            `luftrauser_bass${(body % 5) + 1}`,
+            `luftrauser_drums${(engine % 5) + 1}`,
+            `luftrauser_lead${(weapon % 5) + 1}`,
+          ]);
+          for (const stem of res.stems) {
+            expect(validStemSet.has(stem)).toBe(true);
+          }
+        }
+      }
+    }
+
+    // Specific [6, 7, 8] -> bass3 (body=7->3), drums4 (engine=8->4), lead2 (weapon=6->2)
+    expect(
+      resolveActiveStems('playing', false, { weapon: 6, body: 7, engine: 8 }, 1),
+    ).toEqual({
+      musicState: 'combat',
+      stems: ['luftrauser_bass3', 'luftrauser_drums4', 'luftrauser_lead2'],
+      alarmActive: false,
+    });
+
+    // Low HP alarm triggers strictly below 0.333333 HP for modded loadouts
+    expect(
+      resolveActiveStems(
+        'playing',
+        false,
+        { weapon: 6, body: 7, engine: 8 },
+        0.333333,
+      ),
+    ).toEqual({
+      musicState: 'combat',
+      stems: ['luftrauser_bass3', 'luftrauser_drums4', 'luftrauser_lead2'],
+      alarmActive: false,
+    });
+
+    expect(
+      resolveActiveStems(
+        'playing',
+        false,
+        { weapon: 6, body: 7, engine: 8 },
+        0.333332,
+      ),
+    ).toEqual({
+      musicState: 'combat',
+      stems: [
+        'luftrauser_bass3',
+        'luftrauser_drums4',
+        'luftrauser_lead2',
+        'luftrauser_drums_alarm',
+      ],
+      alarmActive: true,
+    });
+
+    // Mixed vanilla + modded slots (never out-of-range bass7/drums8/lead9)
+    expect(
+      resolveActiveStems('playing', false, { weapon: 8, body: 0, engine: 6 }, 0.5),
+    ).toEqual({
+      musicState: 'combat',
+      stems: ['luftrauser_bass1', 'luftrauser_drums2', 'luftrauser_lead4'],
+      alarmActive: false,
+    });
+
+    // Partial 5 mixed with modded 6..8 still resolves to 'unknown'
+    expect(
+      resolveActiveStems('playing', false, { weapon: 5, body: 6, engine: 8 }, 0.1),
+    ).toEqual({
+      musicState: 'unknown',
+      stems: ['luftrauser__unknown'],
       alarmActive: false,
     });
   });
@@ -933,6 +1054,286 @@ describe('AudioEngine', () => {
     // SFX works cleanly even without StereoPannerNode
     engine.playSfx('sndbullet', 500, 0, 1);
     expect(engine.getSyncMetrics().sfxPoolActive).toBe(1);
+
+    engine.dispose();
+  });
+
+  it('maintains interStemDriftMs < 1.0 across Vanilla [0,0,0] -> Modded [6,7,8] -> Alarm -> Hangar', async () => {
+    const mockCtx = createMockAudioContext('running', 44100);
+    const engine = new AudioEngine({
+      context: mockCtx as unknown as AudioContext,
+    });
+    await engine.init(makeFallbackVault('procedural-fallback'));
+
+    mockCtx.currentTime = 2.0;
+    await engine.unlock();
+
+    // 1. Vanilla [0,0,0]
+    mockCtx.currentTime = 2.5;
+    engine.syncFromSnapshot(
+      makeSnapshot({
+        tick: 1,
+        phase: 'playing',
+        loadout: { weapon: 0, body: 0, engine: 0 },
+        health: 10,
+        maxHealth: 10,
+      }),
+    );
+    let metrics = engine.getSyncMetrics();
+    expect(metrics.musicState).toBe('combat');
+    expect(metrics.alarmActive).toBe(false);
+    expect(metrics.activeStems).toEqual([
+      'luftrauser_bass1',
+      'luftrauser_drums1',
+      'luftrauser_lead1',
+    ]);
+    expect(metrics.interStemDriftMs).toBeLessThan(1.0);
+
+    // 2. Modded [6,7,8] (6->2, 7->3, 8->4)
+    mockCtx.currentTime = 6.125;
+    engine.syncFromSnapshot(
+      makeSnapshot({
+        tick: 20,
+        phase: 'playing',
+        loadout: { weapon: 6, body: 7, engine: 8 },
+        health: 10,
+        maxHealth: 10,
+      }),
+    );
+    metrics = engine.getSyncMetrics();
+    expect(metrics.musicState).toBe('combat');
+    expect(metrics.alarmActive).toBe(false);
+    expect(metrics.activeStems).toEqual([
+      'luftrauser_bass3',
+      'luftrauser_drums4',
+      'luftrauser_lead2',
+    ]);
+    expect(metrics.interStemDriftMs).toBeLessThan(1.0);
+
+    // 3. Modded [6,7,8] + Alarm (< 0.333333 HP)
+    mockCtx.currentTime = 11.4;
+    engine.syncFromSnapshot(
+      makeSnapshot({
+        tick: 40,
+        phase: 'playing',
+        loadout: { weapon: 6, body: 7, engine: 8 },
+        health: 2,
+        maxHealth: 10,
+      }),
+    );
+    metrics = engine.getSyncMetrics();
+    expect(metrics.musicState).toBe('combat');
+    expect(metrics.alarmActive).toBe(true);
+    expect(metrics.activeStems).toEqual([
+      'luftrauser_bass3',
+      'luftrauser_drums4',
+      'luftrauser_lead2',
+      'luftrauser_drums_alarm',
+    ]);
+    expect(metrics.interStemDriftMs).toBeLessThan(1.0);
+
+    // 4. Hangar
+    mockCtx.currentTime = 15.8;
+    engine.syncFromSnapshot(
+      makeSnapshot({
+        tick: 60,
+        phase: 'hangar',
+        loadout: { weapon: 6, body: 7, engine: 8 },
+        health: 10,
+        maxHealth: 10,
+      }),
+    );
+    metrics = engine.getSyncMetrics();
+    expect(metrics.musicState).toBe('hangar');
+    expect(metrics.alarmActive).toBe(false);
+    expect(metrics.activeStems).toEqual(['luftrauser__hangar']);
+    expect(metrics.interStemDriftMs).toBeLessThan(1.0);
+
+    engine.dispose();
+  });
+
+  it('evaluates P2 health alarm ONLY in coop2p when P1 is dead, and preserves < 1ms drift across 1v1 Dogfight round resets', async () => {
+    const mockCtx = createMockAudioContext('running', 44100);
+    const engine = new AudioEngine({
+      context: mockCtx as unknown as AudioContext,
+    });
+    await engine.init(makeFallbackVault('procedural-fallback'));
+    mockCtx.currentTime = 1.0;
+    await engine.unlock();
+
+    // coop2p: P1 alive & healthy, P2 low HP -> alarm OFF (P1 is still alive)
+    mockCtx.currentTime = 2.0;
+    engine.syncFromSnapshot(
+      makeSnapshot({
+        tick: 1,
+        phase: 'playing',
+        loadout: { weapon: 6, body: 7, engine: 8 },
+        health: 10,
+        maxHealth: 10,
+        playerAlive: true,
+        player2: makePlayerState({
+          playerIndex: 2,
+          alive: true,
+          health: 1,
+          maxHealth: 10,
+        }),
+        activeMods: { ...DEFAULT_ACT2_MOD_FLAGS, multiplayerMode: 'coop2p' },
+      }),
+    );
+    expect(engine.getSyncMetrics().alarmActive).toBe(false);
+
+    // coop2p: P1 dead (health 0), P2 alive & healthy -> alarm OFF
+    mockCtx.currentTime = 3.5;
+    engine.syncFromSnapshot(
+      makeSnapshot({
+        tick: 2,
+        phase: 'playing',
+        loadout: { weapon: 6, body: 7, engine: 8 },
+        health: 0,
+        maxHealth: 10,
+        playerAlive: false,
+        player2: makePlayerState({
+          playerIndex: 2,
+          alive: true,
+          health: 8,
+          maxHealth: 10,
+        }),
+        activeMods: { ...DEFAULT_ACT2_MOD_FLAGS, multiplayerMode: 'coop2p' },
+      }),
+    );
+    expect(engine.getSyncMetrics().alarmActive).toBe(false);
+    expect(engine.getSyncMetrics().interStemDriftMs).toBeLessThan(1.0);
+
+    // coop2p: P1 dead, P2 alive & low HP -> alarm ON
+    mockCtx.currentTime = 5.0;
+    engine.syncFromSnapshot(
+      makeSnapshot({
+        tick: 3,
+        phase: 'playing',
+        loadout: { weapon: 6, body: 7, engine: 8 },
+        health: 0,
+        maxHealth: 10,
+        playerAlive: false,
+        player2: makePlayerState({
+          playerIndex: 2,
+          alive: true,
+          health: 2,
+          maxHealth: 10,
+        }),
+        activeMods: { ...DEFAULT_ACT2_MOD_FLAGS, multiplayerMode: 'coop2p' },
+      }),
+    );
+    expect(engine.getSyncMetrics().alarmActive).toBe(true);
+    expect(engine.getSyncMetrics().activeStems).toContain('luftrauser_drums_alarm');
+    expect(engine.getSyncMetrics().interStemDriftMs).toBeLessThan(1.0);
+
+    // dogfight1v1: P1 dead (healthy snapshot field or low P2) must NOT evaluate P2 for alarm;
+    // round reset restores P1 health & clears alarm with < 1ms interStemDriftMs
+    mockCtx.currentTime = 7.25;
+    engine.syncFromSnapshot(
+      makeSnapshot({
+        tick: 4,
+        phase: 'playing',
+        loadout: { weapon: 6, body: 7, engine: 8 },
+        health: 10,
+        maxHealth: 10,
+        playerAlive: false,
+        player2: makePlayerState({
+          playerIndex: 2,
+          alive: true,
+          health: 1,
+          maxHealth: 10,
+        }),
+        activeMods: {
+          ...DEFAULT_ACT2_MOD_FLAGS,
+          multiplayerMode: 'dogfight1v1',
+        },
+        dogfight: {
+          p1Wins: 0,
+          p2Wins: 1,
+          round: 1,
+          bestOf: 3,
+          roundBannerTicks: 60,
+          winner: null,
+          lastScorer: 2,
+        },
+      }),
+    );
+    expect(engine.getSyncMetrics().alarmActive).toBe(false);
+    expect(engine.getSyncMetrics().interStemDriftMs).toBeLessThan(1.0);
+
+    // Round 2 reset in dogfight1v1: P1 alive low HP -> alarm ON, then round 3 reset -> alarm OFF
+    mockCtx.currentTime = 9.0;
+    engine.syncFromSnapshot(
+      makeSnapshot({
+        tick: 5,
+        phase: 'playing',
+        loadout: { weapon: 6, body: 7, engine: 8 },
+        health: 2,
+        maxHealth: 10,
+        playerAlive: true,
+        player2: makePlayerState({
+          playerIndex: 2,
+          alive: true,
+          health: 10,
+          maxHealth: 10,
+        }),
+        activeMods: {
+          ...DEFAULT_ACT2_MOD_FLAGS,
+          multiplayerMode: 'dogfight1v1',
+        },
+        dogfight: {
+          p1Wins: 1,
+          p2Wins: 1,
+          round: 2,
+          bestOf: 3,
+          roundBannerTicks: 0,
+          winner: null,
+          lastScorer: 1,
+        },
+      }),
+    );
+    expect(engine.getSyncMetrics().alarmActive).toBe(true);
+    expect(engine.getSyncMetrics().interStemDriftMs).toBeLessThan(1.0);
+
+    mockCtx.currentTime = 11.75;
+    engine.syncFromSnapshot(
+      makeSnapshot({
+        tick: 6,
+        phase: 'playing',
+        loadout: { weapon: 0, body: 0, engine: 0 },
+        health: 10,
+        maxHealth: 10,
+        playerAlive: true,
+        player2: makePlayerState({
+          playerIndex: 2,
+          alive: true,
+          health: 10,
+          maxHealth: 10,
+        }),
+        activeMods: {
+          ...DEFAULT_ACT2_MOD_FLAGS,
+          multiplayerMode: 'dogfight1v1',
+        },
+        dogfight: {
+          p1Wins: 1,
+          p2Wins: 1,
+          round: 3,
+          bestOf: 3,
+          roundBannerTicks: 90,
+          winner: null,
+          lastScorer: 1,
+        },
+      }),
+    );
+    const finalMetrics = engine.getSyncMetrics();
+    expect(finalMetrics.alarmActive).toBe(false);
+    expect(finalMetrics.activeStems).toEqual([
+      'luftrauser_bass1',
+      'luftrauser_drums1',
+      'luftrauser_lead1',
+    ]);
+    expect(finalMetrics.interStemDriftMs).toBeLessThan(1.0);
 
     engine.dispose();
   });

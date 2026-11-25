@@ -248,9 +248,15 @@ export class AudioEngine implements IAudioEngine {
       return;
     }
 
-    const maxHp = snapshot.player.maxHealth;
+    const isCoop2p = snapshot.activeMods?.multiplayerMode === 'coop2p';
+    const healthSource =
+      isCoop2p && !snapshot.player.alive && snapshot.player2?.alive
+        ? snapshot.player2
+        : snapshot.player;
+
+    const maxHp = healthSource.maxHealth;
     const healthRatio =
-      Number.isFinite(maxHp) && maxHp > 0 ? snapshot.player.health / maxHp : 1;
+      Number.isFinite(maxHp) && maxHp > 0 ? healthSource.health / maxHp : 1;
 
     const resolution = resolveActiveStems(
       snapshot.phase,
