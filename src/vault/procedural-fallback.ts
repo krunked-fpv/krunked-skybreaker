@@ -1,6 +1,5 @@
 import type {
   AudioAssetManifest,
-  BitmapFontGlyph,
   BitmapFontSpec,
   DecodedTexture,
   GameDataBundle,
@@ -20,6 +19,27 @@ import {
   normalizeSpriteAtlas,
 } from './normalizer';
 import {
+  BODY_ARMOR_TOP,
+  BODY_BOMB_TOP,
+  BODY_MELEE_TOP,
+  BODY_NUKE_TOP,
+  BODY_STANDARD_TOP,
+  ENGINE_GUNGINE_TOP,
+  ENGINE_HOVER_TOP,
+  ENGINE_STANDARD_TOP,
+  ENGINE_SUPERBOOST_TOP,
+  ENGINE_UNDERWATER_TOP,
+  SpritePainter,
+  WINGS_CANNON_TOP,
+  WINGS_LASER_TOP,
+  WINGS_MISSILES_TOP,
+  WINGS_SPREAD_TOP,
+  WINGS_STANDARD_TOP,
+  drawUnderwaterPropeller,
+} from './painter';
+import { createProceduralFontSpec, createProceduralFontTexture } from './procedural-fonts';
+import { createProceduralMenuTexture } from './procedural-menu';
+import {
   VANILLA_BGM_STEMS,
   VANILLA_ENEMIES_RAW,
   VANILLA_ENEMIES_SFMT_RAW,
@@ -37,694 +57,70 @@ import {
   VANILLA_SPRITES_RAW,
 } from './vanilla-defaults';
 
-// 5x7 clean-room bitmap font glyphs (each row is 5 bits, MSB on left).
-const GLYPHS_5X7: Record<number, readonly number[]> = {
-  32: [0, 0, 0, 0, 0, 0, 0], // ' '
-  33: [4, 4, 4, 4, 4, 0, 4], // '!'
-  34: [10, 10, 10, 0, 0, 0, 0], // '"'
-  35: [10, 10, 31, 10, 31, 10, 10], // '#'
-  36: [4, 15, 20, 14, 5, 30, 4], // '$'
-  37: [24, 25, 2, 4, 8, 19, 3], // '%'
-  38: [12, 18, 20, 8, 21, 18, 13], // '&'
-  39: [4, 4, 8, 0, 0, 0, 0], // '''
-  40: [2, 4, 8, 8, 8, 4, 2], // '('
-  41: [8, 4, 2, 2, 2, 4, 8], // ')'
-  42: [0, 4, 21, 14, 21, 4, 0], // '*'
-  43: [0, 4, 4, 31, 4, 4, 0], // '+'
-  44: [0, 0, 0, 0, 0, 4, 8], // ','
-  45: [0, 0, 0, 31, 0, 0, 0], // '-'
-  46: [0, 0, 0, 0, 0, 6, 6], // '.'
-  47: [1, 2, 2, 4, 8, 8, 16], // '/'
-  48: [14, 17, 19, 21, 25, 17, 14], // '0'
-  49: [4, 12, 4, 4, 4, 4, 14], // '1'
-  50: [14, 17, 1, 6, 8, 16, 31], // '2'
-  51: [30, 1, 1, 14, 1, 1, 30], // '3'
-  52: [2, 6, 10, 18, 31, 2, 2], // '4'
-  53: [31, 16, 30, 1, 1, 17, 14], // '5'
-  54: [6, 8, 16, 30, 17, 17, 14], // '6'
-  55: [31, 1, 2, 4, 8, 8, 8], // '7'
-  56: [14, 17, 17, 14, 17, 17, 14], // '8'
-  57: [14, 17, 17, 15, 1, 2, 12], // '9'
-  58: [0, 6, 6, 0, 6, 6, 0], // ':'
-  59: [0, 6, 6, 0, 6, 4, 8], // ';'
-  60: [2, 4, 8, 16, 8, 4, 2], // '<'
-  61: [0, 0, 31, 0, 31, 0, 0], // '='
-  62: [8, 4, 2, 1, 2, 4, 8], // '>'
-  63: [14, 17, 1, 2, 4, 0, 4], // '?'
-  64: [14, 17, 23, 21, 23, 16, 14], // '@'
-  65: [14, 17, 17, 31, 17, 17, 17], // 'A'
-  66: [30, 17, 17, 30, 17, 17, 30], // 'B'
-  67: [14, 17, 16, 16, 16, 17, 14], // 'C'
-  68: [30, 17, 17, 17, 17, 17, 30], // 'D'
-  69: [31, 16, 16, 30, 16, 16, 31], // 'E'
-  70: [31, 16, 16, 30, 16, 16, 16], // 'F'
-  71: [14, 17, 16, 23, 17, 17, 15], // 'G'
-  72: [17, 17, 17, 31, 17, 17, 17], // 'H'
-  73: [14, 4, 4, 4, 4, 4, 14], // 'I'
-  74: [7, 2, 2, 2, 2, 18, 12], // 'J'
-  75: [17, 18, 20, 24, 20, 18, 17], // 'K'
-  76: [16, 16, 16, 16, 16, 16, 31], // 'L'
-  77: [17, 27, 21, 21, 17, 17, 17], // 'M'
-  78: [17, 25, 21, 19, 17, 17, 17], // 'N'
-  79: [14, 17, 17, 17, 17, 17, 14], // 'O'
-  80: [30, 17, 17, 30, 16, 16, 16], // 'P'
-  81: [14, 17, 17, 17, 21, 18, 13], // 'Q'
-  82: [30, 17, 17, 30, 20, 18, 17], // 'R'
-  83: [15, 16, 16, 14, 1, 1, 30], // 'S'
-  84: [31, 4, 4, 4, 4, 4, 4], // 'T'
-  85: [17, 17, 17, 17, 17, 17, 14], // 'U'
-  86: [17, 17, 17, 17, 17, 10, 4], // 'V'
-  87: [17, 17, 17, 21, 21, 27, 17], // 'W'
-  88: [17, 17, 10, 4, 10, 17, 17], // 'X'
-  89: [17, 17, 10, 4, 4, 4, 4], // 'Y'
-  90: [31, 1, 2, 4, 8, 16, 31], // 'Z'
-  91: [14, 8, 8, 8, 8, 8, 14], // '['
-  92: [16, 8, 8, 4, 2, 2, 1], // '\'
-  93: [14, 2, 2, 2, 2, 2, 14], // ']'
-  94: [4, 10, 17, 0, 0, 0, 0], // '^'
-  95: [0, 0, 0, 0, 0, 0, 31], // '_'
-  96: [8, 4, 2, 0, 0, 0, 0], // '`'
-  97: [0, 0, 14, 1, 15, 17, 15], // 'a'
-  98: [16, 16, 30, 17, 17, 17, 30], // 'b'
-  99: [0, 0, 14, 17, 16, 17, 14], // 'c'
-  100: [1, 1, 15, 17, 17, 17, 15], // 'd'
-  101: [0, 0, 14, 17, 31, 16, 14], // 'e'
-  102: [6, 8, 8, 30, 8, 8, 8], // 'f'
-  103: [0, 0, 15, 17, 15, 1, 14], // 'g'
-  104: [16, 16, 30, 17, 17, 17, 17], // 'h'
-  105: [4, 0, 12, 4, 4, 4, 14], // 'i'
-  106: [2, 0, 6, 2, 2, 18, 12], // 'j'
-  107: [16, 16, 18, 20, 24, 20, 18], // 'k'
-  108: [12, 4, 4, 4, 4, 4, 14], // 'l'
-  109: [0, 0, 26, 21, 21, 17, 17], // 'm'
-  110: [0, 0, 30, 17, 17, 17, 17], // 'n'
-  111: [0, 0, 14, 17, 17, 17, 14], // 'o'
-  112: [0, 0, 30, 17, 30, 16, 16], // 'p'
-  113: [0, 0, 15, 17, 15, 1, 1], // 'q'
-  114: [0, 0, 22, 25, 16, 16, 16], // 'r'
-  115: [0, 0, 15, 16, 14, 1, 30], // 's'
-  116: [8, 8, 30, 8, 8, 9, 6], // 't'
-  117: [0, 0, 17, 17, 17, 17, 15], // 'u'
-  118: [0, 0, 17, 17, 17, 10, 4], // 'v'
-  119: [0, 0, 17, 17, 21, 21, 10], // 'w'
-  120: [0, 0, 17, 10, 4, 10, 17], // 'x'
-  121: [0, 0, 17, 17, 15, 1, 14], // 'y'
-  122: [0, 0, 31, 2, 4, 8, 31], // 'z'
-  123: [6, 8, 8, 16, 8, 8, 6], // '{'
-  124: [4, 4, 4, 4, 4, 4, 4], // '|'
-  125: [12, 2, 2, 1, 2, 2, 12], // '}'
-  126: [0, 0, 8, 21, 2, 0, 0], // '~'
-};
-
-function setPixel(
-  rgba: Uint8Array,
-  texW: number,
-  texH: number,
-  x: number,
-  y: number,
-  r: number,
-  g: number,
-  b: number,
-  a: number,
-): void {
-  const xi = Math.floor(x);
-  const yi = Math.floor(y);
-  if (xi < 0 || yi < 0 || xi >= texW || yi >= texH) {
-    return;
-  }
-  const idx = (yi * texW + xi) * 4;
-  rgba[idx] = r;
-  rgba[idx + 1] = g;
-  rgba[idx + 2] = b;
-  rgba[idx + 3] = a;
-}
-
-/**
- * Strictly frame-clipped pixel-art rasterizer encoding 8-level luminance indices
- * (`1..7` -> `32..224`) so sprites can never bleed across atlas gutters.
- */
-class SpritePainter {
-  constructor(
-    private readonly rgba: Uint8Array,
-    private readonly texW: number,
-    private readonly texH: number,
-    private readonly fx: number,
-    private readonly fy: number,
-    readonly w: number,
-    readonly h: number,
-  ) {}
-
-  px(lx: number, ly: number, paletteIdx: number): void {
-    const xi = Math.floor(lx);
-    const yi = Math.floor(ly);
-    if (xi < 0 || yi < 0 || xi >= this.w || yi >= this.h) {
-      return;
-    }
-    const ax = this.fx + xi;
-    const ay = this.fy + yi;
-    if (ax < 0 || ay < 0 || ax >= this.texW || ay >= this.texH) {
-      return;
-    }
-    const idx = (ay * this.texW + ax) * 4;
-    if (paletteIdx <= 0) {
-      this.rgba[idx] = 0;
-      this.rgba[idx + 1] = 0;
-      this.rgba[idx + 2] = 0;
-      this.rgba[idx + 3] = 0;
-      return;
-    }
-    const lum = Math.min(224, Math.max(32, paletteIdx * 32));
-    this.rgba[idx] = lum;
-    this.rgba[idx + 1] = lum;
-    this.rgba[idx + 2] = lum;
-    this.rgba[idx + 3] = 255;
-  }
-
-  clear(lx: number, ly: number): void {
-    this.px(lx, ly, 0);
-  }
-
-  rect(x: number, y: number, rw: number, rh: number, pal: number): void {
-    const x0 = Math.max(0, Math.floor(x));
-    const y0 = Math.max(0, Math.floor(y));
-    const x1 = Math.min(this.w, Math.floor(x + rw));
-    const y1 = Math.min(this.h, Math.floor(y + rh));
-    for (let py = y0; py < y1; py++) {
-      for (let px = x0; px < x1; px++) {
-        this.px(px, py, pal);
-      }
-    }
-  }
-
-  hline(x0: number, x1: number, y: number, pal: number): void {
-    const start = Math.floor(Math.min(x0, x1));
-    const end = Math.floor(Math.max(x0, x1));
-    const yi = Math.floor(y);
-    for (let x = start; x <= end; x++) {
-      this.px(x, yi, pal);
-    }
-  }
-
-  vline(x: number, y0: number, y1: number, pal: number): void {
-    const start = Math.floor(Math.min(y0, y1));
-    const end = Math.floor(Math.max(y0, y1));
-    const xi = Math.floor(x);
-    for (let y = start; y <= end; y++) {
-      this.px(xi, y, pal);
-    }
-  }
-
-  line(x0: number, y0: number, x1: number, y1: number, pal: number, thickness = 1): void {
-    let ix0 = Math.round(x0);
-    let iy0 = Math.round(y0);
-    const ix1 = Math.round(x1);
-    const iy1 = Math.round(y1);
-    const dx = Math.abs(ix1 - ix0);
-    const dy = Math.abs(iy1 - iy0);
-    const sx = ix0 < ix1 ? 1 : -1;
-    const sy = iy0 < iy1 ? 1 : -1;
-    let err = dx - dy;
-    const half = Math.floor(thickness / 2);
-
-    while (true) {
-      if (thickness <= 1) {
-        this.px(ix0, iy0, pal);
-      } else {
-        this.rect(ix0 - half, iy0 - half, thickness, thickness, pal);
-      }
-      if (ix0 === ix1 && iy0 === iy1) break;
-      const e2 = err * 2;
-      if (e2 > -dy) {
-        err -= dy;
-        ix0 += sx;
-      }
-      if (e2 < dx) {
-        err += dx;
-        iy0 += sy;
-      }
-    }
-  }
-
-  circle(cx: number, cy: number, radius: number, pal: number): void {
-    if (radius <= 0) return;
-    const r2 = radius * radius;
-    const minX = Math.max(0, Math.floor(cx - radius));
-    const maxX = Math.min(this.w - 1, Math.ceil(cx + radius));
-    const minY = Math.max(0, Math.floor(cy - radius));
-    const maxY = Math.min(this.h - 1, Math.ceil(cy + radius));
-    for (let py = minY; py <= maxY; py++) {
-      for (let px = minX; px <= maxX; px++) {
-        const dx = px + 0.5 - cx;
-        const dy = py + 0.5 - cy;
-        if (dx * dx + dy * dy <= r2) {
-          this.px(px, py, pal);
-        }
-      }
-    }
-  }
-
-  ring(cx: number, cy: number, rOuter: number, rInner: number, pal: number): void {
-    if (rOuter <= 0) return;
-    const ro2 = rOuter * rOuter;
-    const ri2 = Math.max(0, rInner) * Math.max(0, rInner);
-    const minX = Math.max(0, Math.floor(cx - rOuter));
-    const maxX = Math.min(this.w - 1, Math.ceil(cx + rOuter));
-    const minY = Math.max(0, Math.floor(cy - rOuter));
-    const maxY = Math.min(this.h - 1, Math.ceil(cy + rOuter));
-    for (let py = minY; py <= maxY; py++) {
-      for (let px = minX; px <= maxX; px++) {
-        const dx = px + 0.5 - cx;
-        const dy = py + 0.5 - cy;
-        const d2 = dx * dx + dy * dy;
-        if (d2 <= ro2 && d2 >= ri2) {
-          this.px(px, py, pal);
-        }
-      }
-    }
-  }
-
-  ellipse(cx: number, cy: number, rx: number, ry: number, pal: number): void {
-    if (rx <= 0 || ry <= 0) return;
-    const invRx2 = 1 / (rx * rx);
-    const invRy2 = 1 / (ry * ry);
-    const minX = Math.max(0, Math.floor(cx - rx));
-    const maxX = Math.min(this.w - 1, Math.ceil(cx + rx));
-    const minY = Math.max(0, Math.floor(cy - ry));
-    const maxY = Math.min(this.h - 1, Math.ceil(cy + ry));
-    for (let py = minY; py <= maxY; py++) {
-      for (let px = minX; px <= maxX; px++) {
-        const dx = px + 0.5 - cx;
-        const dy = py + 0.5 - cy;
-        if (dx * dx * invRx2 + dy * dy * invRy2 <= 1) {
-          this.px(px, py, pal);
-        }
-      }
-    }
-  }
-
-  tri(
-    ax: number,
-    ay: number,
-    bx: number,
-    by: number,
-    cx: number,
-    cy: number,
-    pal: number,
-  ): void {
-    const minX = Math.max(0, Math.floor(Math.min(ax, bx, cx)));
-    const maxX = Math.min(this.w - 1, Math.ceil(Math.max(ax, bx, cx)));
-    const minY = Math.max(0, Math.floor(Math.min(ay, by, cy)));
-    const maxY = Math.min(this.h - 1, Math.ceil(Math.max(ay, by, cy)));
-    const edge = (x0: number, y0: number, x1: number, y1: number, px: number, py: number) =>
-      (px - x0) * (y1 - y0) - (py - y0) * (x1 - x0);
-    const area = edge(ax, ay, bx, by, cx, cy);
-    if (area === 0) return;
-
-    for (let py = minY; py <= maxY; py++) {
-      for (let px = minX; px <= maxX; px++) {
-        const w0 = edge(bx, by, cx, cy, px + 0.5, py + 0.5);
-        const w1 = edge(cx, cy, ax, ay, px + 0.5, py + 0.5);
-        const w2 = edge(ax, ay, bx, by, px + 0.5, py + 0.5);
-        if (
-          (area > 0 && w0 >= 0 && w1 >= 0 && w2 >= 0) ||
-          (area < 0 && w0 <= 0 && w1 <= 0 && w2 <= 0)
-        ) {
-          this.px(px, py, pal);
-        }
-      }
-    }
-  }
-
-  quad(
-    ax: number,
-    ay: number,
-    bx: number,
-    by: number,
-    cx: number,
-    cy: number,
-    dx: number,
-    dy: number,
-    pal: number,
-  ): void {
-    this.tri(ax, ay, bx, by, cx, cy, pal);
-    this.tri(ax, ay, cx, cy, dx, dy, pal);
-  }
-
-  /**
-   * Draws an ASCII pixel-art matrix.
-   * `'.'` skips, `'0'` clears to transparent, `'1'..'7'` writes palette index 1..7.
-   */
-  grid(rows: readonly string[], ox = 0, oy = 0, colorMap?: Record<string, number>): void {
-    for (let r = 0; r < rows.length; r++) {
-      const row = rows[r]!;
-      for (let c = 0; c < row.length; c++) {
-        const ch = row[c]!;
-        if (ch === '.' || ch === ' ') continue;
-        if (ch === '0') {
-          this.clear(ox + c, oy + r);
-          continue;
-        }
-        const pal = colorMap?.[ch] ?? (ch >= '1' && ch <= '7' ? Number(ch) : 0);
-        if (pal > 0) {
-          this.px(ox + c, oy + r, pal);
-        }
-      }
-    }
-  }
-
-  /**
-   * Draws vertically mirrored ASCII pixel-art around the sprite's horizontal axis.
-   * For even heights (e.g. 24), provide `h / 2` top rows; for odd heights (e.g. 7),
-   * provide `(h - 1) / 2` top rows plus `centerRow`.
-   */
-  gridSymY(
-    topRows: readonly string[],
-    centerRow?: string,
-    ox = 0,
-    oy = 0,
-    colorMap?: Record<string, number>,
-  ): void {
-    const totalH = topRows.length * 2 + (centerRow !== undefined ? 1 : 0);
-    for (let r = 0; r < topRows.length; r++) {
-      const row = topRows[r]!;
-      const mirrorR = totalH - 1 - r;
-      for (let c = 0; c < row.length; c++) {
-        const ch = row[c]!;
-        if (ch === '.' || ch === ' ') continue;
-        if (ch === '0') {
-          this.clear(ox + c, oy + r);
-          this.clear(ox + c, oy + mirrorR);
-          continue;
-        }
-        const pal = colorMap?.[ch] ?? (ch >= '1' && ch <= '7' ? Number(ch) : 0);
-        if (pal > 0) {
-          this.px(ox + c, oy + r, pal);
-          this.px(ox + c, oy + mirrorR, pal);
-        }
-      }
-    }
-    if (centerRow !== undefined) {
-      const midR = topRows.length;
-      for (let c = 0; c < centerRow.length; c++) {
-        const ch = centerRow[c]!;
-        if (ch === '.' || ch === ' ') continue;
-        if (ch === '0') {
-          this.clear(ox + c, oy + midR);
-          continue;
-        }
-        const pal = colorMap?.[ch] ?? (ch >= '1' && ch <= '7' ? Number(ch) : 0);
-        if (pal > 0) {
-          this.px(ox + c, oy + midR, pal);
-        }
-      }
-    }
-  }
-}
+export { createProceduralFontTexture, createProceduralMenuTexture };
 
 // ============================================================================
-// Handcrafted 100% Original SKYBREAKER Aircraft Part Pixel Grids (24x24, +X)
-// Slim fighter-jet proportions: distinct tail/engine zone (x=0..8), crisp open
-// tail waist (x=5..10), slim 4px fuselage (y=10..13) to sharp nose (x=22..23),
-// and dramatic full-span wings (y=0..23) anchored forward (x=11..18).
+// Handcrafted Clean-Room Enemy Small Aircraft & Ordnance Silhouettes
+// Pure graphic-novel silhouettes adhering to authentic palette indices:
+//   1 = player & player ordnance
+//   2 = enemy craft, ships, subs, blimps, guns & enemy projectile rims
+//   3 = gritty dark smoke (`fx_smoke`, `fx_smokelong`)
+//   4 = distant horizon background silhouettes (`bg_*`)
+//   5 = sky-cutout aura around player bullets & muzzle flashes
+//   6 = midground `parallax_clouds`, `bg_jet_trail`, `space_clouds` f2
+//   7 = foreground `clouds`, `ocean_line`, `space_clouds` f0, splashes, boosts, blasts
 // ============================================================================
 
-// Player Engines (rear x=0..8, 12 top rows mirrored vertically to 24 rows)
-const ENGINE_STANDARD_TOP: readonly string[] = [
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '..11....................',
-  '...111..................',
-  '....111.................',
-  '....1111................',
-  '.51111111...............',
-  '751111111...............',
-];
-
-const ENGINE_SUPERBOOST_TOP: readonly string[] = [
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '..1111..................',
-  '5111111.................',
-  '7511111.................',
-  '..11111.................',
-  '....111.................',
-  '...111111...............',
-  '..1111111...............',
-];
-
-const ENGINE_GUNGINE_TOP: readonly string[] = [
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '....111.................',
-  '...11511................',
-  '51111111................',
-  '...11111................',
-  '511111111...............',
-  '.11111111...............',
-];
-
-const ENGINE_UNDERWATER_TOP: readonly string[] = [
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '..111...................',
-  '..15111.................',
-  '....1111................',
-  '....11111...............',
-  '...115711...............',
-  '..1111111...............',
-];
-
-const ENGINE_HOVER_TOP: readonly string[] = [
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '...111..................',
-  '.115711.................',
-  '.11..11.................',
-  '11....11................',
-  '115.....................',
-  '11......................',
-  '115..1111...............',
-  '117.11111...............',
-];
-
-// Player Bodies (slim fuselage x=6..23, 12 top rows mirrored vertically to 24 rows)
-const BODY_STANDARD_TOP: readonly string[] = [
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '......11111111111111....',
-  '......11111115771111111.',
-];
-
-const BODY_ARMOR_TOP: readonly string[] = [
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........11111...........',
-  '.......115111111........',
-  '......111111111111151...',
-  '......1115771111111111..',
-  '......11157711111111111.',
-];
-
-const BODY_MELEE_TOP: readonly string[] = [
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '..................115...',
-  '..................1115..',
-  '.................111157.',
-  '......111111111111111577',
-  '......111111571111111777',
-];
-
-const BODY_NUKE_TOP: readonly string[] = [
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........11551...........',
-  '.......1157751..........',
-  '......115777511.........',
-  '......11157751111111....',
-  '......1111551111111111..',
-];
-
-const BODY_BOMB_TOP: readonly string[] = [
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '........................',
-  '......1.11115...........',
-  '......1111157...........',
-  '........1111............',
-  '......111111155111111...',
-  '......11111115711111111.',
-];
-
-// Player Wings / Weapons (full span y=0..9 + 14..23, anchored forward at x=11..18 for clean waist!)
-const WINGS_STANDARD_TOP: readonly string[] = [
-  '........115.............',
-  '.........1111...........',
-  '..........1111..........',
-  '...........1111.........',
-  '...........11111........',
-  '............11111.......',
-  '............111111......',
-  '............111111115...',
-  '.............111111.....',
-  '..............11111.....',
-  '........................',
-  '........................',
-];
-
-const WINGS_LASER_TOP: readonly string[] = [
-  '................11157...',
-  '...............111115...',
-  '..............11111.....',
-  '.............11111......',
-  '............11111.......',
-  '............1111........',
-  '............111111157...',
-  '.............111111.....',
-  '.............11111......',
-  '..............1111......',
-  '........................',
-  '........................',
-];
-
-const WINGS_SPREAD_TOP: readonly string[] = [
-  '...........1115.........',
-  '...........1111157......',
-  '............1111........',
-  '............11111.......',
-  '............11111157....',
-  '.............11111......',
-  '.............111111.....',
-  '.............111111157..',
-  '.............11111......',
-  '..............1111......',
-  '........................',
-  '........................',
-];
-
-const WINGS_MISSILES_TOP: readonly string[] = [
-  '.........111............',
-  '..........1111..........',
-  '...........1111.........',
-  '...........11111........',
-  '...........1111111157...',
-  '...........1111111115...',
-  '............111111157...',
-  '.............111111.....',
-  '.............11111......',
-  '..............1111......',
-  '........................',
-  '........................',
-];
-
-const WINGS_CANNON_TOP: readonly string[] = [
-  '........1111............',
-  '.........11111..........',
-  '..........11111.........',
-  '...........11111........',
-  '...........111111.......',
-  '............111111......',
-  '............11111111115.',
-  '.............11111157117',
-  '.............111111111..',
-  '..............11111.....',
-  '........................',
-  '........................',
-];
-
-// Enemy Small Aircraft (20x20, 10 top rows mirrored vertically to 20 rows)
+// Enemy Fighter (20x20, 10 top rows mirrored vertically -> pure bold silhouette in 2)
 const ENEMY_FIGHTER_BODY_TOP: readonly string[] = [
   '....................',
   '....................',
   '....................',
   '....................',
   '....................',
-  '..122...............',
-  '...22222............',
-  '.....2222222........',
-  '......22222772221...',
-  '......22222572222211',
+  '....................',
+  '..22................',
+  '..222222............',
+  '....2222222222......',
+  '...22222222222222...',
 ];
 
 const ENEMY_FIGHTER_WINGS_TOP: readonly string[] = [
-  '....................',
-  '.....225............',
-  '......2221..........',
+  '........22..........',
+  '.......2222.........',
   '.......2222.........',
   '.......22222........',
-  '........2222211.....',
-  '........222222......',
-  '.........2222.......',
+  '.......22222........',
+  '.......22222........',
+  '.......22222........',
+  '.......22222........',
   '....................',
   '....................',
 ];
 
+// Enemy Supersonic Jet (20x20, 10 top rows mirrored vertically -> razor-sleek delta in 2)
 const ENEMY_JET_BODY_TOP: readonly string[] = [
   '....................',
   '....................',
   '....................',
   '....................',
-  '....................',
-  '....................',
-  '..122...............',
-  '...22222222.........',
-  '.512222227722222....',
-  '75122222257222222211',
+  '.22.................',
+  '.222................',
+  '..2222..............',
+  '..222222222.........',
+  '.22222222222222.....',
+  '22222222222222222222',
 ];
 
 const ENEMY_JET_WINGS_TOP: readonly string[] = [
-  '....................',
-  '....................',
-  '...15...............',
-  '....221.............',
-  '.....2221...........',
-  '......22221....25...',
-  '.......222222..221..',
-  '........222222222...',
+  '......22............',
+  '......222...........',
+  '.......222..........',
+  '.......2222.........',
+  '.......22222........',
+  '........22222.......',
+  '........222222......',
+  '........222222......',
   '....................',
   '....................',
 ];
@@ -736,14 +132,14 @@ const ENEMY_JET_BODY_CRASH: readonly string[] = [
   '....................',
   '....................',
   '....................',
-  '..12................',
-  '...222.722..........',
-  '.5.22257.2222.......',
-  '7..2222..22272221...',
-  '...22222.7522222211.',
-  '....222222.2222.....',
-  '...222..22..........',
-  '..12................',
+  '..22................',
+  '...222..222.........',
+  '.222222.222222......',
+  '222222222222222222..',
+  '..222222.22222222...',
+  '....2222..2222......',
+  '..222...............',
+  '.22.................',
   '....................',
   '....................',
   '....................',
@@ -756,46 +152,46 @@ const ENEMY_JET_WINGS_CRASH: readonly string[] = [
   '....................',
   '....................',
   '....................',
-  '....22..............',
-  '.....227............',
-  '......2225..........',
-  '.......22222...22...',
-  '........22222222....',
+  '.......22...........',
+  '.......222..........',
+  '........2222........',
+  '........22222.......',
+  '........22222.......',
   '....................',
   '....................',
   '....................',
   '....................',
-  '........222222222...',
-  '.......222222..22...',
-  '......22222.........',
-  '.....2222...........',
-  '....222.............',
-  '...22...............',
+  '........22222.......',
+  '.......22222........',
+  '.......222..........',
+  '......222...........',
+  '.....22.............',
+  '....................',
   '....................',
   '....................',
 ];
 
-// Enemy Finned Missile (24x10, 5 top rows mirrored vertically to 10 rows)
+// Enemy Finned Torpedo Missile (24x10, 5 top rows mirrored vertically -> pure 2)
 const ENEMY_MISSILE_TOP: readonly string[] = [
-  '.122....................',
-  '..222...................',
-  '...2222.................',
-  '.5122222212222222277....',
-  '7512222221222222227777..',
+  '222.....................',
+  '.2222...................',
+  '..22222.................',
+  '.22222222222222222222...',
+  '222222222222222222222222',
 ];
 
-// Player Homing Micro-Rocket (10x7, 3 top rows + centerRow)
+// Player Homing Micro-Rocket (10x7, 3 top rows + center -> pure 1)
 const PROJ_HOMING_TOP: readonly string[] = [
-  '.15.......',
-  '..55555...',
-  '75555557..',
+  '11........',
+  '.111111...',
+  '11111111..',
 ];
-const PROJ_HOMING_MID = '7555555777';
+const PROJ_HOMING_MID = '1111111111';
 
-// Player Drop Bomb (10x4, 2 top rows mirrored)
+// Player Drop Bomb (10x4, 2 top rows mirrored -> pure 1)
 const PROJ_BOMB_TOP: readonly string[] = [
-  '51..1111..',
-  '.111111157',
+  '11..1111..',
+  '.111111111',
 ];
 
 // ============================================================================
@@ -808,7 +204,10 @@ function resolveSpritePaletteIndex(spriteName: string): number {
     n === 'urauser' ||
     n.startsWith('engine_') ||
     n.startsWith('body_') ||
-    n.startsWith('wings_')
+    n.startsWith('wings_') ||
+    n === 'projectile_homing_missile' ||
+    n === 'projectile_bomb' ||
+    n === 'fx_player_hit'
   ) {
     return 1;
   }
@@ -825,378 +224,284 @@ function resolveSpritePaletteIndex(spriteName: string): number {
     n === 'missile' ||
     n === 'projectile_ebullet' ||
     n === 'projectile_elaser' ||
-    n === 'projectile_artillery_bullet'
+    n === 'projectile_artillery_bullet' ||
+    n === 'fx_planepart'
   ) {
     return 2;
+  }
+  if (n.startsWith('fx_smoke')) {
+    return 3;
+  }
+  if (n === 'bg_jet_trail' || n === 'parallax_clouds') {
+    return 6;
   }
   if (n.startsWith('bg_')) {
     return 4;
   }
   if (
     n.startsWith('projectile_') ||
-    n.startsWith('laser_') ||
-    n.startsWith('fx_boost') ||
-    n.startsWith('fx_superboost') ||
-    n.startsWith('fx_aceboost') ||
-    n === 'fx_jetboost' ||
     n.includes('flash') ||
     n.includes('fade')
   ) {
     return 5;
   }
-  if (n === 'parallax_clouds') {
-    return 6;
-  }
   return 7;
 }
 
+/**
+ * Clean-room APEX OMEGA super-craft (416x300, bold flying-wing dreadnought silhouette in 1).
+ */
 function drawApexOmega(p: SpritePainter): void {
   const w = p.w;
   const h = p.h;
   const cy = h * 0.5;
 
-  // Triple rear afterburner nacelles
-  for (const offsetY of [-42, 0, 42]) {
-    const ny = cy + offsetY;
-    p.rect(w * 0.06, ny - 13, w * 0.14, 26, 1);
-    p.rect(w * 0.04, ny - 8, w * 0.05, 16, 5);
-    p.rect(w * 0.03, ny - 4, w * 0.03, 8, 7);
+  // Massive twin-sweep flying-wing outer delta plates
+  p.tri(w * 0.72, cy - 22, w * 0.14, h * 0.05, w * 0.34, cy - 14, 1);
+  p.tri(w * 0.72, cy + 22, w * 0.14, h * 0.95, w * 0.34, cy + 14, 1);
+  // Secondary heavy mid-wing armored root extensions
+  p.quad(w * 0.18, h * 0.16, w * 0.6, cy - 20, w * 0.6, cy + 20, w * 0.18, h * 0.84, 1);
+  // Forward predator canards
+  p.tri(w * 0.88, cy - 12, w * 0.66, cy - 58, w * 0.7, cy - 10, 1);
+  p.tri(w * 0.88, cy + 12, w * 0.66, cy + 58, w * 0.7, cy + 10, 1);
+  // Wingtip heavy lance pods
+  p.rect(w * 0.12, h * 0.04, w * 0.28, 12, 1);
+  p.rect(w * 0.12, h * 0.96 - 12, w * 0.28, 12, 1);
+  // Triple rear afterburner cowlings
+  for (const offsetY of [-46, 0, 46]) {
+    p.rect(w * 0.04, cy + offsetY - 14, w * 0.16, 28, 1);
   }
-
-  // Sweeping outer delta wings + secondary canard wings
-  p.tri(w * 0.66, cy - 18, w * 0.18, h * 0.05, w * 0.34, cy - 12, 1);
-  p.tri(w * 0.66, cy + 18, w * 0.18, h * 0.95, w * 0.34, cy + 12, 1);
-  // Secondary mid-sweep armored wingplates
-  p.tri(w * 0.54, cy - 14, w * 0.14, h * 0.18, w * 0.28, cy - 10, 1);
-  p.tri(w * 0.54, cy + 14, w * 0.14, h * 0.82, w * 0.28, cy + 10, 1);
-  // Forward interceptor canards
-  p.tri(w * 0.86, cy - 10, w * 0.66, cy - 52, w * 0.69, cy - 10, 1);
-  p.tri(w * 0.86, cy + 10, w * 0.66, cy + 52, w * 0.69, cy + 10, 1);
-
-  // Wingtip heavy rail-lance emitters
-  p.rect(w * 0.18, h * 0.05, w * 0.22, 10, 1);
-  p.rect(w * 0.38, h * 0.06, w * 0.06, 6, 5);
-  p.rect(w * 0.43, h * 0.07, w * 0.03, 4, 7);
-  p.rect(w * 0.18, h * 0.95 - 10, w * 0.22, 10, 1);
-  p.rect(w * 0.38, h * 0.94 - 6, w * 0.06, 6, 5);
-  p.rect(w * 0.43, h * 0.93 - 4, w * 0.03, 4, 7);
-
-  // Core dreadnought fuselage spine
-  p.ellipse(w * 0.48, cy, w * 0.36, h * 0.12, 1);
-  p.tri(w * 0.97, cy, w * 0.68, cy - 28, w * 0.68, cy + 28, 1);
-
-  // Wing energy chevrons & hull trim
-  p.line(w * 0.24, h * 0.11, w * 0.56, cy - 18, 5, 4);
-  p.line(w * 0.24, h * 0.89, w * 0.56, cy + 18, 5, 4);
-  p.line(w * 0.30, h * 0.15, w * 0.50, cy - 22, 7, 2);
-  p.line(w * 0.30, h * 0.85, w * 0.50, cy + 22, 7, 2);
-
-  // Armored canopy & reactor core strip
-  p.ellipse(w * 0.66, cy, 30, 11, 5);
-  p.ellipse(w * 0.69, cy, 18, 6, 7);
-  p.circle(w * 0.42, cy, 16, 5);
-  p.circle(w * 0.42, cy, 9, 7);
+  // Armored dreadnought fuselage spine & spear prow
+  p.ellipse(w * 0.48, cy, w * 0.38, h * 0.14, 1);
+  p.tri(w * 0.98, cy, w * 0.68, cy - 30, w * 0.68, cy + 30, 1);
+  // Clean crisp negative-space aerodynamic intake slits & cockpit notch (authentic silhouette cut)
+  p.rect(w * 0.24, cy - 64, w * 0.18, 6, 0);
+  p.rect(w * 0.24, cy + 58, w * 0.18, 6, 0);
+  p.tri(w * 0.06, cy - 28, w * 0.16, cy - 28, w * 0.16, cy - 18, 0);
+  p.tri(w * 0.06, cy + 28, w * 0.16, cy + 28, w * 0.16, cy + 18, 0);
 }
 
+/**
+ * Clean-room Enemy Ace & LaserAce bodies (45x45, bold pure silhouette in index 2).
+ */
 function drawAceBody(p: SpritePainter, isLaser: boolean): void {
-  const cy = Math.floor(p.h / 2); // 22 for 45x45
-  // Twin rear afterburner pods
-  p.rect(4, cy - 9, 10, 5, 1);
-  p.rect(4, cy + 5, 10, 5, 1);
-  p.rect(2, cy - 8, 3, 3, 5);
-  p.rect(2, cy + 6, 3, 3, 5);
-  p.px(2, cy - 7, 7);
-  p.px(2, cy + 7, 7);
-
-  // Sculpted fuselage spine
-  p.quad(8, cy - 5, 29, cy - 6, 40, cy - 1, 8, cy + 5, 2);
-  p.quad(8, cy + 5, 29, cy + 6, 40, cy + 1, 8, cy - 5, 2);
-  p.hline(9, 34, cy - 5, 1);
-  p.hline(9, 34, cy + 5, 1);
+  const cy = Math.floor(p.h / 2); // 22
+  // Twin rear thruster nacelles
+  p.rect(3, cy - 8, 11, 5, 2);
+  p.rect(3, cy + 4, 11, 5, 2);
+  // Swept vertical twin tail fins
+  p.tri(14, cy - 5, 4, cy - 11, 8, cy - 4, 2);
+  p.tri(14, cy + 5, 4, cy + 11, 8, cy + 4, 2);
 
   if (isLaser) {
-    // Split rail-prong emitter nose cradling a blazing prism core
-    p.rect(28, cy - 6, 15, 3, 1);
-    p.rect(28, cy + 4, 15, 3, 1);
-    p.hline(34, 43, cy - 5, 5);
-    p.hline(34, 43, cy + 5, 5);
-    p.rect(31, cy - 2, 7, 5, 5);
-    p.rect(33, cy - 1, 5, 3, 7);
-    // Reactor spine conduit
-    p.hline(14, 30, cy, 5);
-    p.hline(19, 27, cy, 7);
+    // Sleek futuristic split-rail emitter fuselage (unmistakable twin forward prongs)
+    p.quad(8, cy - 6, 26, cy - 7, 30, cy - 3, 8, cy + 6, 2);
+    p.quad(8, cy + 6, 26, cy + 7, 30, cy + 3, 8, cy - 6, 2);
+    p.rect(24, cy - 7, 15, 4, 2);
+    p.rect(24, cy + 4, 15, 4, 2);
+    // Crisp negative-space emitter channel between prongs
+    p.rect(28, cy - 2, 12, 5, 0);
+    // Emitter focus ring
+    p.circle(26, cy, 3, 2);
   } else {
-    // Predator nosecone + twin heavy nose autocannons
-    p.tri(44, cy, 31, cy - 4, 31, cy + 4, 2);
-    p.hline(34, 42, cy - 4, 1);
-    p.hline(34, 42, cy + 4, 1);
-    p.px(42, cy - 4, 5);
-    p.px(42, cy + 4, 5);
-    // Glowing Ace canopy visor
-    p.rect(21, cy - 2, 8, 5, 5);
-    p.rect(23, cy - 1, 5, 3, 7);
+    // Heavy predator interceptor fuselage with twin armored nose cannons
+    p.quad(8, cy - 6, 30, cy - 6, 44, cy, 8, cy + 6, 2);
+    p.quad(8, cy + 6, 30, cy + 6, 44, cy, 8, cy - 6, 2);
+    p.rect(31, cy - 5, 11, 2, 2);
+    p.rect(31, cy + 4, 11, 2, 2);
   }
-
-  // Twin tail stabilizer fins
-  p.tri(15, cy - 5, 5, cy - 12, 9, cy - 5, 1);
-  p.tri(15, cy + 5, 5, cy + 12, 9, cy + 5, 1);
 }
 
+/**
+ * Clean-room Enemy Ace & LaserAce wings (45x45, full-span bold silhouettes in index 2).
+ */
 function drawAceWings(p: SpritePainter, isLaser: boolean): void {
-  const cy = Math.floor(p.h / 2); // 22 for 45x45
+  const cy = Math.floor(p.h / 2); // 22
   if (isLaser) {
-    // Forward-swept scissor wings with capacitor energy rails
-    p.quad(16, cy - 6, 25, cy - 6, 33, 2, 23, 2, 2);
-    p.quad(16, cy + 6, 25, cy + 6, 33, 42, 23, 42, 2);
-    // Outer capacitor pods
-    p.rect(24, 1, 13, 3, 1);
-    p.rect(24, 41, 13, 3, 1);
-    p.hline(31, 37, 2, 7);
-    p.hline(31, 37, 42, 7);
-    // Glowing leading-edge strips
-    p.line(24, cy - 7, 32, 3, 5, 1);
-    p.line(24, cy + 7, 32, 41, 5, 1);
-    p.line(21, cy - 7, 28, 4, 7, 1);
-    p.line(21, cy + 7, 28, 40, 7, 1);
+    // Dramatic forward-swept angular delta blades with outer rail-capacitor pods
+    p.quad(20, cy - 6, 29, cy - 6, 39, 2, 28, 2, 2);
+    p.quad(20, cy + 6, 29, cy + 6, 39, 42, 28, 42, 2);
+    p.rect(26, 2, 14, 3, 2);
+    p.rect(26, 40, 14, 3, 2);
   } else {
-    // Swept-back elite predator wings + twin wing pods + forward canards
-    p.quad(17, cy - 6, 28, cy - 6, 15, 2, 9, 2, 2);
-    p.quad(17, cy + 6, 28, cy + 6, 15, 42, 9, 42, 2);
-    // Forward canards
-    p.tri(35, cy - 6, 27, cy - 13, 29, cy - 6, 2);
-    p.tri(35, cy + 6, 27, cy + 13, 29, cy + 6, 2);
-    // Underwing gun pods
-    p.rect(17, cy - 14, 14, 3, 1);
-    p.rect(17, cy + 12, 14, 3, 1);
-    p.px(31, cy - 13, 5);
-    p.px(31, cy + 13, 5);
-    // Elite Ace wing chevron stripes
-    p.line(12, 5, 23, cy - 8, 5, 2);
-    p.line(12, 39, 23, cy + 8, 5, 2);
-    p.line(14, 4, 21, cy - 10, 7, 1);
-    p.line(14, 40, 21, cy + 10, 7, 1);
+    // Broad swept-back elite warbird wings + forward interceptor canards + underwing gun pods
+    p.quad(21, cy - 6, 33, cy - 6, 26, 0, 19, 0, 2);
+    p.quad(21, cy + 6, 33, cy + 6, 26, 44, 19, 44, 2);
+    p.tri(37, cy - 6, 29, cy - 13, 31, cy - 6, 2);
+    p.tri(37, cy + 6, 29, cy + 13, 31, cy + 6, 2);
+    p.rect(22, cy - 14, 14, 3, 2);
+    p.rect(22, cy + 12, 14, 3, 2);
   }
 }
 
+/**
+ * Clean-room Naval Gunboat (60x17, crisp authentic silhouette in index 2, flush on waterline).
+ */
 function drawSmallBoat(p: SpritePainter, sinking: boolean): void {
   const w = p.w;
   const h = p.h;
-  // Corvette angled hull (facing +X right)
-  p.quad(5, h - 1, w - 3, h - 1, w - 1, h - 7, 3, h - 6, 2);
-  // Waterline armor belt
-  p.hline(4, w - 3, h - 2, 1);
-  p.hline(4, w - 2, h - 7, 1);
-  // Foredeck turret mount
-  p.rect(w - 19, h - 10, 8, 3, 1);
-  // Terraced bridge superstructure
-  p.rect(19, h - 12, 17, 5, 2);
-  p.rect(23, h - 14, 9, 3, 2);
-  // Radar mast & aerial
-  p.vline(27, 0, h - 14, 1);
-  p.hline(25, 29, 2, 1);
-  // Glowing bridge viewport & portholes
-  p.hline(25, 30, h - 12, 7);
-  p.px(14, h - 5, 5);
-  p.px(22, h - 5, 5);
-  p.px(34, h - 5, 5);
-  p.px(44, h - 5, 5);
+  // Raked patrol-boat / corvette hull sitting flush on waterline
+  p.quad(3, h - 1, w - 3, h - 1, w - 1, h - 7, 1, h - 6, 2);
+  // Foredeck turret plinth
+  p.rect(w - 20, h - 10, 9, 4, 2);
+  // Stepped armored bridge & funnel
+  p.rect(18, h - 12, 18, 6, 2);
+  p.rect(22, h - 15, 10, 4, 2);
+  p.quad(13, h - 7, 18, h - 7, 17, h - 11, 12, h - 11, 2);
+  // Crisp radio mast & crossbar
+  p.vline(27, 1, h - 15, 2);
+  p.hline(24, 30, 3, 2);
 
   if (sinking) {
-    // Battle-cracked keel & deck fire
-    p.tri(27, h - 12, 33, h - 1, 39, h - 12, 0);
-    p.px(28, h - 9, 7);
-    p.px(31, h - 7, 5);
-    p.px(35, h - 10, 7);
+    // Jagged hull split down the middle
+    p.tri(26, h - 15, 32, h - 1, 39, h - 15, 0);
+    p.tri(14, h - 11, 18, h - 4, 21, h - 11, 0);
   }
 }
 
+/**
+ * Clean-room Dreadnought Battleship (300x50 / 300x51, monumental silhouette in index 2).
+ */
 function drawBigBoat(p: SpritePainter, sinking: boolean): void {
   const w = p.w;
   const h = p.h;
-  // Long armored cruiser hull with flared cutting bow
-  p.quad(10, h - 1, w - 12, h - 1, w - 2, h - 20, 6, h - 18, 2);
-  // Dark waterline armor belt & deck line
-  p.rect(8, h - 6, w - 18, 4, 1);
-  p.hline(6, w - 3, h - 19, 1);
-  p.hline(12, w - 8, h - 13, 1);
+  // Massive raked steel cruiser/battleship hull
+  p.quad(6, h - 1, w - 10, h - 1, w - 1, h - 18, 2, h - 15, 2);
+  // Raised forecastle bow deck
+  p.quad(w - 86, h - 18, w - 1, h - 18, w - 3, h - 22, w - 82, h - 21, 2);
 
-  // Fore & aft armored main turret barbettes
-  p.rect(48, h - 26, 32, 7, 2);
-  p.rect(52, h - 29, 22, 4, 1);
-  p.rect(214, h - 26, 32, 7, 2);
-  p.rect(218, h - 29, 22, 4, 1);
+  // Fore & aft dual armored main turret barbettes
+  p.rect(42, h - 25, 34, 10, 2);
+  p.rect(48, h - 29, 22, 5, 2);
+  p.rect(210, h - 26, 36, 10, 2);
+  p.rect(216, h - 30, 22, 5, 2);
+  // Secondary super-firing turrets
+  p.rect(82, h - 28, 22, 12, 2);
+  p.rect(186, h - 28, 22, 12, 2);
 
-  // Central terraced armored citadel
-  p.rect(94, h - 30, 108, 11, 2);
-  p.rect(108, h - 38, 76, 9, 2);
-  p.rect(126, h - 43, 36, 6, 1);
+  // Towering terraced pagoda citadel superstructure
+  p.rect(100, h - 31, 90, 16, 2);
+  p.rect(112, h - 38, 66, 9, 2);
+  p.rect(126, h - 44, 36, 7, 2);
 
-  // Twin angled armored smokestacks
-  p.quad(116, h - 38, 126, h - 38, 123, h - 47, 113, h - 47, 1);
-  p.quad(164, h - 38, 174, h - 38, 171, h - 47, 161, h - 47, 1);
+  // Twin thick raked armored smokestacks
+  p.quad(116, h - 36, 128, h - 36, 124, h - 48, 112, h - 48, 2);
+  p.quad(162, h - 36, 174, h - 36, 170, h - 48, 158, h - 48, 2);
 
-  // Tall radar lattice mast & rangefinder crossbars
-  p.vline(144, 0, h - 43, 1);
-  p.vline(148, 2, h - 43, 1);
-  p.hline(135, 157, 4, 1);
-  p.hline(138, 154, 9, 1);
-  p.px(146, 1, 7);
-
-  // Illuminated bridge windows & hull porthole sequence
-  p.rect(130, h - 41, 28, 2, 7);
-  p.rect(114, h - 34, 62, 2, 5);
-  for (let x = 26; x < w - 28; x += 14) {
-    p.rect(x, h - 11, 3, 2, 5);
-  }
+  // Tall tripod lattice radar mast & rangefinder arms
+  p.vline(144, 1, h - 44, 2);
+  p.vline(147, 4, h - 44, 2);
+  p.hline(133, 158, 6, 2);
+  p.hline(137, 154, 11, 2);
+  // Aft spotting crane
+  p.line(34, h - 16, 22, h - 28, 2, 2);
+  p.line(22, h - 28, 16, h - 23, 2, 1);
 
   if (sinking) {
-    // Snapped midsection & raging deck fires
-    p.tri(136, h - 44, 152, h - 1, 176, h - 44, 0);
-    p.tri(76, h - 26, 86, h - 10, 96, h - 26, 0);
-    for (const [fx, fy] of [
-      [82, h - 20],
-      [138, h - 30],
-      [164, h - 28],
-      [216, h - 22],
-    ] as const) {
-      p.circle(fx, fy, 5, 5);
-      p.circle(fx, fy - 2, 3, 7);
-    }
+    // Catastrophic keel break & sheared bridge
+    p.tri(132, h - 48, 154, h - 1, 182, h - 48, 0);
+    p.tri(74, h - 28, 86, h - 8, 98, h - 28, 0);
+    p.tri(210, h - 30, 224, h - 10, 236, h - 30, 0);
   }
 }
 
+/**
+ * Clean-room Attack Submarine (198x36) & Submersible Carrier AceMarine (240x36) in pure index 2.
+ */
 function drawSubmarine(p: SpritePainter, isCarrier: boolean, sinking: boolean): void {
   const w = p.w;
   const h = p.h;
-  // Streamlined teardrop pressure hull
-  p.ellipse(w * 0.5, h - 8, w * 0.47, 11, 2);
-  p.rect(w * 0.08, h - 14, w * 0.82, 13, 2);
-  // Stern hydroplane fin & propeller boss
-  p.tri(6, h - 9, 18, h - 19, 24, h - 11, 1);
-  p.rect(2, h - 11, 6, 5, 1);
-  // Dark flood-port vents & ballast trim
-  p.hline(14, w - 14, h - 4, 1);
-  for (let x = 26; x < w - 24; x += 12) {
-    p.rect(x, h - 9, 5, 2, 1);
-  }
+  // Low streamlined pressure hull resting flush on ocean surface
+  p.ellipse(w * 0.5, h - 6, w * 0.48, 11, 2);
+  p.rect(w * 0.06, h - 13, w * 0.86, 13, 2);
+  // Aft hydroplane rudder fin
+  p.tri(4, h - 8, 18, h - 20, 25, h - 10, 2);
 
   if (isCarrier) {
-    // Submersible carrier: angled catapult flight deck + offset armored island
-    p.quad(w * 0.52, h - 18, w - 14, h - 23, w - 10, h - 14, w * 0.48, h - 13, 2);
-    p.line(w * 0.52, h - 18, w - 14, h - 23, 1, 2);
-    // Catapult runway guide lights
-    for (let i = 0; i < 6; i++) {
-      const lx = Math.round(w * 0.56 + i * 14);
-      const ly = Math.round(h - 17 - i * 0.8);
-      p.rect(lx, ly, 4, 2, i % 2 === 0 ? 7 : 5);
-    }
-    // Offset carrier island superstructure
-    p.rect(w * 0.25, h - 31, 42, 17, 2);
-    p.rect(w * 0.28, h - 33, 30, 3, 1);
-    p.rect(w * 0.30, h - 28, 22, 3, 7);
-    // Twin radar masts
-    p.vline(w * 0.31, 0, h - 32, 1);
-    p.hline(w * 0.29, w * 0.33, 2, 1);
-    p.vline(w * 0.38, 1, h - 32, 1);
-    p.hline(w * 0.36, w * 0.40, 3, 1);
+    // Submersible aircraft carrier: sleek ski-jump catapult deck + offset island tower
+    p.quad(w * 0.48, h - 14, w - 10, h - 23, w - 6, h - 12, w * 0.46, h - 10, 2);
+    p.rect(w * 0.24, h - 30, 44, 18, 2);
+    p.rect(w * 0.28, h - 33, 30, 4, 2);
+    // Twin radar masts & launch control crane
+    p.vline(w * 0.31, 0, h - 33, 2);
+    p.hline(w * 0.28, w * 0.34, 3, 2);
+    p.vline(w * 0.38, 2, h - 33, 2);
+    p.hline(w * 0.36, w * 0.41, 5, 2);
+    // Tiny silhouette of parked interceptor on ramp
+    p.rect(w * 0.66, h - 22, 12, 3, 2);
+    p.vline(w * 0.7, h - 25, h - 19, 2);
   } else {
-    // Attack submarine: sculpted central conning tower + periscope + missile hatches
-    const sailX = Math.floor(w * 0.4);
-    p.quad(sailX, h - 14, sailX + 36, h - 14, sailX + 30, h - 28, sailX + 5, h - 28, 2);
-    p.hline(sailX + 4, sailX + 31, h - 28, 1);
-    p.rect(sailX + 18, h - 24, 9, 3, 7);
-    // Periscope & snorkel
-    p.vline(sailX + 12, 1, h - 28, 1);
-    p.hline(sailX + 12, sailX + 16, 1, 1);
-    p.vline(sailX + 22, 4, h - 28, 1);
-    // Foredeck VLS missile silos
-    for (let i = 0; i < 3; i++) {
-      const mx = sailX + 44 + i * 14;
-      p.rect(mx, h - 18, 8, 4, 1);
-      p.hline(mx + 2, mx + 5, h - 18, 5);
-    }
+    // Classic attack submarine: sculpted conning tower sail + periscope + VLS hatches
+    const sailX = Math.floor(w * 0.39);
+    p.quad(sailX, h - 12, sailX + 38, h - 12, sailX + 31, h - 28, sailX + 6, h - 28, 2);
+    // Periscope & snorkel mast
+    p.vline(sailX + 14, 1, h - 28, 2);
+    p.hline(sailX + 14, sailX + 19, 1, 2);
+    p.vline(sailX + 23, 5, h - 28, 2);
+    // Foredeck missile hatches & deck gun
+    p.rect(sailX + 46, h - 16, 10, 4, 2);
+    p.rect(sailX + 60, h - 16, 10, 4, 2);
+    p.rect(sailX + 74, h - 16, 10, 4, 2);
   }
 
   if (sinking) {
-    // Hull breach & escaping steam
-    p.circle(w * 0.62, h - 14, 12, 0);
-    p.circle(w * 0.56, h - 16, 4, 7);
-    p.circle(w * 0.66, h - 12, 3, 5);
+    // Torn pressure hull breach
+    p.circle(w * 0.58, h - 14, 14, 0);
+    p.tri(w * 0.34, h - 28, w * 0.44, h - 10, w * 0.52, h - 28, 0);
   }
 }
 
+/**
+ * Clean-room Sky-Dreadnought Dirigible Blimp (550x219, iconic pure silhouette in index 2).
+ */
 function drawBlimp(p: SpritePainter, dying: boolean): void {
   const w = p.w;
   const h = p.h;
-  const cx = w * 0.52;
-  const cy = h * 0.44;
-  const rx = w * 0.44;
-  const ry = h * 0.34;
+  const cx = w * 0.53;
+  const cy = h * 0.43;
+  const rx = w * 0.45;
+  const ry = h * 0.35;
 
-  // Massive dorsal, ventral, and lateral cruciform tailfins
-  p.quad(18, 10, 128, 14, 146, cy - 30, 32, cy - 20, 2);
-  p.quad(18, h - 26, 128, h - 30, 146, cy + 30, 32, cy + 20, 2);
-  p.line(18, 10, 128, 14, 1, 3);
-  p.line(18, h - 26, 128, h - 30, 1, 3);
+  // Massive dorsal & ventral cruciform tailfins with aerodynamic sweep
+  p.quad(20, 6, 138, 12, 166, cy - 26, 36, cy - 16, 2);
+  p.quad(20, h - 24, 138, h - 30, 166, cy + 26, 36, cy + 16, 2);
+  // Rear horizontal stabilizer & propeller housing boss
+  p.quad(8, cy - 10, 124, cy - 14, 124, cy + 14, 8, cy + 10, 2);
 
-  // Main rigid armored dirigible envelope
+  // Monumental rigid zeppelin envelope
   p.ellipse(cx, cy, rx, ry, 2);
+  // Subtle stepped nose cone & mooring spike
+  p.tri(w - 2, cy, w - 34, cy - 18, w - 34, cy + 18, 2);
+  p.rect(w - 18, cy - 2, 17, 4, 2);
 
-  // Longitudinal girder ribs & armored nose cap
-  for (const offsetY of [-42, -16, 16, 42]) {
-    const halfSpan = Math.sqrt(Math.max(0, 1 - (offsetY / ry) ** 2)) * rx;
-    p.hline(cx - halfSpan + 10, cx + halfSpan - 10, cy + offsetY, 1);
-  }
-  // Vertical bulkhead rings
-  for (const fracX of [0.26, 0.42, 0.58, 0.74, 0.86]) {
-    const bx = w * fracX;
-    const dx = (bx - cx) / rx;
-    const halfH = Math.sqrt(Math.max(0, 1 - dx * dx)) * ry;
-    p.vline(bx, cy - halfH + 3, cy + halfH - 3, 1);
-  }
-
-  // Lateral rear stabilizer fin
-  p.quad(12, cy - 8, 114, cy - 11, 114, cy + 11, 12, cy + 8, 1);
-  p.hline(16, 108, cy, 5);
-
-  // Armored prow cone & mooring spike
-  p.tri(w - 4, cy, w - 34, cy - 16, w - 34, cy + 16, 1);
-  p.hline(w - 22, w - 2, cy, 7);
-
-  // Hull insignia chevron band (skybreaker enemy dreadnought stripe)
-  p.quad(w * 0.64, cy - 24, w * 0.69, cy - 24, w * 0.73, cy, w * 0.68, cy, 5);
-  p.quad(w * 0.68, cy, w * 0.73, cy, w * 0.69, cy + 24, w * 0.64, cy + 24, 5);
-
-  // Underslung armored battle gondola + rigging struts
-  const gx = Math.floor(w * 0.34);
-  const gw = Math.floor(w * 0.34);
-  const gy = Math.floor(h * 0.76);
+  // Underslung armored battle gondola + rigging struts with crisp negative-space windows
+  const gx = Math.floor(w * 0.32);
+  const gw = Math.floor(w * 0.38);
+  const gy = Math.floor(h * 0.77);
   const gh = Math.floor(h * 0.19);
-  p.line(gx + 16, cy + ry - 8, gx + 10, gy, 1, 3);
-  p.line(gx + gw - 16, cy + ry - 8, gx + gw - 10, gy, 1, 3);
-  p.line(gx + gw * 0.5, cy + ry - 2, gx + gw * 0.5, gy, 1, 3);
-  p.quad(gx, gy, gx + gw, gy, gx + gw - 14, gy + gh, gx + 14, gy + gh, 1);
-  p.rect(gx + 8, gy + 4, gw - 16, gh - 10, 2);
+  p.line(gx + 18, cy + ry - 12, gx + 12, gy + 2, 2, 4);
+  p.line(gx + gw - 18, cy + ry - 12, gx + gw - 12, gy + 2, 2, 4);
+  p.line(gx + gw * 0.35, cy + ry - 4, gx + gw * 0.35, gy + 2, 2, 3);
+  p.line(gx + gw * 0.65, cy + ry - 4, gx + gw * 0.65, gy + 2, 2, 3);
+  p.quad(gx, gy, gx + gw, gy, gx + gw - 16, gy + gh, gx + 16, gy + gh, 2);
+  // Rear engine/gunner sub-pod
+  p.quad(gx - 56, gy - 4, gx - 10, gy - 4, gx - 16, gy + 18, gx - 50, gy + 18, 2);
+  p.line(gx - 34, cy + ry - 16, gx - 34, gy, 2, 3);
 
-  // Glowing gondola command deck windows
-  for (let wx = gx + 18; wx < gx + gw - 24; wx += 18) {
-    p.rect(wx, gy + 9, 10, 5, 7);
+  // Subtle architectural negative-space gondola viewport slits
+  for (let wx = gx + 24; wx < gx + gw - 30; wx += 22) {
+    p.rect(wx, gy + 10, 11, 5, 0);
   }
 
   if (dying) {
-    // Catastrophic envelope ruptures & blazing structural fires
-    p.circle(w * 0.38, cy - 12, 34, 0);
-    p.circle(w * 0.68, cy + 10, 28, 0);
-    p.circle(w * 0.52, cy - 28, 22, 0);
-    for (const [fx, fy, r] of [
-      [w * 0.38, cy - 12, 16],
-      [w * 0.68, cy + 10, 14],
-      [w * 0.52, cy - 26, 11],
-      [gx + 40, gy + 8, 10],
-    ] as const) {
-      p.circle(fx, fy, r, 5);
-      p.circle(fx, fy, r * 0.55, 7);
-    }
+    // Dramatic catastrophic gasbag tears & ruptured framing
+    p.circle(w * 0.36, cy - 14, 42, 0);
+    p.circle(w * 0.64, cy + 12, 36, 0);
+    p.circle(w * 0.5, cy - 30, 28, 0);
+    p.tri(gx + 40, gy - 6, gx + 80, gy + gh + 2, gx + 115, gy - 6, 0);
+    // Jagged exposed rib remnants across blast holes
+    p.line(w * 0.32, cy - 48, w * 0.4, cy + 20, 2, 3);
+    p.line(w * 0.6, cy - 18, w * 0.68, cy + 40, 2, 3);
   }
 }
 
@@ -1204,96 +509,162 @@ function drawBlimpPropeller(p: SpritePainter, frameIdx: number): void {
   const cx = Math.floor(p.w / 2);
   const cy = Math.floor(p.h / 2);
   const phase = frameIdx % 6;
-  const bladeH = [22, 17, 10, 5, 10, 17][phase]!;
-  p.rect(cx - 2, cy - 4, 5, 8, 1);
+  const bladeH = [22, 17, 10, 4, 10, 17][phase]!;
+  p.rect(cx - 2, cy - 5, 5, 10, 2);
   p.rect(cx - 1, cy - bladeH, 3, bladeH * 2, 2);
-  p.vline(cx, cy - bladeH, cy + bladeH, phase % 2 === 0 ? 7 : 5);
+  if (phase % 2 === 0) {
+    p.rect(cx - 3, cy - Math.floor(bladeH * 0.7), 7, 2, 2);
+    p.rect(cx - 3, cy + Math.floor(bladeH * 0.7), 7, 2, 2);
+  }
 }
 
 function drawGunBarrel(p: SpritePainter, frameIdx: number): void {
   const w = p.w;
   const h = p.h;
-  const recoil = frameIdx === 1 ? 3 : frameIdx === 2 ? 2 : frameIdx === 3 ? 1 : 0;
+  const recoil = frameIdx === 1 ? 4 : frameIdx === 2 ? 3 : frameIdx === 3 ? 2 : frameIdx === 4 ? 1 : 0;
   const mid = Math.floor(h / 2);
   if (h <= 4) {
-    // Small boat gun
-    p.rect(0, mid - 1, Math.max(4, w - 2 - recoil), 3, 1);
-    p.hline(1, Math.max(4, w - 1 - recoil), mid, 2);
-    if (frameIdx === 1) {
-      p.rect(w - 3, 0, 3, h, 7);
-    }
+    // Small boat deck gun barrel (16x3, pure index 2)
+    p.rect(0, 0, Math.max(5, w - 1 - recoil), h, 2);
+    p.rect(Math.max(5, w - 3 - recoil), 0, 2, h, 2);
   } else {
-    // Big boat heavy turret barrel
-    p.rect(0, 1, 10, h - 2, 1);
-    p.rect(6, mid - 2, Math.max(8, w - 9 - recoil), 5, 2);
-    p.hline(6, Math.max(8, w - 4 - recoil), mid - 2, 1);
-    p.hline(6, Math.max(8, w - 4 - recoil), mid + 2, 1);
-    // Muzzle brake
-    p.rect(Math.max(10, w - 6 - recoil), mid - 3, 3, 7, 1);
-    if (frameIdx === 1) {
-      p.circle(w - 2, mid, 3, 7);
-    }
+    // Big boat heavy turret barrel (35x9, pure index 2)
+    p.rect(0, 1, 11, h - 2, 2);
+    p.rect(8, mid - 2, Math.max(10, w - 10 - recoil), 5, 2);
+    // Flared muzzle collar
+    p.rect(Math.max(12, w - 6 - recoil), mid - 3, 4, 7, 2);
   }
 }
 
+/**
+ * Lush, sculpted organic cumulus clouds!
+ * - `clouds` (352x192, 6 unique frames): PURE index `7` (blazing white sunlit clouds)
+ * - `parallax_clouds` (88x48, 6 unique frames): PURE index `6` (soft midground haze clouds)
+ * Each frame has a distinct painterly multi-lobe silhouette with towering peaks,
+ * stepped trailing wisps, and softly scalloped undersides (zero flat gray ovals!).
+ */
 function drawCloudFormation(p: SpritePainter, frameIdx: number, isParallax: boolean): void {
   const w = p.w;
   const h = p.h;
-  const basePal = isParallax ? 6 : 7;
-  const shadePal = 6;
-  const trimPal = 7;
+  const pal = isParallax ? 6 : 7;
 
-  // Deterministic sculpted cumulus formations with organic rounded base puffs (zero hard bars!)
-  const domeCount = isParallax ? 4 : 6;
-  const baseY = h * 0.7;
+  // 6 handcrafted painterly cumulus recipes (normalized [cx, cy, rx, ry] lobes)
+  const recipes: readonly (readonly (readonly [number, number, number, number])[])[] = [
+    // 0: Classic towering cumulus anvil
+    [
+      [0.2, 0.7, 0.17, 0.16],
+      [0.36, 0.56, 0.2, 0.28],
+      [0.54, 0.42, 0.22, 0.34],
+      [0.72, 0.58, 0.19, 0.24],
+      [0.84, 0.72, 0.13, 0.13],
+      [0.48, 0.73, 0.32, 0.15],
+      [0.11, 0.76, 0.09, 0.09],
+    ],
+    // 1: Windswept twin-peak cloudbank
+    [
+      [0.16, 0.68, 0.14, 0.15],
+      [0.31, 0.48, 0.18, 0.3],
+      [0.48, 0.62, 0.17, 0.22],
+      [0.65, 0.44, 0.2, 0.32],
+      [0.81, 0.65, 0.16, 0.18],
+      [0.5, 0.74, 0.35, 0.13],
+      [0.91, 0.73, 0.07, 0.08],
+    ],
+    // 2: Sweeping diagonal cumulus drift
+    [
+      [0.14, 0.74, 0.12, 0.11],
+      [0.28, 0.66, 0.17, 0.19],
+      [0.46, 0.54, 0.2, 0.28],
+      [0.64, 0.38, 0.21, 0.32],
+      [0.8, 0.56, 0.16, 0.24],
+      [0.56, 0.72, 0.3, 0.15],
+      [0.89, 0.7, 0.09, 0.11],
+    ],
+    // 3: Broad low sunlit strato-cumulus
+    [
+      [0.15, 0.68, 0.14, 0.16],
+      [0.32, 0.58, 0.18, 0.24],
+      [0.5, 0.52, 0.21, 0.27],
+      [0.69, 0.58, 0.18, 0.23],
+      [0.85, 0.69, 0.13, 0.15],
+      [0.5, 0.73, 0.37, 0.13],
+    ],
+    // 4: Billowing stormhead cluster
+    [
+      [0.24, 0.64, 0.18, 0.21],
+      [0.42, 0.36, 0.2, 0.31],
+      [0.58, 0.48, 0.21, 0.3],
+      [0.74, 0.64, 0.18, 0.2],
+      [0.48, 0.72, 0.31, 0.16],
+      [0.12, 0.73, 0.1, 0.11],
+      [0.88, 0.74, 0.09, 0.09],
+    ],
+    // 5: High puffy cumulus trio
+    [
+      [0.22, 0.6, 0.17, 0.24],
+      [0.44, 0.48, 0.19, 0.29],
+      [0.66, 0.55, 0.19, 0.26],
+      [0.82, 0.68, 0.14, 0.15],
+      [0.48, 0.72, 0.33, 0.14],
+      [0.1, 0.72, 0.08, 0.1],
+    ],
+  ];
 
-  // 1. Soft overlapping lower cumulus base lobes (provides gentle curved shadow underside)
-  const baseLobes = domeCount + 1;
-  for (let i = 0; i < baseLobes; i++) {
-    const u = baseLobes > 1 ? i / (baseLobes - 1) : 0.5;
-    const arch = Math.sin(u * Math.PI);
-    const wave = Math.cos(i * 2.1 + frameIdx * 1.15);
-    const lx = w * (0.12 + u * 0.76);
-    const rx = w * (0.12 + 0.06 * arch);
-    const ry = h * (0.09 + 0.07 * arch + 0.02 * Math.abs(wave));
-    const ly = baseY + h * (0.015 * wave);
-    p.ellipse(lx, ly, rx, ry, shadePal);
+  const lobes = recipes[frameIdx % recipes.length]!;
+  for (const [cx, cy, rx, ry] of lobes) {
+    p.ellipse(cx * w, cy * h, rx * w, ry * h, pal);
   }
 
-  // 2. Sculpted towering sunlit cumulus billows overlapping seamlessly above the base lobes
-  for (let i = 0; i < domeCount; i++) {
-    const u = domeCount > 1 ? i / (domeCount - 1) : 0.5;
-    const wave = Math.sin((i + 1) * 1.9 + frameIdx * 1.37);
-    const dx = w * (0.14 + u * 0.72 + wave * 0.03);
+  // Sculpt delicate secondary micro-billows along upper sunlit ridges for rich pixel-art silhouette
+  const ridgeSteps = isParallax ? 7 : 13;
+  for (let i = 0; i < ridgeSteps; i++) {
+    const u = (i + 0.5) / ridgeSteps;
+    const wave = Math.sin(i * 2.1 + frameIdx * 1.7);
     const arch = Math.sin(u * Math.PI);
-    const rx = w * (0.14 + 0.08 * arch + 0.02 * Math.cos(i * 2.3 + frameIdx));
-    const ry = h * (0.16 + 0.24 * arch + 0.05 * Math.abs(wave));
-    const dy = baseY - ry * 0.58;
-    p.ellipse(dx, dy, rx, ry, basePal);
-    if (isParallax) {
-      // Bright sunlit top rim on midground parallax clouds
-      p.ellipse(dx, dy - ry * 0.28, rx * 0.68, ry * 0.34, trimPal);
-    }
+    const bx = w * (0.12 + u * 0.76);
+    const by = h * (0.64 - arch * 0.24 + wave * 0.04);
+    const br = Math.min(w, h) * (0.06 + 0.05 * arch);
+    p.circle(bx, by, br, pal);
   }
 }
 
+/**
+ * Horizontally seamless upper stratosphere cloud banks (`space_clouds`, 600x100, 3 frames):
+ * - Frame 0: index `7` (bright white foreground upper ceiling bank)
+ * - Frame 1: index `2` (deep storm cloud bank for Overdrive)
+ * - Frame 2: index `6` (pale cream background haze bank)
+ */
 function drawSpaceClouds(p: SpritePainter, frameIdx: number): void {
   const w = p.w;
   const h = p.h;
-  // Upper solid ceiling bank
-  p.rect(0, 0, w, h * 0.48, 7);
-  // Scalloped hanging cloud billows
-  const lobes = 12;
+  const pal = frameIdx === 1 ? 2 : frameIdx === 2 ? 6 : 7;
+
+  // Solid upper bank merging seamlessly with `space_clouds_blank` above
+  p.rect(0, 0, w, Math.floor(h * 0.42), pal);
+
+  // Periodically seamless billowing hanging cloud lobes across full 600px width
+  const lobes = 10;
   for (let i = 0; i <= lobes; i++) {
-    const cx = (i / lobes) * w;
-    const phase = i * 1.3 + frameIdx * 2.1;
-    const rx = w / (lobes * 1.15) + Math.sin(phase) * 8;
-    const ry = h * (0.22 + 0.16 * Math.abs(Math.cos(phase)));
-    p.ellipse(cx, h * 0.48, rx, ry, 7);
-    p.ellipse(cx, h * 0.56 + ry * 0.25, rx * 0.75, ry * 0.35, 6);
+    const u = i / lobes;
+    const cx = u * w;
+    // Use integer harmonics of 2*PI so x=0 and x=w match seamlessly!
+    const h1 = Math.sin(u * Math.PI * 2 + frameIdx * 1.9);
+    const h2 = Math.cos(u * Math.PI * 4 - frameIdx * 1.1);
+    const rx = (w / lobes) * (0.66 + 0.14 * h1);
+    const ry = h * (0.28 + 0.14 * Math.abs(h1) + 0.08 * Math.abs(h2));
+    p.ellipse(cx, h * 0.42, rx, ry, pal);
+    // Secondary sub-billows for organic pixel cloud ceiling
+    const subX = cx + (w / lobes) * 0.5;
+    const subRy = h * (0.2 + 0.12 * Math.abs(h2));
+    p.ellipse(subX, h * 0.4, rx * 0.65, subRy, pal);
   }
 }
 
+/**
+ * Iconic multi-frame arcade explosions (`fx_explodetiny/small/medium/big`):
+ * Pure punchy white (`7`) expanding starburst -> multi-lobe billowing fireball with
+ * crisp negative-space pockets -> fracturing hollowing smoke-ring embers!
+ */
 function drawExplosion(p: SpritePainter, frameIdx: number, totalFrames: number): void {
   const w = p.w;
   const h = p.h;
@@ -1302,110 +673,146 @@ function drawExplosion(p: SpritePainter, frameIdx: number, totalFrames: number):
   const maxR = Math.min(w, h) * 0.46;
   const t = totalFrames > 1 ? frameIdx / (totalFrames - 1) : 0.4;
 
-  if (t < 0.22) {
-    // Phase 1: Blinding jagged impact starburst
-    const coreR = maxR * (0.35 + t * 2.1);
-    p.circle(cx, cy, coreR, 7);
+  // Iconic arcade 1-frame impact inversion: f0 blinding white (7) -> f1 stark dark (1) disc
+  if (frameIdx === 0) {
+    p.circle(cx, cy, maxR * 0.62, 7);
     const rays = 8;
     for (let i = 0; i < rays; i++) {
-      const ang = (i / rays) * Math.PI * 2 + frameIdx * 0.4;
-      const len = maxR * (0.65 + (i % 2) * 0.3);
-      p.line(cx, cy, cx + Math.cos(ang) * len, cy + Math.sin(ang) * len, 7, Math.max(1, Math.round(w / 18)));
+      const ang = (i / rays) * Math.PI * 2;
+      const len = maxR * (0.78 + (i % 2) * 0.2);
+      p.line(
+        cx,
+        cy,
+        cx + Math.cos(ang) * len,
+        cy + Math.sin(ang) * len,
+        7,
+        Math.max(1, Math.round(w / 16)),
+      );
     }
     return;
   }
 
-  if (t < 0.65) {
-    // Phase 2: Expanding turbulent multi-lobe blast + shockwave ring
-    const u = (t - 0.22) / 0.43;
-    const ringR = maxR * (0.55 + u * 0.44);
-    const ringThick = Math.max(1.5, maxR * 0.12 * (1 - u * 0.5));
-    p.ring(cx, cy, ringR, ringR - ringThick, 6);
+  if (frameIdx === 1 && w >= 20) {
+    // Signature single-frame dark inversion disc (index 1) for maximum punch!
+    p.circle(cx, cy, maxR * 0.84, 1);
+    return;
+  }
 
-    const lobes = w >= 40 ? 7 : 5;
+  if (t < 0.56) {
+    // Phase 2: Full billowing multi-lobe white blast cloud with crisp hollowing pocket
+    const u = Math.max(0, (t - 0.16) / 0.4);
+    const lobes = w >= 40 ? 9 : 6;
     for (let i = 0; i < lobes; i++) {
-      const ang = (i / lobes) * Math.PI * 2 + frameIdx * 0.55;
-      const dist = maxR * (0.18 + u * 0.28);
-      const lr = maxR * (0.38 - u * 0.08) * (0.8 + 0.25 * Math.sin(i * 2.1));
+      const ang = (i / lobes) * Math.PI * 2 + frameIdx * 0.48;
+      const dist = maxR * (0.14 + u * 0.34);
+      const lr = maxR * (0.44 - u * 0.1) * (0.82 + 0.22 * Math.sin(i * 2.3 + frameIdx));
       p.circle(cx + Math.cos(ang) * dist, cy + Math.sin(ang) * dist, lr, 7);
     }
-    // Hot inner highlight
-    p.circle(cx, cy, maxR * (0.35 * (1 - u * 0.6)), 5);
+    p.circle(cx, cy, maxR * (0.58 - u * 0.14), 7);
+    if (u > 0.32) {
+      p.circle(cx, cy, maxR * ((u - 0.32) * 0.62), 0);
+    }
     return;
   }
 
-  // Phase 3: Hollowing smoke ring breaking into dissipating puffs
-  const u = (t - 0.65) / 0.35;
-  const puffs = w >= 40 ? 9 : 6;
+  // Phase 3: Hollow expanding blast ring shattering into crisp drifting flecks
+  const u = (t - 0.56) / 0.44;
+  const puffs = w >= 40 ? 11 : 7;
   for (let i = 0; i < puffs; i++) {
-    const ang = (i / puffs) * Math.PI * 2 + frameIdx * 0.35;
-    const dist = maxR * (0.48 + u * 0.34);
-    const pr = Math.max(1.2, maxR * (0.28 * (1 - u * 0.72)));
-    p.circle(cx + Math.cos(ang) * dist, cy + Math.sin(ang) * dist, pr, i % 2 === 0 ? 7 : 6);
+    const ang = (i / puffs) * Math.PI * 2 + frameIdx * 0.27;
+    const dist = maxR * (0.48 + u * 0.38);
+    const pr = Math.max(1.2, maxR * (0.3 * (1 - u * 0.78)) * (0.75 + 0.3 * Math.cos(i * 1.9)));
+    p.circle(cx + Math.cos(ang) * dist, cy + Math.sin(ang) * dist, pr, 7);
   }
 }
 
-function drawSmokePuff(p: SpritePainter, frameIdx: number, totalFrames: number): void {
+/**
+ * Gritty multi-frame smoke (`fx_smoke` / `fx_smokelong` in palette index `3`)
+ * or bright puffs (`fx_poof` / `fx_missile_trail` in index `7`).
+ */
+function drawSmokePuff(p: SpritePainter, frameIdx: number, totalFrames: number, pal: number): void {
   const w = p.w;
   const h = p.h;
   const cx = w * 0.5;
   const cy = h * 0.5;
-  const maxR = Math.min(w, h) * 0.42;
+  const maxR = Math.min(w, h) * 0.44;
   const t = totalFrames > 1 ? frameIdx / (totalFrames - 1) : 0.4;
-  const pal = t > 0.6 ? 6 : 7;
 
-  if (t < 0.7) {
-    const r = Math.max(1.5, maxR * (0.4 + 0.6 * Math.sin(t * Math.PI * 0.9)));
+  if (t < 0.35) {
+    const r = Math.max(1.5, maxR * (0.48 + t * 1.2));
     p.circle(cx, cy, r, pal);
-    p.circle(cx - r * 0.45, cy - r * 0.25, r * 0.65, 7);
-    p.circle(cx + r * 0.4, cy + r * 0.2, r * 0.55, 6);
+    p.circle(cx - r * 0.38, cy - r * 0.2, r * 0.68, pal);
+    p.circle(cx + r * 0.35, cy + r * 0.22, r * 0.6, pal);
+  } else if (t < 0.72) {
+    const u = (t - 0.35) / 0.37;
+    for (let i = 0; i < 5; i++) {
+      const ang = (i / 5) * Math.PI * 2 + frameIdx * 0.5;
+      const d = maxR * (0.28 + u * 0.25);
+      p.circle(cx + Math.cos(ang) * d, cy + Math.sin(ang) * d, maxR * (0.38 - u * 0.1), pal);
+    }
+    p.circle(cx, cy, maxR * (0.18 + u * 0.22), 0);
   } else {
-    // Dissipating wisps
+    const u = (t - 0.72) / 0.28;
     for (let i = 0; i < 4; i++) {
-      const ang = (i / 4) * Math.PI * 2 + frameIdx;
-      const d = maxR * 0.55;
-      p.circle(cx + Math.cos(ang) * d, cy + Math.sin(ang) * d, Math.max(1, maxR * 0.22), 6);
+      const ang = (i / 4) * Math.PI * 2 + frameIdx * 0.7;
+      const d = maxR * (0.52 + u * 0.24);
+      p.circle(cx + Math.cos(ang) * d, cy + Math.sin(ang) * d, Math.max(1, maxR * (0.22 * (1 - u * 0.6))), pal);
     }
   }
 }
 
+/**
+ * Pure crisp white (`7`) organic bubbling ocean water splashes & boat wakes!
+ */
 function drawWaterSplash(p: SpritePainter, frameIdx: number, totalFrames: number): void {
   const w = p.w;
   const h = p.h;
   const cx = w * 0.5;
   const t = totalFrames > 1 ? frameIdx / (totalFrames - 1) : 0.4;
   const arcRise = Math.sin(Math.min(1, t * 1.15) * Math.PI);
-  const plumeH = Math.max(3, h * (0.22 + 0.74 * arcRise));
-  const baseW = w * (0.26 + 0.44 * t);
+  const plumeH = Math.max(3, h * (0.2 + 0.74 * arcRise));
+  const baseW = w * (0.28 + 0.44 * t);
 
-  // Foam collar at waterline
-  p.ellipse(cx, h - 2, Math.min(w * 0.48, baseW * 0.6), Math.max(2, h * 0.08), 7);
+  // Frothy organic waterline foam collar
+  p.ellipse(cx, h - 2, Math.min(w * 0.48, baseW * 0.68), Math.max(2, h * 0.09), 7);
+  p.circle(cx - baseW * 0.36, h - 3, Math.max(1.5, Math.min(w, h) * 0.11), 7);
+  p.circle(cx + baseW * 0.36, h - 3, Math.max(1.5, Math.min(w, h) * 0.11), 7);
 
-  if (t < 0.85) {
-    // Central rising water column
-    const colW = Math.max(2, w * (0.22 * (1 - t * 0.55)));
-    p.tri(cx, h - plumeH, cx - colW, h - 1, cx + colW, h - 1, 7);
-
-    // Symmetrical fanning spray jets
-    const spraySpan = w * (0.16 + 0.3 * t);
-    const sprayH = plumeH * 0.82;
-    p.line(cx - 1, h - 2, cx - spraySpan, h - sprayH, 7, Math.max(1, Math.round(w / 18)));
-    p.line(cx + 1, h - 2, cx + spraySpan, h - sprayH, 7, Math.max(1, Math.round(w / 18)));
-    p.line(cx, h - 2, cx - spraySpan * 0.55, h - plumeH * 0.94, 6, 1);
-    p.line(cx, h - 2, cx + spraySpan * 0.55, h - plumeH * 0.94, 6, 1);
+  if (t < 0.78) {
+    // Organic billowing water spire built from stacked foam lobes (no straight broomsticks!)
+    const steps = 6;
+    for (let s = 0; s < steps; s++) {
+      const f = s / (steps - 1);
+      const y = h - 2 - plumeH * f;
+      const spread = (w * 0.06 + w * 0.28 * t) * Math.sin(f * Math.PI * 0.75);
+      const r = Math.max(1.4, w * (0.14 * (1 - f * 0.55) * (1 - t * 0.35)));
+      p.circle(cx, y, r * (1 - t * 0.3), 7);
+      if (s >= 1) {
+        p.circle(cx - spread, y + r * 0.4, r * 0.85, 7);
+        p.circle(cx + spread, y + r * 0.4, r * 0.85, 7);
+      }
+    }
+    // Hollow frothy crest cutout at peak expansion
+    if (t > 0.38) {
+      p.circle(cx, h - plumeH * 0.45, Math.max(1.5, w * 0.09 * (t - 0.3)), 0);
+    }
   }
 
-  // Airborne water droplets arcing outward & falling
-  const drops = w >= 40 ? 8 : 5;
+  // Arcing airborne sea-spray droplets cascading outward & downward
+  const drops = w >= 40 ? 12 : 7;
   for (let i = 0; i < drops; i++) {
     const side = i % 2 === 0 ? -1 : 1;
     const rank = Math.floor(i / 2) + 1;
-    const dx = cx + side * (w * (0.1 + 0.11 * rank) * (0.4 + 0.65 * t));
-    const dy = h - plumeH * (0.95 - 0.14 * rank) + t * t * h * 0.28;
-    p.circle(dx, dy, Math.max(1, Math.round(w / 24)), i % 3 === 0 ? 6 : 7);
+    const dx = cx + side * (w * (0.08 + 0.08 * rank) * (0.4 + 0.75 * t));
+    const dy = h - plumeH * (1.02 - 0.12 * rank) + t * t * h * 0.34;
+    const dr = Math.max(1, Math.round(w / (rank > 3 ? 30 : 20)));
+    p.circle(dx, dy, dr, 7);
   }
 }
 
+/**
+ * Pure punchy white (`7`) thruster & afterburner plumes!
+ */
 function drawBoostFlame(
   p: SpritePainter,
   frameIdx: number,
@@ -1418,42 +825,48 @@ function drawBoostFlame(
   const t = totalFrames > 1 ? frameIdx / (totalFrames - 1) : 0.5;
 
   if (phaseKind === 'hover') {
-    const r = Math.min(w, h) * (0.28 + 0.16 * (frameIdx % 3) * 0.5);
-    p.ring(w * 0.55, cy, r, Math.max(1, r - 2), 5);
-    p.circle(w * 0.65, cy, Math.max(1.5, r * 0.4), 7);
+    const r = Math.min(w, h) * (0.26 + 0.14 * (frameIdx % 3) * 0.5);
+    p.ring(w * 0.55, cy, r, Math.max(1, r - 2), 7);
+    p.circle(w * 0.68, cy, Math.max(1.5, r * 0.42), 7);
     return;
   }
 
-  // Boost sprites project rearward (-X) from engine nozzle at right side (+X)
   const scale =
     phaseKind === 'start'
-      ? 0.45 + 0.55 * t
+      ? 0.48 + 0.52 * t
       : phaseKind === 'loop'
-        ? 0.8 + 0.2 * ((frameIdx % 2 === 0) ? 1 : 0)
+        ? 0.78 + 0.22 * (frameIdx % 2 === 0 ? 1 : 0)
         : 0.85 * (1 - t * 0.72);
   const tipX = Math.max(0, w * (1 - scale));
-  const halfH = Math.max(2, h * 0.36 * scale);
+  const halfH = Math.max(2, h * 0.34 * scale);
 
-  if (phaseKind === 'end' && t > 0.6) {
-    // Breaking embers
-    p.circle(w * 0.45, cy, 2, 5);
+  if (phaseKind === 'end' && t > 0.62) {
+    p.circle(w * 0.42, cy, 2, 7);
     p.circle(w * 0.72, cy - 2, 1.5, 7);
-    p.circle(w * 0.68, cy + 2, 1.5, 5);
+    p.circle(w * 0.66, cy + 2, 1.5, 7);
     return;
   }
 
-  // Outer flame cone
-  p.tri(tipX, cy, w - 1, cy - halfH, w - 1, cy + halfH, 5);
-  // Side plasma flicker tongues for superboost
+  // Crisp tapering incandescent jet cone pointing rearward (-X) from nozzle at +X
+  p.tri(tipX, cy, w - 1, cy - halfH, w - 1, cy + halfH, 7);
   if (w >= 28) {
-    p.tri(tipX + 4, cy - halfH * 0.6, w - 1, cy - halfH * 1.15, w - 1, cy - 2, 5);
-    p.tri(tipX + 4, cy + halfH * 0.6, w - 1, cy + halfH * 1.15, w - 1, cy + 2, 5);
+    // Superboost flared shock-diamond side tongues
+    p.tri(tipX + 5, cy - halfH * 0.55, w - 1, cy - halfH * 1.15, w - 1, cy - 1, 7);
+    p.tri(tipX + 5, cy + halfH * 0.55, w - 1, cy + halfH * 1.15, w - 1, cy + 1, 7);
   }
-  // White-hot Mach diamond inner core
-  p.tri(w - (w - tipX) * 0.62, cy, w - 1, cy - halfH * 0.5, w - 1, cy + halfH * 0.5, 7);
 }
 
-function drawMuzzleFlash(p: SpritePainter, frameIdx: number, totalFrames: number): void {
+/**
+ * Punchy muzzle flashes:
+ * - Player flashes: crisp sky-cutout rim (`5`) + blazing white starburst core (`7`)
+ * - Enemy Big Flash (`fx_EBigFlash`): pure blazing white (`7`) cannon flare
+ */
+function drawMuzzleFlash(
+  p: SpritePainter,
+  frameIdx: number,
+  totalFrames: number,
+  pureWhite: boolean,
+): void {
   const w = p.w;
   const h = p.h;
   const cy = h * 0.5;
@@ -1461,38 +874,53 @@ function drawMuzzleFlash(p: SpritePainter, frameIdx: number, totalFrames: number
   const decay = 1 - t * 0.62;
   const len = Math.max(4, w * 0.92 * decay);
   const spread = Math.max(2, h * 0.44 * decay);
+  const rimPal = pureWhite ? 7 : 5;
 
-  // Forward starburst flash cone originating from x=0
-  p.tri(0, cy, len, cy - spread * 0.45, len, cy + spread * 0.45, 5);
-  p.tri(0, cy, len * 0.75, cy - spread, len * 0.45, cy, 5);
-  p.tri(0, cy, len * 0.75, cy + spread, len * 0.45, cy, 5);
-  // Incandescent core flash
-  p.tri(0, cy, len * 0.68, cy - spread * 0.28, len * 0.68, cy + spread * 0.28, 7);
+  // Outer cutout halo / starburst
+  p.tri(0, cy, len, cy - spread * 0.48, len, cy + spread * 0.48, rimPal);
+  p.tri(0, cy, len * 0.76, cy - spread, len * 0.42, cy, rimPal);
+  p.tri(0, cy, len * 0.76, cy + spread, len * 0.42, cy, rimPal);
+  // Incandescent white core
+  p.tri(1, cy, len * 0.72, cy - spread * 0.28, len * 0.72, cy + spread * 0.28, 7);
 }
 
 function drawLaserCharge(p: SpritePainter, frameIdx: number, totalFrames: number): void {
   const w = p.w;
   const h = p.h;
-  const cx = w * 0.42;
+  const cx = w * 0.44;
   const cy = h * 0.5;
   const t = totalFrames > 1 ? frameIdx / (totalFrames - 1) : 0.5;
 
-  // Converging energy sparks pulling inward toward core
-  const sparkDist = (w * 0.46) * (1 - t * 0.72);
+  const sparkDist = w * 0.44 * (1 - t * 0.7);
   for (let i = 0; i < 6; i++) {
     const ang = (i / 6) * Math.PI * 2 + frameIdx * 0.45;
     const sx = cx + Math.cos(ang) * sparkDist;
     const sy = cy + Math.sin(ang) * sparkDist;
-    p.line(sx, sy, cx + Math.cos(ang) * (sparkDist * 0.45), cy + Math.sin(ang) * (sparkDist * 0.45), 5, 1);
-    p.px(sx, sy, 7);
+    p.line(
+      sx,
+      sy,
+      cx + Math.cos(ang) * (sparkDist * 0.45),
+      cy + Math.sin(ang) * (sparkDist * 0.45),
+      7,
+      1,
+    );
   }
-  // Growing core + crisp cross flare
-  const coreR = Math.max(2, w * (0.1 + 0.2 * t));
-  p.circle(cx, cy, coreR, 5);
-  p.circle(cx, cy, coreR * 0.6, 7);
-  const flare = w * (0.18 + 0.28 * t);
+  const coreR = Math.max(2, w * (0.1 + 0.22 * t));
+  p.circle(cx, cy, coreR, 7);
+  const flare = w * (0.18 + 0.3 * t);
   p.hline(cx - flare, cx + flare, cy, 7);
   p.vline(cx, cy - flare, cy + flare, 7);
+}
+
+function drawSkybreakerLogo(p: SpritePainter): void {
+  const w = p.w;
+  const h = p.h;
+  const cx = w * 0.5;
+  p.bevelBox(w * 0.08, h * 0.4, w * 0.84, h * 0.3, 2, 1, 5, 3);
+  p.rect(w * 0.12, h * 0.45, w * 0.76, h * 0.2, 1);
+  p.tri(cx, h * 0.14, cx - w * 0.28, h * 0.4, cx - w * 0.05, h * 0.4, 5);
+  p.tri(cx, h * 0.14, cx + w * 0.28, h * 0.4, cx + w * 0.05, h * 0.4, 5);
+  p.tri(cx, h * 0.23, cx - w * 0.16, h * 0.4, cx + w * 0.16, h * 0.4, 3);
 }
 
 function drawProceduralSpriteFrame(
@@ -1515,7 +943,7 @@ function drawProceduralSpriteFrame(
   const cx = w * 0.5;
   const cy = h * 0.5;
 
-  // --- Player Engines (24x24) ---
+  // --- Player Engines (24x24, pure index 1) ---
   if (name === 'engine_original') {
     p.gridSymY(ENGINE_STANDARD_TOP);
     return;
@@ -1530,15 +958,7 @@ function drawProceduralSpriteFrame(
   }
   if (name === 'engine_underwater') {
     p.gridSymY(ENGINE_UNDERWATER_TOP);
-    // 6-frame animated rear marine propeller
-    const propHalf = [5, 4, 2, 1, 2, 4][frameIdx % 6]!;
-    p.vline(1, 11 - propHalf, 12 + propHalf, 1);
-    p.px(0, 11 - propHalf, 5);
-    p.px(0, 12 + propHalf, 5);
-    if (frameIdx % 2 === 0) {
-      p.px(1, 11, 7);
-      p.px(1, 12, 7);
-    }
+    drawUnderwaterPropeller(p, frameIdx, 1);
     return;
   }
   if (name === 'engine_hover') {
@@ -1546,7 +966,7 @@ function drawProceduralSpriteFrame(
     return;
   }
 
-  // --- Player Bodies (24x24) ---
+  // --- Player Bodies (24x24, pure index 1) ---
   if (name === 'body_original') {
     p.gridSymY(BODY_STANDARD_TOP);
     return;
@@ -1568,7 +988,7 @@ function drawProceduralSpriteFrame(
     return;
   }
 
-  // --- Player Wings / Weapons (24x24) ---
+  // --- Player Wings / Weapons (24x24, pure index 1) ---
   if (name === 'wings_original') {
     p.gridSymY(WINGS_STANDARD_TOP);
     return;
@@ -1590,13 +1010,13 @@ function drawProceduralSpriteFrame(
     return;
   }
 
-  // --- Apex Omega Super-Craft ---
+  // --- Apex Omega Super-Craft (416x300, pure index 1) ---
   if (name === 'urauser') {
     drawApexOmega(p);
     return;
   }
 
-  // --- Enemy Aircraft ---
+  // --- Enemy Aircraft (pure index 2) ---
   if (name === 'fighter_body') {
     p.gridSymY(ENEMY_FIGHTER_BODY_TOP);
     return;
@@ -1638,7 +1058,7 @@ function drawProceduralSpriteFrame(
     return;
   }
 
-  // --- Enemy Ships, Submarines & Sky-Dreadnought Dirigible ---
+  // --- Enemy Ships, Submarines & Sky-Dreadnought Dirigible (pure index 2) ---
   if (name === 'small_boat' || name === 'small_boat_sink') {
     drawSmallBoat(p, name === 'small_boat_sink');
     return;
@@ -1672,45 +1092,50 @@ function drawProceduralSpriteFrame(
     return;
   }
 
-  // --- Background Distant Silhouette Props (palette index 4) ---
+  // --- Distant Background Silhouette Props (index 4 + contrail index 6) ---
   if (name === 'bg_boat') {
-    p.quad(6, h - 1, w - 6, h - 1, w - 2, h - 6, 4, h - 6, 4);
+    p.quad(6, h - 1, w - 6, h - 1, w - 1, h - 6, 3, h - 6, 4);
     p.rect(w * 0.34, h - 10, w * 0.28, 5, 4);
-    p.vline(w * 0.46, 1, h - 10, 4);
+    p.rect(w * 0.4, h - 12, w * 0.14, 3, 4);
+    p.vline(w * 0.47, 0, h - 12, 4);
     return;
   }
   if (name === 'bg_sub') {
-    p.ellipse(cx, h - 4, w * 0.44, 4, 4);
-    p.rect(w * 0.42, 2, 12, h - 6, 4);
-    p.vline(w * 0.47, 0, 3, 4);
+    p.ellipse(cx, h - 3, w * 0.43, 4, 4);
+    p.rect(w * 0.4, 3, 14, h - 6, 4);
+    p.vline(w * 0.46, 0, 4, 4);
     return;
   }
   if (name === 'bg_blimp') {
-    p.ellipse(cx, h * 0.44, w * 0.42, h * 0.32, 4);
-    p.tri(6, 6, 26, h * 0.35, 10, h * 0.5, 4);
-    p.tri(6, h - 10, 26, h * 0.55, 10, h * 0.45, 4);
-    p.rect(cx - 16, h * 0.74, 32, 8, 4);
+    p.ellipse(cx, h * 0.44, w * 0.44, h * 0.33, 4);
+    p.tri(4, 6, 28, h * 0.34, 10, h * 0.5, 4);
+    p.tri(4, h - 10, 28, h * 0.56, 10, h * 0.44, 4);
+    p.rect(cx - 18, h * 0.74, 36, 9, 4);
     return;
   }
   if (name === 'bg_plane' || name === 'bg_jet' || name === 'bg_ace') {
     p.hline(0, w - 1, Math.floor(cy), 4);
-    p.vline(Math.floor(w * 0.45), 0, h - 1, 4);
-    p.px(Math.floor(w * 0.65), Math.floor(cy) - 1, 4);
-    p.px(Math.floor(w * 0.65), Math.floor(cy) + 1, 4);
+    p.vline(Math.floor(w * 0.5), 0, h - 1, 4);
+    if (w >= 6) {
+      p.vline(Math.floor(w * 0.5) - 1, 1, h - 2, 4);
+      p.vline(0, Math.max(0, Math.floor(cy) - 1), Math.min(h - 1, Math.floor(cy) + 1), 4);
+    }
     return;
   }
   if (name === 'bg_jet_trail') {
-    p.rect(0, 0, w, h, 4);
+    // Pale atmospheric contrail (index 6) solid near jet tip, gently feathering out behind
+    for (let x = 0; x < w; x++) {
+      if (x > 64 || (x > 24 && x % 2 === 0) || x % 4 === 0) {
+        p.px(x, 1, 6);
+        if (x > 130) p.px(x, 0, 6);
+      }
+    }
     return;
   }
 
   // --- Environment & Clouds ---
   if (name === 'ocean_line') {
-    p.hline(0, w - 1, 0, 7);
-    for (let x = 0; x < w; x++) {
-      // Rhythmic wave-crest shimmer on lower row
-      p.px(x, 1, ((x >> 3) + (x % 17 < 9 ? 1 : 0)) % 2 === 0 ? 7 : 6);
-    }
+    p.rect(0, 0, w, h, 7);
     return;
   }
   if (name === 'space_clouds_blank') {
@@ -1732,35 +1157,39 @@ function drawProceduralSpriteFrame(
 
   // --- Projectiles ---
   if (name === 'projectile_bullet') {
-    // Crisp high-velocity player tracer bolt
-    const streak = frameIdx % 2 === 0 ? 11 : 9;
-    p.rect(cx - streak, cy - 2, streak + 7, 4, 5);
-    p.rect(cx - 2, cy - 1, 9, 2, 7);
-    p.px(cx + 7, cy, 7);
+    // f0: tick-0 bright muzzle flash orb (28x28); f1: sleek high-velocity tracer (22x22)
+    // Both use sky-cutout rim (5) + blinding white core (7).
+    if (frameIdx === 0) {
+      p.circle(cx, cy, 12.5, 5);
+      p.circle(cx, cy, 9.5, 7);
+    } else {
+      p.ellipse(cx, cy, 10.5, 5.5, 5);
+      p.ellipse(cx + 0.5, cy, 7.5, 3, 7);
+    }
     return;
   }
   if (name === 'projectile_spreadbullet') {
-    // Sharp flak chevron pellet
-    p.tri(w - 1, cy, 3, 1, 5, cy, 5);
-    p.tri(w - 1, cy, 5, cy, 3, h - 2, 5);
-    p.rect(5, cy - 1, 5, 2, 7);
+    // Sharp flak chevron pellet: sky-cutout rim (5) + bright white core (7)
+    p.tri(w - 1, cy, 1, 0, 4, cy, 5);
+    p.tri(w - 1, cy, 4, cy, 1, h - 1, 5);
+    p.tri(w - 2, cy, 4, 2, 6, cy, 7);
+    p.tri(w - 2, cy, 6, cy, 4, h - 3, 7);
     return;
   }
   if (name === 'projectile_laser') {
-    p.rect(0, 0, w, h, 5);
-    p.rect(0, 1, w, Math.max(1, h - 2), 7);
+    p.rect(0, 0, w, h, 7);
     return;
   }
   if (name === 'projectile_elaser') {
-    const coreH = Math.max(2, h - 2 - (frameIdx % 2) * 2);
+    const coreH = Math.max(2, h - 4 + (frameIdx % 2 === 0 ? 2 : 0));
     const pad = Math.floor((h - coreH) / 2);
     p.rect(0, 0, w, h, 2);
-    p.rect(0, pad, w, coreH, frameIdx % 2 === 0 ? 7 : 5);
+    p.rect(0, pad, w, coreH, 7);
     return;
   }
   if (name === 'laser_fade') {
     const fh = Math.max(1, Math.round(h * (1 - frameIdx / Math.max(1, totalFrames))));
-    p.rect(0, Math.floor((h - fh) / 2), w, fh, frameIdx < 2 ? 7 : 5);
+    p.rect(0, Math.floor((h - fh) / 2), w, fh, 7);
     return;
   }
   if (name === 'projectile_homing_missile') {
@@ -1768,13 +1197,13 @@ function drawProceduralSpriteFrame(
     return;
   }
   if (name === 'projectile_plasmabullet' || name === 'projectile_plasmaball') {
-    // Crackling plasma mortar orb with spiky rotating corona
-    const r = Math.min(w, h) * 0.36;
+    // Crackling plasma orb: sky-cutout halo (5) + incandescent white core (7)
+    const r = Math.min(w, h) * 0.4;
     p.circle(cx, cy, r, 5);
-    p.circle(cx, cy, r * 0.62, 7);
+    p.circle(cx, cy, r * 0.68, 7);
     for (let i = 0; i < 6; i++) {
-      const ang = (i / 6) * Math.PI * 2 + frameIdx * 0.55;
-      p.line(cx, cy, cx + Math.cos(ang) * (r * 1.3), cy + Math.sin(ang) * (r * 1.3), 7, 1);
+      const ang = (i / 6) * Math.PI * 2 + frameIdx * 0.6;
+      p.line(cx, cy, cx + Math.cos(ang) * (r * 1.15), cy + Math.sin(ang) * (r * 1.15), 7, 1);
     }
     return;
   }
@@ -1783,20 +1212,16 @@ function drawProceduralSpriteFrame(
     return;
   }
   if (name === 'projectile_artillery_bullet') {
-    p.ellipse(cx, cy, w * 0.44, h * 0.36, 2);
-    p.tri(w - 1, cy, cx + 1, 1, cx + 1, h - 2, 7);
-    p.hline(3, cx, cy, 5);
+    // Heavy naval artillery shell: bold enemy silhouette (2) + bright tracer core (7)
+    p.ellipse(cx, cy, w * 0.45, h * 0.42, 2);
+    p.ellipse(cx + 2, cy, w * 0.28, h * 0.22, 7);
     return;
   }
   if (name === 'projectile_ebullet') {
-    // High-contrast enemy energy orb (bold dark ring + white-hot center + cardinal pips)
-    const r = frameIdx % 2 === 0 ? 6.5 : 5.5;
+    // Iconic high-contrast enemy bullet: bold dark (2) ring + bright white (7) center
+    const r = frameIdx % 2 === 0 ? 7.5 : 6.5;
     p.circle(cx, cy, r, 2);
-    p.circle(cx, cy, r - 2, 7);
-    p.px(cx, cy - r - 1, 2);
-    p.px(cx, cy + r + 1, 2);
-    p.px(cx - r - 1, cy, 2);
-    p.px(cx + r + 1, cy, 2);
+    p.circle(cx, cy, r - 2.2, 7);
     return;
   }
   if (name === 'laser_charge') {
@@ -1804,12 +1229,17 @@ function drawProceduralSpriteFrame(
     return;
   }
 
-  // --- Boost & Thruster FX ---
+  // --- Boost & Thruster FX (pure crisp 7) ---
   if (name === 'fx_booststart' || name === 'fx_superbooststart' || name === 'fx_aceboost_start') {
     drawBoostFlame(p, frameIdx, totalFrames, 'start');
     return;
   }
-  if (name === 'fx_boostloop' || name === 'fx_superboostloop' || name === 'fx_aceboost_loop' || name === 'fx_jetboost') {
+  if (
+    name === 'fx_boostloop' ||
+    name === 'fx_superboostloop' ||
+    name === 'fx_aceboost_loop' ||
+    name === 'fx_jetboost'
+  ) {
     drawBoostFlame(p, frameIdx, totalFrames, 'loop');
     return;
   }
@@ -1822,11 +1252,10 @@ function drawProceduralSpriteFrame(
     return;
   }
   if (name === 'fx_bigboostcircle') {
-    // Expanding sonic-boom shock ring
     const t = totalFrames > 1 ? frameIdx / (totalFrames - 1) : 0.4;
-    const rx = Math.max(2, w * (0.2 + 0.28 * t));
-    const ry = Math.max(4, h * (0.24 + 0.24 * t));
-    p.ellipse(cx, cy, rx, ry, frameIdx < 2 ? 7 : 5);
+    const rx = Math.max(2, w * (0.22 + 0.26 * t));
+    const ry = Math.max(4, h * (0.22 + 0.25 * t));
+    p.ellipse(cx, cy, rx, ry, 7);
     p.ellipse(cx, cy, Math.max(0, rx - 3), Math.max(0, ry - 4), 0);
     return;
   }
@@ -1836,10 +1265,13 @@ function drawProceduralSpriteFrame(
     name === 'fx_fire_flash' ||
     name === 'fx_spread_fire_flash' ||
     name === 'fx_missile_fire_flash' ||
-    name === 'fx_plashma_flash' ||
-    name === 'fx_ebigflash'
+    name === 'fx_plashma_flash'
   ) {
-    drawMuzzleFlash(p, frameIdx, totalFrames);
+    drawMuzzleFlash(p, frameIdx, totalFrames, false);
+    return;
+  }
+  if (name === 'fx_ebigflash') {
+    drawMuzzleFlash(p, frameIdx, totalFrames, true);
     return;
   }
 
@@ -1848,8 +1280,12 @@ function drawProceduralSpriteFrame(
     drawExplosion(p, frameIdx, totalFrames);
     return;
   }
-  if (name.startsWith('fx_smoke') || name === 'fx_poof' || name === 'fx_missile_trail') {
-    drawSmokePuff(p, frameIdx, totalFrames);
+  if (name.startsWith('fx_smoke')) {
+    drawSmokePuff(p, frameIdx, totalFrames, 3);
+    return;
+  }
+  if (name === 'fx_poof' || name === 'fx_missile_trail') {
+    drawSmokePuff(p, frameIdx, totalFrames, 7);
     return;
   }
   if (
@@ -1864,21 +1300,43 @@ function drawProceduralSpriteFrame(
     drawWaterSplash(p, frameIdx, totalFrames);
     return;
   }
-  if (name === 'fx_bullet_hit' || name === 'fx_player_hit') {
-    // Crisp directional X-spark impact burst
+  if (name === 'fx_bullet_hit') {
     const t = totalFrames > 1 ? frameIdx / (totalFrames - 1) : 0;
-    const arm = Math.min(w, h) * (0.22 + 0.24 * (1 - t * 0.4));
-    p.line(cx - arm, cy - arm, cx + arm, cy + arm, 7, 1);
-    p.line(cx - arm, cy + arm, cx + arm, cy - arm, 7, 1);
+    const arm = Math.min(w, h) * (0.24 + 0.22 * (1 - t * 0.4));
+    p.line(cx - arm, cy - arm, cx + arm, cy + arm, 7, 2);
+    p.line(cx - arm, cy + arm, cx + arm, cy - arm, 7, 2);
     if (frameIdx === 0) {
       p.circle(cx, cy, Math.max(2, arm * 0.45), 7);
     }
     return;
   }
-  if (name === 'fx_ebullet_fade' || name === 'fx_spread_fade' || name === 'fx_plasma_fade') {
+  if (name === 'fx_player_hit') {
+    // Signature impact inversion: f0 solid dark (1) disc -> f1 solid white (7) disc -> f2 crisp 4-point star (7)
+    if (frameIdx === 0) {
+      p.circle(cx, cy, Math.min(w, h) * 0.45, 1);
+    } else if (frameIdx === 1) {
+      p.circle(cx, cy, Math.min(w, h) * 0.44, 7);
+    } else {
+      p.tri(cx, 1, cx - 3, cy, cx + 3, cy, 7);
+      p.tri(cx, h - 2, cx - 3, cy, cx + 3, cy, 7);
+      p.tri(1, cy, cx, cy - 3, cx, cy + 3, 7);
+      p.tri(w - 2, cy, cx, cy - 3, cx, cy + 3, 7);
+    }
+    return;
+  }
+  if (name === 'fx_ebullet_fade') {
     const t = totalFrames > 1 ? frameIdx / (totalFrames - 1) : 0.4;
-    const r = Math.max(1.5, Math.min(w, h) * (0.38 * (1 - t * 0.55)));
-    p.ring(cx, cy, r, Math.max(0, r - 2), t < 0.5 ? 7 : 5);
+    const r = Math.max(2, 7.5 * (1 - t * 0.55));
+    p.circle(cx, cy, r, 2);
+    if (r > 3) p.circle(cx, cy, r - 2, 7);
+    return;
+  }
+  if (name === 'fx_spread_fade' || name === 'fx_plasma_fade') {
+    const t = totalFrames > 1 ? frameIdx / (totalFrames - 1) : 0.4;
+    const r = Math.max(1.5, Math.min(w, h) * (0.4 * (1 - t * 0.55)));
+    p.circle(cx, cy, r, 5);
+    p.circle(cx, cy, Math.max(1, r * 0.6), 7);
+    if (t > 0.5) p.circle(cx, cy, r * 0.35, 0);
     return;
   }
   if (name === 'fx_drip') {
@@ -1886,37 +1344,28 @@ function drawProceduralSpriteFrame(
     return;
   }
   if (name === 'fx_repair') {
-    // Twinkling repair '+' sparkle
-    p.hline(0, w - 1, Math.floor(cy), 7);
-    p.vline(Math.floor(cx), 0, h - 1, 7);
+    // Twinkling repair '+' sparkle (1 + 7 matching sheet1grey)
+    p.hline(0, w - 1, Math.floor(cy), 1);
+    p.vline(Math.floor(cx), 0, h - 1, 1);
+    p.px(Math.floor(cx), Math.floor(cy), 7);
     return;
   }
   if (name === 'skybreaker_logo' || name === 'luftrausers_logo') {
-    drawSkybreakerCrest(p);
+    drawSkybreakerLogo(p);
+    return;
+  }
+  if (name === 'credit_heads') {
+    p.circle(cx, cy, Math.min(w, h) * 0.34, 3);
+    p.rect(cx - w * 0.22, cy - h * 0.1, w * 0.44, h * 0.14, 1);
     return;
   }
 
-  // Small 1..4px FX
   if (w <= 4 || h <= 4) {
     p.rect(0, 0, w, h, pal);
     return;
   }
 
-  // Fallback crisp emblem
   p.ellipse(cx, cy, Math.max(1, w * 0.36), Math.max(1, h * 0.36), pal);
-}
-
-function drawSkybreakerCrest(p: SpritePainter): void {
-  const w = p.w;
-  const h = p.h;
-  const cx = w * 0.5;
-  // Clean original winged chevron emblem & framed nameplate banner
-  p.rect(w * 0.08, h * 0.38, w * 0.84, h * 0.34, 7);
-  p.rect(w * 0.11, h * 0.42, w * 0.78, h * 0.26, 1);
-  // Swept twin emblem wings rising above banner
-  p.tri(cx, h * 0.14, cx - w * 0.26, h * 0.38, cx - w * 0.05, h * 0.38, 7);
-  p.tri(cx, h * 0.14, cx + w * 0.26, h * 0.38, cx + w * 0.05, h * 0.38, 7);
-  p.tri(cx, h * 0.22, cx - w * 0.14, h * 0.38, cx + w * 0.14, h * 0.38, 5);
 }
 
 /**
@@ -1944,65 +1393,12 @@ export function createProceduralSpritesTexture(atlas: SpriteAtlasSpec): DecodedT
 }
 
 /**
- * Generates a clean-room 2048x1024 RGBA8 menu texture (`sheet2grey.png` replacement)
- * conforming to `menusprites.json` coordinates and 8-level palette indices.
- */
-export function createProceduralMenuTexture(atlas?: SpriteAtlasSpec): DecodedTexture {
-  const resolvedAtlas =
-    atlas ?? normalizeSpriteAtlas('menusprites', VANILLA_MENU_SPRITES_RAW, 2048, 1024);
-  const width = resolvedAtlas.width || 2048;
-  const height = resolvedAtlas.height || 1024;
-  const rgba = new Uint8Array(width * height * 4);
-
-  for (const entry of Object.values(resolvedAtlas.sprites)) {
-    const [w, h] = entry.size;
-    if (w <= 0 || h <= 0) {
-      continue;
-    }
-    entry.subs.forEach((frame, idx) => {
-      const p = new SpritePainter(rgba, width, height, frame.x, frame.y, w, h);
-      if (entry.name === 'main_colors') {
-        p.rect(0, 0, 1, 1, Math.min(7, idx + 1));
-        return;
-      }
-      if (w <= 2 || h <= 2) {
-        p.rect(0, 0, w, h, 7);
-        return;
-      }
-      if (
-        entry.name.includes('panel') ||
-        entry.name.includes('frame') ||
-        entry.name.includes('machine') ||
-        entry.name.includes('scr_')
-      ) {
-        p.rect(0, 0, w, h, 1);
-        p.rect(0, 0, w, 2, 7);
-        p.rect(0, h - 2, w, 2, 7);
-        p.rect(0, 0, 2, h, 7);
-        p.rect(w - 2, 0, 2, h, 7);
-        return;
-      }
-      if (entry.name === 'skybreaker_logo' || entry.name === 'luftrausers_logo') {
-        drawSkybreakerCrest(p);
-        return;
-      }
-      p.rect(1, 1, Math.max(1, w - 2), Math.max(1, h - 2), 6);
-      p.circle(w * 0.5, h * 0.5, Math.max(1, Math.min(w, h) * 0.28), 7);
-    });
-  }
-
-  return {
-    name: 'menusprites',
-    width,
-    height,
-    rgba,
-    source: 'procedural',
-  };
-}
-
-/**
- * Generates a clean-room 2048x1024 RGBA8 16-frame thermobaric mushroom cloud texture
- * matching `nukesprites.json` frame offsets.
+ * Generates a clean-room 2048x1024 RGBA8 16-frame dramatic thermobaric skull-cloud
+ * detonation texture matching `nukesprites.json` frame offsets in authentic palette index `1`.
+ *
+ * Strictly protects `x === 0` and `y === 0` transparent border pixels so negative
+ * frame offsets (e.g. `[-138, -160]`) clamp cleanly to transparent under `GL_CLAMP_TO_EDGE`,
+ * and constrains each frame's silhouette to its non-overlapping packed region.
  */
 export function createProceduralNukeTexture(atlas?: SpriteAtlasSpec): DecodedTexture {
   const resolvedAtlas =
@@ -2017,32 +1413,79 @@ export function createProceduralNukeTexture(atlas?: SpriteAtlasSpec): DecodedTex
 
   const [fw, fh] = entry.size;
   const total = Math.max(1, entry.subs.length);
+
   entry.subs.forEach((frame, idx) => {
-    const p = new SpritePainter(rgba, width, height, frame.x, frame.y, fw, fh);
-    const progress = (idx + 1) / total;
-    const cx = fw * 0.5;
-    const baseY = fh * 0.86;
-    const stemH = fh * (0.24 + 0.56 * progress);
-    const stemW = fw * (0.12 + 0.08 * progress);
-    const capY = baseY - stemH;
-    const capRx = fw * (0.18 + 0.29 * Math.sin(progress * Math.PI * 0.85));
-    const capRy = fh * (0.12 + 0.16 * progress);
+    const p = new SpritePainter(rgba, width, height, frame.x, frame.y, fw, fh, true);
+    const t = idx / Math.max(1, total - 1);
+    const cx = fw * 0.52;
+    const baseY = fh * 0.84;
 
-    // Expanding ground shockwave skirt
-    p.ellipse(cx, baseY, stemW * (1.5 + progress), 14 + progress * 10, 6);
-    p.ellipse(cx, baseY - 2, stemW * (1.1 + progress * 0.5), 8, 7);
+    if (idx <= 5) {
+      // Phase 1 (frames 0..5): Explosive dark-ink mushroom/skull eruption rising cleanly inside packed sub-boxes
+      const grow = (idx + 1) / 6;
+      const crownY = Math.max(60 - Math.min(0, frame.y) + 32, baseY - fh * (0.28 + 0.34 * grow));
+      const crownR = 26 + grow * 42;
+      const stemW = 14 + grow * 24;
 
-    // Rising stem column with bright incandescent core
-    p.rect(cx - stemW * 0.5, capY, stemW, stemH, 6);
-    p.rect(cx - stemW * 0.22, capY + 6, stemW * 0.44, stemH - 6, 7);
+      // Ground shock skirt
+      p.ellipse(cx, baseY - 4, stemW * 1.45, 10 + grow * 10, 1);
+      // Rising blast column
+      p.rect(cx - stemW * 0.5, crownY, stemW, baseY - crownY, 1);
+      // Billowing cranium-shaped detonation crown
+      p.circle(cx, crownY, crownR, 1);
+      p.circle(cx - crownR * 0.55, crownY + crownR * 0.15, crownR * 0.58, 1);
+      p.circle(cx + crownR * 0.55, crownY + crownR * 0.15, crownR * 0.58, 1);
+      // Dramatic screaming skull eye/jaw cutouts emerging by frame 2+
+      if (idx >= 2) {
+        const eyeR = Math.max(4, crownR * 0.22);
+        p.circle(cx - crownR * 0.34, crownY + 2, eyeR, 0);
+        p.circle(cx + crownR * 0.34, crownY + 2, eyeR, 0);
+        p.ellipse(cx, crownY + crownR * 0.45, crownR * 0.26, crownR * 0.3, 0);
+      }
+      return;
+    }
 
-    // Billowing toroidal crown cap
-    p.ellipse(cx, capY, capRx, capRy, 7);
-    p.ellipse(cx - capRx * 0.45, capY + capRy * 0.25, capRx * 0.5, capRy * 0.55, 6);
-    p.ellipse(cx + capRx * 0.45, capY + capRy * 0.25, capRx * 0.5, capRy * 0.55, 6);
-    p.ellipse(cx, capY - capRy * 0.15, capRx * 0.65, capRy * 0.52, 7);
-    if (progress < 0.7) {
-      p.ellipse(cx, capY + capRy * 0.05, capRx * 0.35, capRy * 0.28, 5);
+    if (idx <= 10) {
+      // Phase 2 (frames 6..10): Massive towering screaming skull-plume roaring outward
+      const u = (idx - 6) / 4;
+      const crownY = fh * (0.34 - u * 0.07);
+      const crownR = 64 + u * 22;
+      const stemW = 46 * (1 - u * 0.25);
+
+      // Ground blast wave
+      p.ellipse(cx, baseY, 72 + u * 36, 15, 1);
+      // Jaw / neck blast column
+      p.rect(cx - stemW * 0.5, crownY + crownR * 0.55, stemW, baseY - (crownY + crownR * 0.55), 1);
+      // Cranium & cheekbone billows
+      p.circle(cx, crownY, crownR, 1);
+      p.ellipse(cx - crownR * 0.58, crownY + crownR * 0.24, crownR * 0.44, crownR * 0.36, 1);
+      p.ellipse(cx + crownR * 0.58, crownY + crownR * 0.24, crownR * 0.44, crownR * 0.36, 1);
+      // Strictly separated menacing skull eye sockets, nasal cavity & screaming jaw
+      const eyeR = 14 + u * 4;
+      p.ellipse(cx - crownR * 0.42, crownY - 2, eyeR * 1.15, eyeR * 0.9, 0);
+      p.ellipse(cx + crownR * 0.42, crownY - 2, eyeR * 1.15, eyeR * 0.9, 0);
+      p.tri(cx, crownY + 8, cx - 8, crownY + 28, cx + 8, crownY + 28, 0);
+      p.ellipse(cx, crownY + crownR * 0.72, 16 + u * 6, 20 + u * 8, 0);
+      // Jagged teeth bars along upper jaw rim
+      for (const tx of [-12, -4, 4, 12]) {
+        p.rect(cx + tx - 1, crownY + crownR * 0.52, 3, 9, 1);
+      }
+      return;
+    }
+
+    // Phase 3 (frames 11..15): Dissipating ring of drifting dark ash tendrils
+    const u = (idx - 11) / Math.max(1, total - 12);
+    const puffs = Math.max(4, Math.round(12 * (1 - u * 0.65)));
+    const ringR = 85 + u * 45;
+    for (let i = 0; i < puffs; i++) {
+      const ang = (i / puffs) * Math.PI * 2 + idx * 0.4;
+      const px = cx + Math.cos(ang) * ringR;
+      const py = fh * 0.42 + Math.sin(ang) * (ringR * 0.85);
+      const pr = Math.max(3, (22 - u * 16) * (0.7 + 0.4 * Math.sin(i * 2.1)));
+      p.circle(px, py, pr, 1);
+    }
+    if (t < 0.94) {
+      p.ellipse(cx, baseY - 6, 48 * (1 - u * 0.5), 6, 1);
     }
   });
 
@@ -2056,219 +1499,10 @@ export function createProceduralNukeTexture(atlas?: SpriteAtlasSpec): DecodedTex
 }
 
 /**
- * Resolves the inclusive source coordinate range `[start, end]` for a destination pixel.
- * Downsampled axes (`destSize < span`) use bin-OR coverage so thin 1px stems are never skipped;
- * upsampled or 1:1 axes preserve crisp endpoint-inclusive point sampling.
- */
-function resolveAxisSampleRange(
-  destIndex: number,
-  destSize: number,
-  minSrc: number,
-  maxSrc: number,
-): [number, number] {
-  const span = maxSrc - minSrc + 1;
-  if (destSize < span) {
-    const startOffset = Math.floor((destIndex * span) / destSize);
-    const endOffset = Math.max(
-      startOffset,
-      Math.ceil(((destIndex + 1) * span) / destSize) - 1,
-    );
-    return [minSrc + startOffset, minSrc + endOffset];
-  }
-  const src =
-    destSize <= 1
-      ? minSrc
-      : minSrc + Math.round((destIndex / (destSize - 1)) * (maxSrc - minSrc));
-  return [src, src];
-}
-
-/**
- * Generates a crisp RGBA8 procedural bitmap font texture matching every glyph box
- * in `font.glyphs` (used both in procedural fallback mode and when Steam's `fnt*_0.png`
- * files are `PCP\0` blobs).
- */
-export function createProceduralFontTexture(font: BitmapFontSpec): DecodedTexture {
-  const width = Math.max(1, font.scaleW);
-  const height = Math.max(1, font.scaleH);
-  const rgba = new Uint8Array(width * height * 4);
-
-  for (const glyph of Object.values(font.glyphs)) {
-    if (glyph.width <= 0 || glyph.height <= 0 || glyph.id <= 32) {
-      continue;
-    }
-    const bitmap = GLYPHS_5X7[glyph.id] ?? GLYPHS_5X7[63]!; // '?' fallback for extended glyphs
-    let minCol = 5;
-    let maxCol = -1;
-    let minRow = 7;
-    let maxRow = -1;
-    for (let row = 0; row < 7; row++) {
-      const rowBits = bitmap[row] ?? 0;
-      if (rowBits === 0) continue;
-      for (let col = 0; col < 5; col++) {
-        if ((rowBits & (1 << (4 - col))) !== 0) {
-          if (col < minCol) minCol = col;
-          if (col > maxCol) maxCol = col;
-          if (row < minRow) minRow = row;
-          if (row > maxRow) maxRow = row;
-        }
-      }
-    }
-    if (maxCol < minCol || maxRow < minRow) {
-      continue;
-    }
-
-    for (let gy = 0; gy < glyph.height; gy++) {
-      const [rStart, rEnd] = resolveAxisSampleRange(gy, glyph.height, minRow, maxRow);
-      for (let gx = 0; gx < glyph.width; gx++) {
-        const [cStart, cEnd] = resolveAxisSampleRange(gx, glyph.width, minCol, maxCol);
-        let lit = false;
-        for (let r = rStart; r <= rEnd && !lit; r++) {
-          const rowBits = bitmap[r] ?? 0;
-          for (let c = cStart; c <= cEnd; c++) {
-            if ((rowBits & (1 << (4 - c))) !== 0) {
-              lit = true;
-              break;
-            }
-          }
-        }
-        if (lit) {
-          setPixel(rgba, width, height, glyph.x + gx, glyph.y + gy, 255, 255, 255, 255);
-        }
-      }
-    }
-  }
-
-  return {
-    name: font.name,
-    width,
-    height,
-    rgba,
-    source: 'procedural',
-  };
-}
-
-function computeGlyphBounds(bitmap: readonly number[]): {
-  minCol: number;
-  maxCol: number;
-  minRow: number;
-  maxRow: number;
-} | null {
-  let minCol = 5;
-  let maxCol = -1;
-  let minRow = 7;
-  let maxRow = -1;
-  for (let row = 0; row < 7; row++) {
-    const rowBits = bitmap[row] ?? 0;
-    if (rowBits === 0) continue;
-    for (let col = 0; col < 5; col++) {
-      if ((rowBits & (1 << (4 - col))) !== 0) {
-        if (col < minCol) minCol = col;
-        if (col > maxCol) maxCol = col;
-        if (row < minRow) minRow = row;
-        if (row > maxRow) maxRow = row;
-      }
-    }
-  }
-  if (maxCol < minCol || maxRow < minRow) {
-    return null;
-  }
-  return { minCol, maxCol, minRow, maxRow };
-}
-
-function createProceduralFontSpec(
-  name: string,
-  face: string,
-  size: number,
-  lineHeight: number,
-  base: number,
-  scaleW: number,
-  scaleH: number,
-): BitmapFontSpec {
-  const glyphs: Record<number, BitmapFontGlyph> = {};
-  const cellW = Math.max(5, Math.round(size * 0.55));
-  const cellH = Math.max(7, Math.round(size * 0.72));
-  const cols = Math.max(1, Math.floor(scaleW / (cellW + 1)));
-  const scaleX = cellW / 5;
-  const scaleY = cellH / 7;
-  const baseOffsetY = Math.max(0, Math.floor((lineHeight - cellH) * 0.5));
-  const advanceGap = Math.max(1, Math.round(size * 0.1));
-
-  for (let code = 32; code <= 126; code++) {
-    const idx = code - 32;
-    const col = idx % cols;
-    const row = Math.floor(idx / cols);
-    const gx = col * (cellW + 1);
-    const gy = row * (cellH + 1);
-
-    if (code === 32) {
-      const spaceW = Math.max(2, Math.floor(cellW * 0.4));
-      glyphs[code] = {
-        id: code,
-        x: gx,
-        y: gy,
-        width: spaceW,
-        height: 1,
-        xoffset: 0,
-        yoffset: baseOffsetY + cellH,
-        xadvance: Math.max(3, Math.round(cellW * 0.55)),
-      };
-      continue;
-    }
-
-    const bitmap = GLYPHS_5X7[code] ?? GLYPHS_5X7[63]!;
-    const bounds = computeGlyphBounds(bitmap);
-    if (!bounds) {
-      glyphs[code] = {
-        id: code,
-        x: gx,
-        y: gy,
-        width: 1,
-        height: 1,
-        xoffset: 0,
-        yoffset: baseOffsetY,
-        xadvance: advanceGap + 1,
-      };
-      continue;
-    }
-
-    // Derive tight AngelCode-style glyph box & vertical offset directly from the 5x7 lit bounds
-    // so short/narrow glyphs ('-', ',', '.', ':', '!', '(', ')', '~', lowercase) keep exact proportions.
-    const spanCols = bounds.maxCol - bounds.minCol + 1;
-    const spanRows = bounds.maxRow - bounds.minRow + 1;
-    const w = Math.min(cellW, Math.max(1, Math.round(spanCols * scaleX)));
-    const h = Math.min(cellH, Math.max(1, Math.round(spanRows * scaleY)));
-    const yoffset = baseOffsetY + Math.round(bounds.minRow * scaleY);
-
-    glyphs[code] = {
-      id: code,
-      x: gx,
-      y: gy,
-      width: w,
-      height: h,
-      xoffset: 0,
-      yoffset,
-      xadvance: w + advanceGap,
-    };
-  }
-
-  return {
-    name,
-    face,
-    size,
-    lineHeight,
-    base,
-    scaleW,
-    scaleH,
-    pageFile: `${name}_0.png`,
-    glyphs,
-  };
-}
-
-/**
  * Creates a complete clean-room KRUNKED SKYBREAKER procedural asset bundle
  * (`vaultSource: 'procedural-fallback'`) with original aircraft callsigns,
  * handcrafted procedural pixel art, 90 missions, 2048x1024 RGBA8 atlases,
- * and procedural bitmap fonts.
+ * and bold procedural bitmap fonts.
  */
 export function createProceduralFallbackBundle(): VaultAssetBundle {
   const spritesAtlas = normalizeSpriteAtlas('sprites', VANILLA_SPRITES_RAW, 2048, 1024);
