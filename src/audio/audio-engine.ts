@@ -261,7 +261,7 @@ export class AudioEngine implements IAudioEngine {
     const resolution = resolveActiveStems(
       snapshot.phase,
       snapshot.paused,
-      snapshot.player.loadout,
+      healthSource.loadout,
       healthRatio,
     );
 
