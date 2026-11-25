@@ -130,6 +130,176 @@ function rgbaToCss(c: RgbaTuple): string {
   return `rgba(${r},${g},${b},${a})`;
 }
 
+const UPRIGHT_HULL_KINDS = new Set<EnemyEntity['kind']>([
+  'Boat',
+  'BigBoat',
+  'Submarine',
+  'AceMarine',
+  'Blimp',
+]);
+
+/**
+ * Resolves sprite rotation and horizontal flip for enemy entities.
+ * Naval hulls and blimps remain upright (`angleRad = 0`) and mirror via `scaleX`
+ * so left-moving hulls never rotate 180 deg upside-down below the sea clip line.
+ */
+export function resolveEnemyRenderTransform(
+  enemy: Pick<EnemyEntity, 'kind' | 'vx' | 'angleDeg'>,
+): { angleRad: number; scaleX: number; scaleY: number } {
+  if (UPRIGHT_HULL_KINDS.has(enemy.kind)) {
+    const scaleX =
+      enemy.vx < 0
+        ? -1
+        : enemy.vx > 0
+          ? 1
+          : Math.cos(enemy.angleDeg * DEG_TO_RAD) < 0
+            ? -1
+            : 1;
+    return { angleRad: 0, scaleX, scaleY: 1 };
+  }
+  return {
+    angleRad: enemy.angleDeg * DEG_TO_RAD,
+    scaleX: 1,
+    scaleY: 1,
+  };
+}
+
+function sanitizeControlChars(text: string): string {
+  return text.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Splits text on newlines and wraps each paragraph at word boundaries to fit `maxWidth`.
+ * Strips control characters so bitmap fonts never render `?` fallback glyphs.
+ */
+export function wrapBitmapTextLines(
+  font: BitmapFontSpec,
+  text: string,
+  maxWidth: number,
+  scale = 1,
+): string[] {
+  const paragraphs = text.split(/\r?\n/);
+  const lines: string[] = [];
+
+  for (const rawParagraph of paragraphs) {
+    const cleaned = sanitizeControlChars(rawParagraph);
+    if (!cleaned) continue;
+
+    const words = cleaned.split(' ');
+    let current = '';
+    for (const word of words) {
+      const candidate = current ? `${current} ${word}` : word;
+      if (measureBitmapText(font, candidate, scale).width <= maxWidth) {
+        current = candidate;
+      } else {
+        if (current) {
+          lines.push(current);
+        }
+        current = word;
+      }
+    }
+    if (current) {
+      lines.push(current);
+    }
+  }
+
+  return lines;
+}
+
+/**
+ * Lays out Hangar part description text into up to `maxLines` crisp lines inside `maxWidth`.
+ */
+export function layoutHangarDescription(
+  font: BitmapFontSpec,
+  text: string,
+  maxWidth = 250,
+  maxLines = 3,
+): { lines: Array<{ text: string; scale: number }> } {
+  const upper = text.toUpperCase();
+  let chosenScale = 1;
+  let wrapped = wrapBitmapTextLines(font, upper, maxWidth, 1);
+
+  if (wrapped.length > maxLines) {
+    for (const candidateScale of [0.9, 0.85, 0.8, 0.75]) {
+      const attempt = wrapBitmapTextLines(font, upper, maxWidth, candidateScale);
+      chosenScale = candidateScale;
+      wrapped = attempt;
+      if (attempt.length <= maxLines) {
+        break;
+      }
+    }
+  }
+
+  const clamped = wrapped.slice(0, maxLines).map((line) => {
+    const rawW = measureBitmapText(font, line, chosenScale).width;
+    const lineScale =
+      rawW > maxWidth && rawW > 0
+        ? chosenScale * (maxWidth / rawW)
+        : chosenScale;
+    return { text: line, scale: lineScale };
+  });
+
+  return { lines: clamped };
+}
+
+/**
+ * Fits a Mission card description inside `maxWidth` across 1 or 2 lines above the progress bar
+ * without truncating characters.
+ */
+export function layoutMissionCardDescription(
+  font: BitmapFontSpec,
+  text: string,
+  maxWidth = 224,
+): { lines: string[]; scale: number } {
+  const clean = sanitizeControlChars(text).toUpperCase();
+  if (!clean) {
+    return { lines: [], scale: 1 };
+  }
+
+  const fitsAll = (lines: readonly string[], scale: number): boolean =>
+    lines.length <= 2 &&
+    lines.every((line) => measureBitmapText(font, line, scale).width <= maxWidth);
+
+  const atBase = wrapBitmapTextLines(font, clean, maxWidth, 1);
+  if (fitsAll(atBase, 1)) {
+    return { lines: atBase, scale: 1 };
+  }
+
+  for (const candidateScale of [0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6]) {
+    const attempt = wrapBitmapTextLines(font, clean, maxWidth, candidateScale);
+    if (fitsAll(attempt, candidateScale)) {
+      return { lines: attempt, scale: candidateScale };
+    }
+  }
+
+  // Last-resort balanced 2-line split scaled cleanly to fit maxWidth
+  const words = clean.split(' ');
+  if (words.length === 1) {
+    const w = Math.max(1, measureBitmapText(font, clean, 1).width);
+    return { lines: [clean], scale: Math.min(1, maxWidth / w) };
+  }
+
+  let bestLines = [clean];
+  let bestMaxWidth = measureBitmapText(font, clean, 1).width;
+  for (let split = 1; split < words.length; split++) {
+    const l1 = words.slice(0, split).join(' ');
+    const l2 = words.slice(split).join(' ');
+    const maxW = Math.max(
+      measureBitmapText(font, l1, 1).width,
+      measureBitmapText(font, l2, 1).width,
+    );
+    if (maxW < bestMaxWidth) {
+      bestMaxWidth = maxW;
+      bestLines = [l1, l2];
+    }
+  }
+
+  return {
+    lines: bestLines,
+    scale: Math.min(1, maxWidth / Math.max(1, bestMaxWidth)),
+  };
+}
+
 export class WebGL2Renderer implements IRenderer {
   private canvas: HTMLCanvasElement | null = null;
   private gl: WebGL2RenderingContext | null = null;
@@ -919,7 +1089,8 @@ export class WebGL2Renderer implements IRenderer {
       Math.hypot(enemy.x - prevEnemy.x, enemy.y - prevEnemy.y) < 120;
     const ex = canInterp ? lerp(prevEnemy.x, enemy.x, alpha) : enemy.x;
     const ey = canInterp ? lerp(prevEnemy.y, enemy.y, alpha) : enemy.y;
-    const angleRad = enemy.angleDeg * DEG_TO_RAD;
+    const hullTransform = resolveEnemyRenderTransform(enemy);
+    const angleRad = hullTransform.angleRad;
     const flash = enemy.flashTicks > 0 ? 1 : 0;
 
     const isSub = enemy.kind === 'Submarine' || enemy.kind === 'AceMarine';
@@ -935,6 +1106,8 @@ export class WebGL2Renderer implements IRenderer {
       fallbackW: number,
       fallbackH: number,
       color: RgbaTuple,
+      scaleX = 1,
+      scaleY = 1,
     ): void => {
       const entry = spriteName ? sprites[spriteName] : undefined;
       if (entry) {
@@ -944,8 +1117,8 @@ export class WebGL2Renderer implements IRenderer {
           x: px,
           y: py,
           angleRad: rotRad,
-          scaleX: 1,
-          scaleY: 1,
+          scaleX,
+          scaleY,
           depth: 0.45,
           flash,
           clipSea,
@@ -974,7 +1147,18 @@ export class WebGL2Renderer implements IRenderer {
         enemy.state === 'sinking' || enemy.state === 'falling'
           ? 'blimp_die'
           : enemy.spriteMain || 'blimp';
-      pushOrFallback(bodyName, ex, ey, angleRad, 0, 260, 96, this.activePalette.colors[2]);
+      pushOrFallback(
+        bodyName,
+        ex,
+        ey,
+        hullTransform.angleRad,
+        0,
+        260,
+        96,
+        this.activePalette.colors[2],
+        hullTransform.scaleX,
+        hullTransform.scaleY,
+      );
       const prop = sprites['blimp_anim'];
       if (prop && enemy.state !== 'sinking' && enemy.state !== 'falling') {
         const inst: SpriteInstance = {
@@ -982,9 +1166,9 @@ export class WebGL2Renderer implements IRenderer {
           frame: tick >> 1,
           x: ex,
           y: ey,
-          angleRad,
-          scaleX: 1,
-          scaleY: 1,
+          angleRad: hullTransform.angleRad,
+          scaleX: hullTransform.scaleX,
+          scaleY: hullTransform.scaleY,
           depth: 0.42,
           flash,
           clipSea: true,
@@ -1017,11 +1201,13 @@ export class WebGL2Renderer implements IRenderer {
         bodyName,
         ex,
         ey,
-        angleRad,
+        hullTransform.angleRad,
         0,
         isBig ? 220 : 56,
         isBig ? 42 : 16,
         this.activePalette.colors[2],
+        hullTransform.scaleX,
+        hullTransform.scaleY,
       );
 
       if (enemy.state !== 'sinking') {
@@ -1030,7 +1216,7 @@ export class WebGL2Renderer implements IRenderer {
         if (isBig) {
           pushOrFallback(
             gunName,
-            ex - 55,
+            ex - 55 * hullTransform.scaleX,
             ey - 28,
             enemy.gunAngleDeg * DEG_TO_RAD,
             0,
@@ -1040,7 +1226,7 @@ export class WebGL2Renderer implements IRenderer {
           );
           pushOrFallback(
             gunName,
-            ex + 55,
+            ex + 55 * hullTransform.scaleX,
             ey - 28,
             enemy.gunAngleDeg * DEG_TO_RAD,
             0,
@@ -1076,11 +1262,13 @@ export class WebGL2Renderer implements IRenderer {
         bodyName,
         ex,
         ey,
-        angleRad,
+        hullTransform.angleRad,
         0,
         isAce ? 210 : 170,
         32,
         this.activePalette.colors[2],
+        hullTransform.scaleX,
+        hullTransform.scaleY,
       );
       if (isAce && enemy.state !== 'sinking') {
         pushOrFallback(
@@ -1181,8 +1369,9 @@ export class WebGL2Renderer implements IRenderer {
     // LaserAce active laser beam
     if (enemy.kind === 'LaserAce' && enemy.laserActive) {
       const len = Math.max(40, enemy.laserLength || 520);
-      const midX = ex + Math.cos(angleRad) * (len * 0.5);
-      const midY = ey + Math.sin(angleRad) * (len * 0.5);
+      const laserAngleRad = enemy.gunAngleDeg * DEG_TO_RAD;
+      const midX = ex + Math.cos(laserAngleRad) * (len * 0.5);
+      const midY = ey + Math.sin(laserAngleRad) * (len * 0.5);
       const elaser = sprites['projectile_Elaser'];
       if (elaser) {
         const inst: SpriteInstance = {
@@ -1190,7 +1379,7 @@ export class WebGL2Renderer implements IRenderer {
           frame: tick,
           x: midX,
           y: midY,
-          angleRad,
+          angleRad: laserAngleRad,
           scaleX: len / Math.max(1, elaser.size[0]),
           scaleY: 1,
           depth: 0.38,
@@ -1206,7 +1395,7 @@ export class WebGL2Renderer implements IRenderer {
           midY,
           len,
           5,
-          angleRad,
+          laserAngleRad,
           this.activePalette.colors[2],
         );
       }
@@ -2193,27 +2382,30 @@ export class WebGL2Renderer implements IRenderer {
       );
     }
 
-    // Part description text
-    this.drawBitmapText(
-      gl,
-      smallFont,
-      activeSpecDescr.slice(0, 40).toUpperCase(),
-      48,
-      307,
-      1,
-      'left',
-      pal.colors[1],
+    // Part description text (splits on \n and word-wraps inside 250px, up to 3 lines)
+    const descrLayout = layoutHangarDescription(
+      smallFont.spec,
+      activeSpecDescr,
+      250,
+      3,
     );
-    this.drawBitmapText(
-      gl,
-      smallFont,
-      activeSpecDescr.slice(40, 80).toUpperCase(),
-      48,
-      319,
-      1,
-      'left',
-      pal.colors[1],
-    );
+    const descrLineCount = descrLayout.lines.length;
+    const descrStartY =
+      descrLineCount <= 1 ? 311 : descrLineCount === 2 ? 305 : 302;
+    const descrStepY = descrLineCount === 2 ? 12 : 10;
+    for (let i = 0; i < descrLineCount; i++) {
+      const line = descrLayout.lines[i]!;
+      this.drawBitmapText(
+        gl,
+        smallFont,
+        line.text,
+        48,
+        descrStartY + i * descrStepY,
+        line.scale,
+        'left',
+        pal.colors[1],
+      );
+    }
 
     // 4. Right panel: 3 Active Mission Cards
     this.solidVerts.length = 0;
@@ -2248,39 +2440,68 @@ export class WebGL2Renderer implements IRenderer {
       const prog = hangarUi.missionProgress[m.id];
       const done = prog?.completed ?? false;
       const my = 172 + i * 52;
-      this.drawBitmapText(
-        gl,
-        smallFont,
-        m.title.slice(0, 26).toUpperCase(),
-        326,
-        my + 5,
-        1,
-        'left',
-        pal.colors[7],
+      const descrLayout = layoutMissionCardDescription(
+        smallFont.spec,
+        m.description,
+        224,
       );
+      const isTwoLineDescr = descrLayout.lines.length > 1;
+      const titleY = isTwoLineDescr ? my + 4 : my + 5;
       const countText = done
         ? 'DONE'
         : `${prog?.current ?? 0}/${prog?.target ?? 1}`;
+      const titleText = sanitizeControlChars(m.title).toUpperCase();
+      const countWidth = measureBitmapText(smallFont.spec, countText, 1).width;
+      const titleMaxW = Math.max(40, 224 - countWidth - 8);
+      const titleW = measureBitmapText(smallFont.spec, titleText, 1).width;
+      const titleScale =
+        titleW > titleMaxW && titleW > 0 ? titleMaxW / titleW : 1;
+
+      this.drawBitmapText(
+        gl,
+        smallFont,
+        titleText,
+        326,
+        titleY,
+        titleScale,
+        'left',
+        pal.colors[7],
+      );
       this.drawBitmapText(
         gl,
         smallFont,
         countText,
         550,
-        my + 5,
+        titleY,
         1,
         'right',
         pal.colors[7],
       );
-      this.drawBitmapText(
-        gl,
-        smallFont,
-        m.description.slice(0, 36).toUpperCase(),
-        326,
-        my + 18,
-        1,
-        'left',
-        pal.colors[1],
-      );
+      if (descrLayout.lines.length === 1) {
+        this.drawBitmapText(
+          gl,
+          smallFont,
+          descrLayout.lines[0]!,
+          326,
+          my + 18,
+          descrLayout.scale,
+          'left',
+          pal.colors[1],
+        );
+      } else {
+        for (let lineIdx = 0; lineIdx < descrLayout.lines.length; lineIdx++) {
+          this.drawBitmapText(
+            gl,
+            smallFont,
+            descrLayout.lines[lineIdx]!,
+            326,
+            my + 15 + lineIdx * 9,
+            descrLayout.scale,
+            'left',
+            pal.colors[1],
+          );
+        }
+      }
     }
 
     // 5. Bottom summary bar

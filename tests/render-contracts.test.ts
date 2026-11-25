@@ -33,6 +33,12 @@ import {
   isPaletteUnlocked,
   measureBitmapText,
 } from '../src/render';
+import {
+  layoutHangarDescription,
+  layoutMissionCardDescription,
+  resolveEnemyRenderTransform,
+  wrapBitmapTextLines,
+} from '../src/render/renderer';
 import { HANGAR_ROWS, HangarController, TelemetryHud } from '../src/ui';
 
 function rgbDist(a: RgbaTuple, b: RgbaTuple): number {
@@ -899,5 +905,501 @@ describe('WebGL2Renderer Pipeline Contracts', () => {
     expect(fillRect).toHaveBeenCalled();
     expect(renderer.getFrameMetrics().webglErrors).toBe(0);
     renderer.dispose();
+  });
+});
+
+describe('Renderer Visual & UI Regression Contracts', () => {
+  it('keeps left-moving Boat, BigBoat, Submarine, AceMarine, and Blimp upright via scaleX=-1 and angleRad=0', () => {
+    const navalAndBlimp: Array<
+      'Boat' | 'BigBoat' | 'Submarine' | 'AceMarine' | 'Blimp'
+    > = ['Boat', 'BigBoat', 'Submarine', 'AceMarine', 'Blimp'];
+
+    for (const kind of navalAndBlimp) {
+      expect(
+        resolveEnemyRenderTransform({ kind, vx: -1.5, angleDeg: 180 }),
+      ).toEqual({ angleRad: 0, scaleX: -1, scaleY: 1 });
+
+      expect(
+        resolveEnemyRenderTransform({ kind, vx: 1.5, angleDeg: 0 }),
+      ).toEqual({ angleRad: 0, scaleX: 1, scaleY: 1 });
+
+      expect(
+        resolveEnemyRenderTransform({ kind, vx: 0, angleDeg: 180 }),
+      ).toEqual({ angleRad: 0, scaleX: -1, scaleY: 1 });
+
+      expect(
+        resolveEnemyRenderTransform({ kind, vx: 0, angleDeg: 0 }),
+      ).toEqual({ angleRad: 0, scaleX: 1, scaleY: 1 });
+    }
+
+    // Airplanes and missiles continue to rotate by angleDeg
+    expect(
+      resolveEnemyRenderTransform({ kind: 'Fighter', vx: -5, angleDeg: 180 }),
+    ).toEqual({ angleRad: Math.PI, scaleX: 1, scaleY: 1 });
+    expect(
+      resolveEnemyRenderTransform({ kind: 'LaserAce', vx: 4, angleDeg: -45 }),
+    ).toEqual({ angleRad: -Math.PI / 4, scaleX: 1, scaleY: 1 });
+    expect(
+      resolveEnemyRenderTransform({ kind: 'Missile', vx: 0, angleDeg: -90 }),
+    ).toEqual({ angleRad: -Math.PI / 2, scaleX: 1, scaleY: 1 });
+  });
+
+  it('submits upright flipped hull instances, mirrored BigBoat guns, and gunAngleDeg-aligned LaserAce beams', () => {
+    const mockGl = createMockWebGL2Context();
+    const instanceBatches: Float32Array[] = [];
+    const dynamicBuffers: Float32Array[] = [];
+    let activeTarget = 0;
+
+    mockGl.gl.bufferSubData = vi.fn(
+      (_target: number, _offset: number, data: ArrayBufferView) => {
+        if (data instanceof Float32Array) {
+          instanceBatches.push(new Float32Array(data));
+        }
+      },
+    );
+    mockGl.gl.bufferData = vi.fn(
+      (target: number, data: ArrayBufferView | number) => {
+        activeTarget = target;
+        if (data instanceof Float32Array && activeTarget === mockGl.gl.ARRAY_BUFFER) {
+          dynamicBuffers.push(new Float32Array(data));
+        }
+      },
+    );
+
+    const mockCanvas = {
+      width: 600,
+      height: 400,
+      style: { imageRendering: '' },
+      getContext: vi.fn((kind: string) => (kind === 'webgl2' ? mockGl.gl : null)),
+    } as unknown as HTMLCanvasElement;
+
+    const vault = createMockVaultBundle();
+    vault.data.atlases.sprites.sprites = {
+      ...vault.data.atlases.sprites.sprites,
+      small_boat: { name: 'small_boat', size: [60, 17], hull: [0, 0, 60, 17], center: [29, 17], subs: [{ x: 0, y: 0 }] },
+      small_boat_gun: { name: 'small_boat_gun', size: [16, 3], hull: [0, 0, 16, 3], center: [0, 1], subs: [{ x: 1, y: 0 }] },
+      big_boat: { name: 'big_boat', size: [300, 50], hull: [0, 0, 300, 50], center: [144, 51], subs: [{ x: 2, y: 0 }] },
+      big_boat_gun: { name: 'big_boat_gun', size: [35, 9], hull: [0, 0, 35, 9], center: [3, 5], subs: [{ x: 3, y: 0 }] },
+      submarine: { name: 'submarine', size: [198, 36], hull: [0, 0, 198, 36], center: [99, 36], subs: [{ x: 4, y: 0 }] },
+      acemarine: { name: 'acemarine', size: [240, 36], hull: [0, 0, 240, 36], center: [120, 36], subs: [{ x: 5, y: 0 }] },
+      blimp: { name: 'blimp', size: [550, 219], hull: [0, 0, 550, 219], center: [275, 109], subs: [{ x: 6, y: 0 }] },
+      blimp_anim: { name: 'blimp_anim', size: [9, 49], hull: [0, 0, 9, 49], center: [-230, 33], subs: [{ x: 7, y: 0 }] },
+      laserace_body: { name: 'laserace_body', size: [45, 45], hull: [0, 0, 45, 45], center: [22, 22], subs: [{ x: 8, y: 0 }] },
+      laserace_wings: { name: 'laserace_wings', size: [45, 45], hull: [0, 0, 45, 45], center: [22, 22], subs: [{ x: 9, y: 0 }] },
+      projectile_Elaser: { name: 'projectile_Elaser', size: [2, 8], hull: [0, 0, 2, 8], center: [1, 4], subs: [{ x: 10, y: 0 }] },
+    };
+
+    const renderer = new WebGL2Renderer();
+    renderer.init(mockCanvas, vault);
+
+    const baseEnemy = {
+      prevX: 0,
+      prevY: 0,
+      vy: 0,
+      health: 50,
+      maxHealth: 50,
+      active: true,
+      state: 'cruise' as const,
+      aiTimer: 0,
+      fireTimer: 10,
+      salvoRemaining: 0,
+      salvoCooldown: 0,
+      surfaceTimer: 0,
+      fallFrames: 0,
+      lifetime: 100,
+      activationTimer: 0,
+      flashTicks: 0,
+      hitRadius: 20,
+      width: 40,
+      height: 20,
+      scoreValue: 100,
+      difficultyWeight: 1,
+      laserActive: false,
+      laserLength: 0,
+    };
+
+    const snap = makeSnapshot({
+      phase: 'playing',
+      enemies: [
+        {
+          ...baseEnemy,
+          id: 1,
+          kind: 'BigBoat',
+          x: 100,
+          y: 0,
+          prevX: 100,
+          prevY: 0,
+          vx: -1,
+          angleDeg: 180,
+          gunAngleDeg: -135,
+          spriteMain: 'big_boat',
+          spriteGun: 'big_boat_gun',
+        },
+        {
+          ...baseEnemy,
+          id: 2,
+          kind: 'Blimp',
+          x: 200,
+          y: -260,
+          prevX: 200,
+          prevY: -260,
+          vx: -0.5,
+          angleDeg: 180,
+          gunAngleDeg: 90,
+          spriteMain: 'blimp',
+          spriteGun: 'big_boat_gun',
+        },
+        {
+          ...baseEnemy,
+          id: 3,
+          kind: 'LaserAce',
+          x: 300,
+          y: -180,
+          prevX: 300,
+          prevY: -180,
+          vx: 3,
+          angleDeg: 0,
+          gunAngleDeg: 90,
+          spriteMain: 'laserace_body',
+          spriteSecondary: 'laserace_wings',
+          laserActive: true,
+          laserLength: 420,
+        },
+        {
+          ...baseEnemy,
+          id: 4,
+          kind: 'Boat',
+          x: -80,
+          y: 0,
+          prevX: -80,
+          prevY: 0,
+          vx: -0.8,
+          angleDeg: 180,
+          gunAngleDeg: -120,
+          spriteMain: 'small_boat',
+          spriteGun: 'small_boat_gun',
+        },
+        {
+          ...baseEnemy,
+          id: 5,
+          kind: 'Submarine',
+          x: -160,
+          y: 0,
+          prevX: -160,
+          prevY: 0,
+          vx: -0.4,
+          angleDeg: 180,
+          gunAngleDeg: -90,
+          spriteMain: 'submarine',
+        },
+        {
+          ...baseEnemy,
+          id: 6,
+          kind: 'AceMarine',
+          x: -240,
+          y: 0,
+          prevX: -240,
+          prevY: 0,
+          vx: -0.4,
+          angleDeg: 180,
+          gunAngleDeg: -45,
+          spriteMain: 'acemarine',
+          spriteGun: 'big_boat_gun',
+        },
+      ],
+    });
+
+    renderer.render(snap, snap, 0, null, 0.5);
+
+    const instances: Array<{
+      x: number;
+      y: number;
+      angleRad: number;
+      subX: number;
+      scaleX: number;
+      scaleY: number;
+    }> = [];
+    for (const batch of instanceBatches) {
+      for (let i = 0; i < batch.length; i += 13) {
+        instances.push({
+          x: batch[i]!,
+          y: batch[i + 1]!,
+          angleRad: batch[i + 2]!,
+          subX: batch[i + 3]!,
+          scaleX: batch[i + 9]!,
+          scaleY: batch[i + 10]!,
+        });
+      }
+    }
+
+    // Left-moving Boat (subX=0), BigBoat (subX=2), Submarine (subX=4), AceMarine (subX=5)
+    for (const expectedSubX of [0, 2, 4, 5]) {
+      const hullInst = instances.find((inst) => inst.subX === expectedSubX);
+      expect(hullInst).toBeDefined();
+      expect(hullInst!.angleRad).toBe(0);
+      expect(hullInst!.scaleX).toBe(-1);
+      expect(hullInst!.scaleY).toBe(1);
+    }
+
+    // BigBoat guns (subX=3 at y=-28) are mirrored in main + reflect batches
+    const bigBoatGuns = instances.filter(
+      (inst) => inst.subX === 3 && inst.y === -28,
+    );
+    expect(bigBoatGuns.map((g) => g.x)).toEqual([155, 45, 155, 45]);
+
+    // Blimp hull (subX=6) and blimp_anim propeller (subX=7): upright angleRad=0, scaleX=-1
+    const blimpInst = instances.find((inst) => inst.subX === 6);
+    const blimpPropInst = instances.find((inst) => inst.subX === 7);
+    expect(blimpInst).toBeDefined();
+    expect(blimpInst!.angleRad).toBe(0);
+    expect(blimpInst!.scaleX).toBe(-1);
+    expect(blimpPropInst).toBeDefined();
+    expect(blimpPropInst!.angleRad).toBe(0);
+    expect(blimpPropInst!.scaleX).toBe(-1);
+
+    // LaserAce beam (subX=10) uses gunAngleDeg (90 deg = PI/2), NOT hull angleDeg (0)
+    const elaserInst = instances.find((inst) => inst.subX === 10);
+    expect(elaserInst).toBeDefined();
+    expect(elaserInst!.angleRad).toBeCloseTo(Math.PI / 2, 5);
+    expect(elaserInst!.x).toBeCloseTo(300, 4);
+    expect(elaserInst!.y).toBeCloseTo(-180 + 210, 4);
+
+    // Fallback rect path for LaserAce beam (when projectile_Elaser sprite is missing) also uses gunAngleDeg
+    delete vault.data.atlases.sprites.sprites['projectile_Elaser'];
+    dynamicBuffers.length = 0;
+    renderer.render(snap, snap, 0, null, 0.6);
+    const hasVerticalBeamQuad = dynamicBuffers.some((buf) => {
+      if (buf.length < 36 || buf.length % 6 !== 0) return false;
+      for (let i = 0; i <= buf.length - 36; i += 36) {
+        const xs = [buf[i]!, buf[i + 6]!, buf[i + 12]!, buf[i + 24]!];
+        const ys = [buf[i + 1]!, buf[i + 7]!, buf[i + 13]!, buf[i + 25]!];
+        const spanX = Math.max(...xs) - Math.min(...xs);
+        const spanY = Math.max(...ys) - Math.min(...ys);
+        if (Math.abs(spanY - 420) < 1 && Math.abs(spanX - 5) < 1) {
+          return true;
+        }
+      }
+      return false;
+    });
+    expect(hasVerticalBeamQuad).toBe(true);
+
+    renderer.dispose();
+  });
+
+  it('uses pure uniform_backcol in POST_WATER_FRAG without seaBackCol tinting', () => {
+    expect(POST_WATER_FRAG).not.toContain('seaBackCol');
+    expect(POST_WATER_FRAG).not.toContain('mix(uniform_backcol.rgb, uniform_colors[3].rgb, 0.08)');
+    expect(POST_WATER_FRAG).toContain('finalColor = uniform_backcol;');
+    expect(POST_WATER_FRAG).toContain('outColor = uniform_backcol;');
+  });
+
+  it('wraps Hangar multiline descr and Mission card descriptions without ? glyphs or mid-word clipping', () => {
+    const font = createBuiltinPixelFont();
+
+    // 1. Hangar description splits on \n and wraps inside 250px up to 3 lines
+    const multiDescr = layoutHangarDescription(
+      font.spec,
+      'continuous beam\npierces enemies\nslow turn while firing',
+      250,
+      3,
+    );
+    expect(multiDescr.lines.map((l) => l.text)).toEqual([
+      'CONTINUOUS BEAM',
+      'PIERCES ENEMIES',
+      'SLOW TURN WHILE FIRING',
+    ]);
+    for (const line of multiDescr.lines) {
+      expect(measureBitmapText(font.spec, line.text, line.scale).width).toBeLessThanOrEqual(250);
+    }
+
+    // 2. Word-wrapping avoids breaking mid-word
+    const wrapped = wrapBitmapTextLines(
+      font.spec,
+      'FIRES HIGH VELOCITY ARMOR PIERCING CANNON SHELLS ACROSS THE SKY',
+      250,
+      1,
+    );
+    expect(wrapped.length).toBeGreaterThan(1);
+    expect(wrapped.join(' ')).toBe(
+      'FIRES HIGH VELOCITY ARMOR PIERCING CANNON SHELLS ACROSS THE SKY',
+    );
+    for (const line of wrapped) {
+      expect(measureBitmapText(font.spec, line, 1).width).toBeLessThanOrEqual(250);
+    }
+
+    // 3. Mission card description preserves 100% of every string (no .slice(0, 36))
+    const m1 = layoutMissionCardDescription(
+      font.spec,
+      'DESTROY 5 FIGHTERS IN A SINGLE SORTIE',
+      224,
+    );
+    expect(m1.lines.join(' ')).toBe('DESTROY 5 FIGHTERS IN A SINGLE SORTIE');
+    for (const line of m1.lines) {
+      expect(measureBitmapText(font.spec, line, m1.scale).width).toBeLessThanOrEqual(224);
+    }
+
+    const m2 = layoutMissionCardDescription(
+      font.spec,
+      'DESTROY 10 BIG BOATS WITHOUT TAKING DAMAGE IN A SINGLE SORTIE',
+      224,
+    );
+    expect(m2.lines.length).toBe(2);
+    expect(m2.lines.join(' ')).toBe(
+      'DESTROY 10 BIG BOATS WITHOUT TAKING DAMAGE IN A SINGLE SORTIE',
+    );
+    for (const line of m2.lines) {
+      expect(measureBitmapText(font.spec, line, m2.scale).width).toBeLessThanOrEqual(224);
+    }
+
+    // 4. Render Hangar with multiline descr and inspect vertex UVs for zero '?' glyphs
+    const mockGl = createMockWebGL2Context();
+    const textBuffers: Float32Array[] = [];
+    let currentProgram: unknown = null;
+    const origCreateProgram = mockGl.gl.createProgram;
+    const createdPrograms: Array<{ id: number }> = [];
+    mockGl.gl.createProgram = vi.fn(() => {
+      const p = { id: createdPrograms.length + 1 };
+      createdPrograms.push(p);
+      return p;
+    });
+    void origCreateProgram;
+    mockGl.gl.useProgram = vi.fn((p: unknown) => {
+      currentProgram = p;
+    });
+    mockGl.gl.bufferData = vi.fn((_target: number, data: ArrayBufferView | number) => {
+      // fontProg is the 4th compiled program in WebGL2Renderer.init()
+      if (
+        currentProgram === createdPrograms[3] &&
+        data instanceof Float32Array &&
+        data.length > 0
+      ) {
+        textBuffers.push(new Float32Array(data));
+      }
+    });
+    const mockCanvas = {
+      width: 600,
+      height: 400,
+      style: { imageRendering: '' },
+      getContext: vi.fn((kind: string) => (kind === 'webgl2' ? mockGl.gl : null)),
+    } as unknown as HTMLCanvasElement;
+
+    const renderer = new WebGL2Renderer();
+    const vault = createMockVaultBundle();
+    renderer.init(mockCanvas, vault);
+
+    const laserWeapon = makeWeapon(1, 'LASER');
+    laserWeapon.descr = 'continuous beam\npierces enemies\nslow turn while firing';
+    const hangarSnap = makeSnapshot({
+      phase: 'hangar',
+      activeMissions: [
+        {
+          id: 1,
+          component: [0, 1, 0],
+          objective: 0,
+          condition: 12,
+          val: [5, 1],
+          title: 'LASER WEAPON #1',
+          description: 'DESTROY 5 FIGHTERS IN A SINGLE SORTIE',
+        },
+      ],
+      player: {
+        ...makeSnapshot().player,
+        loadout: { weapon: 1, body: 0, engine: 0 },
+        weaponSpec: laserWeapon,
+      },
+    });
+
+    const controller = new HangarController();
+    const hangarUi = controller.buildUiState(hangarSnap);
+    renderer.render(hangarSnap, hangarSnap, 0, hangarUi, 0.5);
+
+    expect(
+      textBuffers.some((b) => b.length === 'CONTINUOUS BEAM'.length * 24),
+    ).toBe(true);
+    expect(
+      textBuffers.some((b) => b.length === 'PIERCES ENEMIES'.length * 24),
+    ).toBe(true);
+    expect(
+      textBuffers.some((b) => b.length === 'SLOW TURN WHILE FIRING'.length * 24),
+    ).toBe(true);
+    expect(
+      textBuffers.some(
+        (b) => b.length === 'DESTROY 5 FIGHTERS IN A SINGLE SORTIE'.length * 24,
+      ),
+    ).toBe(true);
+
+    const qGlyph = font.spec.glyphs[63]!;
+    const qU0 = qGlyph.x / font.spec.scaleW;
+    const qV0 = qGlyph.y / font.spec.scaleH;
+    let foundQuestionMarkUv = false;
+    for (const buf of textBuffers) {
+      for (let i = 0; i < buf.length; i += 24) {
+        if (
+          Math.abs(buf[i + 2]! - qU0) < 1e-4 &&
+          Math.abs(buf[i + 3]! - qV0) < 1e-4
+        ) {
+          foundQuestionMarkUv = true;
+        }
+      }
+    }
+    expect(foundQuestionMarkUv).toBe(false);
+    renderer.dispose();
+  });
+
+  it('anchors TelemetryHud at bottom: 8px; left: 8px so top-left HUD and Hangar stay clear', () => {
+    const created: Array<{
+      attrs: Record<string, string>;
+      style: Record<string, string>;
+      children: unknown[];
+      parentElement: unknown;
+      textContent: string;
+      setAttribute: (k: string, v: string) => void;
+      appendChild: (c: unknown) => void;
+      removeChild: (c: unknown) => void;
+    }> = [];
+
+    const makeEl = () => {
+      const el = {
+        attrs: {} as Record<string, string>,
+        style: {} as Record<string, string>,
+        children: [] as unknown[],
+        parentElement: null as unknown,
+        textContent: '',
+        setAttribute(k: string, v: string) {
+          el.attrs[k] = v;
+        },
+        appendChild(c: unknown) {
+          el.children.push(c);
+          if (c && typeof c === 'object' && 'parentElement' in c) {
+            (c as { parentElement: unknown }).parentElement = el;
+          }
+        },
+        removeChild(c: unknown) {
+          el.children = el.children.filter((x) => x !== c);
+        },
+      };
+      created.push(el);
+      return el;
+    };
+
+    const container = makeEl();
+    vi.stubGlobal('document', {
+      createElement: () => makeEl(),
+      body: container,
+    });
+
+    try {
+      const hud = new TelemetryHud(container as unknown as HTMLElement);
+      const root = hud.getElement() as unknown as ReturnType<typeof makeEl>;
+      expect(root).not.toBeNull();
+      expect(root.attrs['data-testid']).toBe('telemetry-hud');
+      expect(root.style.position).toBe('fixed');
+      expect(root.style.bottom).toBe('8px');
+      expect(root.style.left).toBe('8px');
+      expect(root.style.top).toBeUndefined();
+      hud.dispose();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

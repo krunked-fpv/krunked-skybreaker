@@ -186,7 +186,6 @@ void main() {
   float seaExpr = texCoords.y + (cameraYViewSpace - 0.5);
 
   vec4 finalColor = texture(colorTexture, vTexCoords);
-  vec4 seaBackCol = vec4(mix(uniform_backcol.rgb, uniform_colors[3].rgb, 0.08), uniform_backcol.a);
 
   if (seaExpr > 0.0) {
     float colDelta = 0.01;
@@ -195,11 +194,11 @@ void main() {
     } else if (length(finalColor.rgb - uniform_colors[2].rgb) < colDelta) {
       finalColor = uniform_colors[3];
     } else if (length(finalColor.rgb - uniform_colors[4].rgb) < colDelta) {
-      finalColor = seaBackCol;
+      finalColor = uniform_backcol;
     } else if (length(finalColor.rgb - uniform_colors[5].rgb) < colDelta) {
       finalColor = uniform_colors[6];
     } else if (length(finalColor.rgb - uniform_colors[6].rgb) < colDelta) {
-      finalColor = seaBackCol;
+      finalColor = uniform_backcol;
     } else if (length(finalColor.rgb - uniform_colors[7].rgb) < colDelta) {
       finalColor = uniform_colors[6];
     }
@@ -209,8 +208,6 @@ void main() {
   if (finalColor.a == 0.0) {
     if (healthAmount < distanceToPlayer && seaExpr < 0.0) {
       outColor = healthRadius.z < 1.0 ? uniform_colors[7] : uniform_colors[6];
-    } else if (seaExpr > 0.0) {
-      outColor = seaBackCol;
     } else {
       outColor = uniform_backcol;
     }

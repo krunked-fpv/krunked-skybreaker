@@ -44,7 +44,7 @@ export class TelemetryHud {
       const el = document.createElement('div');
       el.setAttribute('data-testid', 'telemetry-hud');
       el.style.position = 'fixed';
-      el.style.top = '8px';
+      el.style.bottom = '8px';
       el.style.left = '8px';
       el.style.zIndex = '9999';
       el.style.pointerEvents = 'none';
