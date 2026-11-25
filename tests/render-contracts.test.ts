@@ -8,6 +8,7 @@ import type {
   WeaponSpec,
 } from '../src/contracts/vault';
 import {
+  ACT2_BONUS_PALETTES,
   BATCH_FRAG,
   BATCH_REFLECT_FRAG,
   BATCH_REFLECT_VERT,
@@ -34,6 +35,7 @@ import {
   measureBitmapText,
 } from '../src/render';
 import {
+  HANGAR_LAYOUT,
   layoutHangarDescription,
   layoutMissionCardDescription,
   resolveEnemyRenderTransform,
@@ -253,23 +255,29 @@ function makeSnapshot(overrides: Partial<SimSnapshot> = {}): SimSnapshot {
 }
 
 describe('Render Palette Contracts', () => {
-  it('provides at least 10 valid 8-color palettes + backcol with distinct water remap keys', () => {
+  it('provides at least 10 valid 8-color Skybreaker palettes + backcol with distinct water remap keys and zero trademark leaks', () => {
     expect(PALETTES.length).toBeGreaterThanOrEqual(10);
 
     const requiredIds = [
       'original',
-      'lanigiro',
+      'inverted',
       'classic',
       'gameboy',
       'virtual',
       'oceanic',
-      'kozilek',
+      'synthdusk',
       'sunset',
       'amber',
-      'sfmt',
+      'overdrive',
     ];
     for (const id of requiredIds) {
       expect(PALETTES.some((p) => p.id === id)).toBe(true);
+    }
+
+    const forbidden = /luftrauser|urauser|kozilek|lanigiro/i;
+    for (const pal of [...PALETTES, ...ACT2_BONUS_PALETTES]) {
+      expect(pal.id).not.toMatch(forbidden);
+      expect(pal.name).not.toMatch(forbidden);
     }
 
     for (const pal of PALETTES) {
@@ -298,17 +306,30 @@ describe('Render Palette Contracts', () => {
     }
   });
 
-  it('matches Original palette canonical semantics (#4b0e1c player, #f7f0d4 cloud/health, #dec796 sky)', () => {
+  it('uses iconic Skybreaker default palette (#162030 player, #f7f3e3 cloud/health, #d6c39c sky) with all pairwise distances > 0.015', () => {
     const orig = getPaletteById('original');
     expect(orig.id).toBe('original');
-    expect(orig.colors[1]).toEqual(hexToRgba('#4b0e1c'));
-    expect(orig.colors[2]).toEqual(hexToRgba('#82383e'));
-    expect(orig.colors[3]).toEqual(hexToRgba('#b89378'));
-    expect(orig.colors[4]).toEqual(hexToRgba('#c7aa88'));
-    expect(orig.colors[5]).toEqual(hexToRgba('#e7ddb0'));
-    expect(orig.colors[6]).toEqual(hexToRgba('#e5ddac'));
-    expect(orig.colors[7]).toEqual(hexToRgba('#f7f0d4'));
-    expect(orig.backcol).toEqual(hexToRgba('#dec796'));
+    expect(orig.name).toBe('SKYBREAKER');
+    expect(orig.backcol).toEqual(hexToRgba('#d6c39c'));
+    expect(orig.colors[1]).toEqual(hexToRgba('#162030'));
+    expect(orig.colors[2]).toEqual(hexToRgba('#8c2630'));
+    expect(orig.colors[3]).toEqual(hexToRgba('#8e897f'));
+    expect(orig.colors[4]).toEqual(hexToRgba('#a89d86'));
+    expect(orig.colors[5]).toEqual(hexToRgba('#ffe066'));
+    expect(orig.colors[6]).toEqual(hexToRgba('#e3d9bc'));
+    expect(orig.colors[7]).toEqual(hexToRgba('#f7f3e3'));
+
+    const allSlots: RgbaTuple[] = [orig.backcol, ...orig.colors.slice(1)];
+    for (let i = 0; i < allSlots.length; i++) {
+      for (let j = i + 1; j < allSlots.length; j++) {
+        expect(rgbDist(allSlots[i]!, allSlots[j]!)).toBeGreaterThan(0.015);
+      }
+    }
+
+    const overdrive = getPaletteById('overdrive');
+    expect(overdrive.name).toBe('OVERDRIVE');
+    expect(isPaletteUnlocked(overdrive, 0, false)).toBe(false);
+    expect(isPaletteUnlocked(overdrive, 0, true)).toBe(true);
 
     expect(getPaletteById('non-existent-id').id).toBe('original');
   });
@@ -423,16 +444,19 @@ describe('GLSL ES 3.00 Shader & Post Uniform Contracts', () => {
 });
 
 describe('HangarController & TelemetryHud Contracts', () => {
-  it('cycles weapons, bodies, engines, palettes, and mode while respecting unlock locks', () => {
+  it('cycles weapons, bodies, engines, palettes, assets, and mode while respecting unlock locks', () => {
     const controller = new HangarController();
     expect(HANGAR_ROWS).toEqual([
       'weapon',
       'body',
       'engine',
       'palette',
+      'assets',
       'mode',
       'launch',
     ]);
+    expect(controller.getAssetMode()).toBe('skybreaker');
+    expect(controller.isSteamAvailable()).toBe(false);
 
     const setLoadout = vi.fn();
     const setMode = vi.fn();
@@ -509,6 +533,32 @@ describe('HangarController & TelemetryHud Contracts', () => {
     expect(pSwap.cue).toBe('sndswap');
     expect(isPaletteUnlocked(controller.getSelectedPalette(), 20, true)).toBe(true);
 
+    controller.moveRow(1); // -> assets
+    expect(controller.getActiveRow()).toBe('assets');
+    const aDenied = controller.cycleCurrent(1, unlockedSnap, sim);
+    expect(aDenied.changed).toBe(false);
+    expect(aDenied.locked).toBe(true);
+    expect(aDenied.cue).toBe('snddeny');
+    expect(aDenied.assetMode).toBe('skybreaker');
+
+    controller.setSteamAvailable(true);
+    expect(controller.isSteamAvailable()).toBe(true);
+    const aToSteam = controller.cycleCurrent(1, unlockedSnap, sim);
+    expect(aToSteam.changed).toBe(true);
+    expect(aToSteam.locked).toBe(false);
+    expect(aToSteam.cue).toBe('sndswap');
+    expect(aToSteam.assetMode).toBe('steam-local');
+    expect(controller.getAssetMode()).toBe('steam-local');
+
+    const aBackToSky = controller.handleKey('ArrowLeft', unlockedSnap, sim);
+    expect(aBackToSky.changed).toBe(true);
+    expect(aBackToSky.cue).toBe('sndswap');
+    expect(aBackToSky.assetMode).toBe('skybreaker');
+    expect(controller.getAssetMode()).toBe('skybreaker');
+
+    controller.setAssetMode('steam-local');
+    expect(controller.getAssetMode()).toBe('steam-local');
+
     controller.moveRow(1); // -> mode
     expect(controller.getActiveRow()).toBe('mode');
     const mSwap = controller.cycleCurrent(1, unlockedSnap, sim);
@@ -528,6 +578,8 @@ describe('HangarController & TelemetryHud Contracts', () => {
     const uiState = controller.buildUiState(unlockedSnap, 'steam-local');
     expect(uiState.activeRow).toBe('launch');
     expect(uiState.vaultSource).toBe('steam-local');
+    expect(uiState.assetMode).toBe('steam-local');
+    expect(uiState.steamAvailable).toBe(true);
     expect(uiState.completedMissionsCount).toBe(20);
     expect(uiState.totalMissionsCount).toBe(90);
     expect(uiState.activeMissions).toHaveLength(3);
@@ -560,7 +612,7 @@ describe('HangarController & TelemetryHud Contracts', () => {
         unlocked: true,
         source: 'synth-fallback',
         musicState: 'combat',
-        activeStems: ['luftrauser_bass1', 'luftrauser_drums1', 'luftrauser_lead1'],
+        activeStems: ['skybreaker_bass1', 'skybreaker_drums1', 'skybreaker_lead1'],
         epochTime: 1,
         contextTime: 2,
         interStemDriftMs: 0.12,
@@ -571,10 +623,27 @@ describe('HangarController & TelemetryHud Contracts', () => {
     });
 
     const lines = hud.getLastLines().join('\n');
-    expect(lines).toContain('VAULT: procedural-fallback');
-    expect(lines).toContain('PALETTE: original');
+    expect(lines).toContain('ASSETS: skybreaker-original | PALETTE: original');
     expect(lines).toContain('0.120ms');
     expect(lines).toContain('THE ORIGINAL');
+
+    hud.update({
+      snapshot: snap,
+      vaultSource: 'steam-local',
+      frameMetrics: {
+        fps: 60,
+        avgFrameDeltaMs: 16.6,
+        p95FrameDeltaMs: 17.2,
+        drawCalls: 7,
+        webglErrors: 0,
+        virtualWidth: 600,
+        virtualHeight: 400,
+        canvasWidth: 1200,
+        canvasHeight: 800,
+        activePaletteId: 'overdrive',
+      },
+    });
+    expect(hud.getLastLines()[0]).toBe('ASSETS: steam-local | PALETTE: overdrive');
     hud.dispose();
   });
 
@@ -928,7 +997,7 @@ describe('WebGL2Renderer Pipeline Contracts', () => {
         },
       ],
     });
-    renderer.setPalette('sfmt');
+    renderer.setPalette('overdrive');
     renderer.render(playSnap, playSnap, 0.5, null, 1.25);
 
     const metrics = renderer.getFrameMetrics();
@@ -938,7 +1007,7 @@ describe('WebGL2Renderer Pipeline Contracts', () => {
     expect(metrics.canvasHeight).toBe(800);
     expect(metrics.webglErrors).toBe(0);
     expect(metrics.drawCalls).toBeGreaterThan(0);
-    expect(metrics.activePaletteId).toBe('sfmt');
+    expect(metrics.activePaletteId).toBe('overdrive');
     expect(renderer.getLastPostUniforms().healthRadius[0]).toBe(40);
 
     renderer.resize(900, 600);
@@ -1595,17 +1664,17 @@ describe('Renderer Visual & UI Regression Contracts', () => {
       const renderer = new WebGL2Renderer();
       renderer.init(mockCanvas, vault);
 
-      // 1. Hangar banner ('BEAMRAUSER')
+      // 1. Hangar banner ('BEAMBREAKER')
       fontQuads.length = 0;
       const controller = new HangarController();
       const hangarSnap = makeSnapshot({
         phase: 'hangar',
-        player: { ...makeSnapshot().player, planeName: 'BEAMRAUSER' },
+        player: { ...makeSnapshot().player, planeName: 'BEAMBREAKER' },
       });
-      const hangarUi = { ...controller.buildUiState(hangarSnap), planeName: 'BEAMRAUSER' };
+      const hangarUi = { ...controller.buildUiState(hangarSnap), planeName: 'BEAMBREAKER' };
       renderer.render(hangarSnap, hangarSnap, 0, hangarUi, 0.5);
 
-      const bannerDraw = fontQuads.find((q) => q.verts.length === 'BEAMRAUSER'.length * 24);
+      const bannerDraw = fontQuads.find((q) => q.verts.length === 'BEAMBREAKER'.length * 24);
       expect(bannerDraw).toBeDefined();
       const bannerH = bannerDraw!.verts[9]! - bannerDraw!.verts[1]!;
       const bannerY0 = bannerDraw!.verts[1]!;
@@ -1655,7 +1724,7 @@ describe('Renderer Visual & UI Regression Contracts', () => {
       fontQuads.length = 0;
       const overSnap = makeSnapshot({
         phase: 'gameover',
-        player: { ...makeSnapshot().player, alive: false, planeName: 'BEAMRAUSER' },
+        player: { ...makeSnapshot().player, alive: false, planeName: 'BEAMBREAKER' },
       });
       renderer.render(overSnap, overSnap, 0, null, 0.5);
       const shotDownDraw = fontQuads
@@ -1665,7 +1734,7 @@ describe('Renderer Visual & UI Regression Contracts', () => {
       expect(shotDownDraw!.verts[9]! - shotDownDraw!.verts[1]!).toBe(expectedBigH);
 
       const subtitleDraw = fontQuads
-        .filter((q) => !q.isCombo && q.verts.length === 'BEAMRAUSER'.length * 24)
+        .filter((q) => !q.isCombo && q.verts.length === 'BEAMBREAKER'.length * 24)
         .at(-1);
       expect(subtitleDraw).toBeDefined();
       expect(subtitleDraw!.verts[9]! - subtitleDraw!.verts[1]!).toBe(7); // fnts/builtin*1 (never 1.2)
@@ -2065,6 +2134,241 @@ describe('Renderer Visual & UI Regression Contracts', () => {
       return sawP1Pill && sawP2Pill && tagBackCount === 2;
     });
     expect(sawDogfightPillsAndTags).toBe(true);
+
+    renderer.dispose();
+  });
+
+  it('reloadVault hot-swaps textures cleanly with 0 GL errors while preserving FBOs, palette, and shader FX', () => {
+    const mockGl = createMockWebGL2Context();
+    let texCounter = 0;
+    const deletedTextures: unknown[] = [];
+    mockGl.gl.createTexture = vi.fn(() => ({ id: ++texCounter }));
+    mockGl.gl.deleteTexture = vi.fn((tex: unknown) => {
+      deletedTextures.push(tex);
+    });
+
+    const mockCanvas = {
+      width: 600,
+      height: 400,
+      style: { imageRendering: '' },
+      getContext: vi.fn((kind: string) => (kind === 'webgl2' ? mockGl.gl : null)),
+    } as unknown as HTMLCanvasElement;
+
+    const vaultA = createMockVaultBundle();
+    vaultA.textures['gfx/textures/diffuse/sheet1grey.png'] = {
+      name: 'sheet1grey',
+      width: 32,
+      height: 32,
+      rgba: new Uint8Array(32 * 32 * 4),
+      source: 'procedural',
+    };
+
+    const renderer = new WebGL2Renderer();
+    renderer.init(mockCanvas, vaultA);
+    renderer.setPalette('synthdusk');
+    renderer.setShaderFx({
+      crtScanlines: true,
+      phosphorBloom: false,
+      speedWarp: true,
+      shockwaves: false,
+    });
+
+    const fboCallsBefore = mockGl.gl.createFramebuffer.mock.calls.length;
+    const progCallsBefore = mockGl.gl.createProgram.mock.calls.length;
+    const snap = makeSnapshot({ phase: 'playing' });
+    renderer.render(snap, snap, 0, null, 0.5);
+
+    const vaultB = createMockVaultBundle();
+    vaultB.data.vaultSource = 'steam-local';
+    vaultB.textures = {
+      sprites: {
+        name: 'sprites',
+        width: 128,
+        height: 128,
+        rgba: new Uint8Array(128 * 128 * 4),
+        source: 'steam-tga',
+      },
+      menusprites: {
+        name: 'menusprites',
+        width: 64,
+        height: 64,
+        rgba: new Uint8Array(64 * 64 * 4),
+        source: 'steam-tga',
+      },
+      fnts_0: {
+        name: 'fnts_0',
+        width: 64,
+        height: 64,
+        rgba: new Uint8Array(64 * 64 * 4),
+        source: 'steam-tga',
+      },
+    };
+
+    deletedTextures.length = 0;
+    const texUploadsBefore = mockGl.gl.texImage2D.mock.calls.length;
+    renderer.reloadVault(vaultB);
+
+    // Deleted exactly the 2 unique vaultA textures (deduplicated across alias keys)
+    expect(deletedTextures).toHaveLength(2);
+    expect(new Set(deletedTextures).size).toBe(2);
+    // Uploaded exactly the 3 new vaultB textures (preserved fallbackTexture & builtinFontTexture)
+    expect(mockGl.gl.texImage2D.mock.calls.length - texUploadsBefore).toBe(3);
+    // Preserved active FBOs, compiled shader programs, and active palette
+    expect(mockGl.gl.createFramebuffer.mock.calls.length).toBe(fboCallsBefore);
+    expect(mockGl.gl.createProgram.mock.calls.length).toBe(progCallsBefore);
+    expect(renderer.getPalette().id).toBe('synthdusk');
+
+    renderer.render(snap, snap, 0.25, null, 0.75);
+    expect(renderer.getFrameMetrics().webglErrors).toBe(0);
+    expect(renderer.getFrameMetrics().activePaletteId).toBe('synthdusk');
+
+    renderer.dispose();
+
+    // 2D fallback mode also handles reloadVault cleanly without throwing
+    const mock2d = {
+      imageSmoothingEnabled: true,
+      fillStyle: '',
+      strokeStyle: '',
+      font: '',
+      fillRect: vi.fn(),
+      fillText: vi.fn(),
+      strokeRect: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      translate: vi.fn(),
+      rotate: vi.fn(),
+      beginPath: vi.fn(),
+      rect: vi.fn(),
+      clip: vi.fn(),
+      arc: vi.fn(),
+      fill: vi.fn(),
+    };
+    const canvas2d = {
+      width: 600,
+      height: 400,
+      style: { imageRendering: '' },
+      getContext: vi.fn((kind: string) => (kind === '2d' ? mock2d : null)),
+    } as unknown as HTMLCanvasElement;
+    const fallbackRenderer = new WebGL2Renderer();
+    fallbackRenderer.init(canvas2d, vaultA);
+    fallbackRenderer.reloadVault(vaultB);
+    fallbackRenderer.render(snap, snap, 0, null, 1.0);
+    expect(fallbackRenderer.getFrameMetrics().webglErrors).toBe(0);
+    fallbackRenderer.dispose();
+  });
+
+  it('fits all 7 Hangar rows + description bar cleanly inside 600x400 with KRUNKED SKYBREAKER chrome and ASSETS toggle states', () => {
+    // 1. Static geometry invariants for 7 Hangar rows inside 600x400 projector canvas
+    expect(HANGAR_LAYOUT.rowCount).toBe(HANGAR_ROWS.length);
+    expect(HANGAR_LAYOUT.rowCount).toBe(7);
+    expect(HANGAR_LAYOUT.rowStartY).toBeGreaterThanOrEqual(64);
+    expect(HANGAR_LAYOUT.rowStep).toBeGreaterThan(HANGAR_LAYOUT.rowHeight);
+
+    const lastRowBottom =
+      HANGAR_LAYOUT.rowStartY +
+      (HANGAR_LAYOUT.rowCount - 1) * HANGAR_LAYOUT.rowStep +
+      HANGAR_LAYOUT.rowHeight;
+    expect(lastRowBottom).toBeLessThan(HANGAR_LAYOUT.descrY);
+    expect(HANGAR_LAYOUT.descrY + HANGAR_LAYOUT.descrHeight).toBeLessThan(
+      HANGAR_LAYOUT.dividerY,
+    );
+    expect(HANGAR_LAYOUT.footerY + 10).toBeLessThan(
+      HANGAR_LAYOUT.projectorY + HANGAR_LAYOUT.projectorHeight,
+    );
+    expect(HANGAR_LAYOUT.projectorY + HANGAR_LAYOUT.projectorHeight).toBeLessThanOrEqual(
+      400,
+    );
+    expect(HANGAR_LAYOUT.projectorX + HANGAR_LAYOUT.projectorWidth).toBeLessThanOrEqual(
+      600,
+    );
+
+    // 2. Render Hangar on 'assets' row in all 3 availability/mode states & verify chrome + zero overlap
+    const mockGl = createMockWebGL2Context();
+    const createdPrograms: Array<{ id: number }> = [];
+    let currentProgram: unknown = null;
+    const fontTextLens: number[] = [];
+    const solidQuads: Array<{ minX: number; maxX: number; minY: number; maxY: number }> = [];
+
+    mockGl.gl.createProgram = vi.fn(() => {
+      const p = { id: createdPrograms.length + 1 };
+      createdPrograms.push(p);
+      return p;
+    });
+    mockGl.gl.useProgram = vi.fn((p: unknown) => {
+      currentProgram = p;
+    });
+    mockGl.gl.bufferData = vi.fn((_target: number, data: ArrayBufferView | number) => {
+      if (!(data instanceof Float32Array) || data.length === 0) return;
+      if (currentProgram === createdPrograms[3]) {
+        fontTextLens.push(data.length / 24);
+      } else if (currentProgram === createdPrograms[6]) {
+        for (let i = 0; i <= data.length - 36; i += 36) {
+          const xs = [data[i]!, data[i + 6]!, data[i + 12]!, data[i + 24]!];
+          const ys = [data[i + 1]!, data[i + 7]!, data[i + 13]!, data[i + 25]!];
+          solidQuads.push({
+            minX: Math.min(...xs),
+            maxX: Math.max(...xs),
+            minY: Math.min(...ys),
+            maxY: Math.max(...ys),
+          });
+        }
+      }
+    });
+
+    const mockCanvas = {
+      width: 600,
+      height: 400,
+      style: { imageRendering: '' },
+      getContext: vi.fn((kind: string) => (kind === 'webgl2' ? mockGl.gl : null)),
+    } as unknown as HTMLCanvasElement;
+
+    const renderer = new WebGL2Renderer();
+    renderer.init(mockCanvas, createMockVaultBundle());
+    const controller = new HangarController();
+    controller.setActiveRow('assets');
+    const hangarSnap = makeSnapshot({ phase: 'hangar' });
+
+    // State A: Steam unavailable -> SKYBREAKER [STEAM N/A]
+    fontTextLens.length = 0;
+    solidQuads.length = 0;
+    renderer.render(hangarSnap, hangarSnap, 0, controller.buildUiState(hangarSnap), 0.5);
+    expect(fontTextLens).toContain('KRUNKED SKYBREAKER  //  HANGAR MK-I'.length);
+    expect(fontTextLens).toContain('< SKYBREAKER [STEAM N/A] >'.length);
+    expect(fontTextLens).toContain('ORIGINAL SKYBREAKER ART & SYNTH'.length);
+    expect(fontTextLens).toContain('OR LOCAL STEAM VAULT (IF OWNED)'.length);
+
+    // Verify rendered left-column row + description boxes fit cleanly inside projector bounds
+    const leftBoxes = solidQuads.filter(
+      (q) =>
+        Math.abs(q.minX - HANGAR_LAYOUT.rowX) < 0.5 &&
+        Math.abs(q.maxX - (HANGAR_LAYOUT.rowX + HANGAR_LAYOUT.rowWidth)) < 0.5 &&
+        q.minY >= HANGAR_LAYOUT.rowStartY - 0.5 &&
+        q.maxY <= HANGAR_LAYOUT.dividerY,
+    );
+    expect(leftBoxes.length).toBeGreaterThanOrEqual(2);
+    for (const box of leftBoxes) {
+      expect(box.minY).toBeGreaterThanOrEqual(HANGAR_LAYOUT.projectorY);
+      expect(box.maxY).toBeLessThan(HANGAR_LAYOUT.dividerY);
+    }
+
+    // State B: Steam available + skybreaker -> SKYBREAKER
+    controller.setSteamAvailable(true);
+    fontTextLens.length = 0;
+    renderer.render(hangarSnap, hangarSnap, 0, controller.buildUiState(hangarSnap), 0.6);
+    expect(fontTextLens).toContain('< SKYBREAKER >'.length);
+
+    // State C: Steam available + steam-local -> STEAM LOCAL
+    controller.cycleCurrent(1, hangarSnap);
+    fontTextLens.length = 0;
+    renderer.render(
+      hangarSnap,
+      hangarSnap,
+      0,
+      controller.buildUiState(hangarSnap, 'steam-local'),
+      0.7,
+    );
+    expect(fontTextLens).toContain('< STEAM LOCAL >'.length);
+    expect(renderer.getFrameMetrics().webglErrors).toBe(0);
 
     renderer.dispose();
   });

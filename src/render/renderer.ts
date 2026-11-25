@@ -311,6 +311,25 @@ export function layoutMissionCardDescription(
   };
 }
 
+export const HANGAR_LAYOUT = {
+  projectorX: 26,
+  projectorY: 22,
+  projectorWidth: 548,
+  projectorHeight: 352,
+  rowX: 42,
+  rowWidth: 260,
+  rowStartY: 68,
+  rowHeight: 28,
+  rowStep: 32,
+  rowCount: 7,
+  descrX: 42,
+  descrY: 296,
+  descrWidth: 260,
+  descrHeight: 36,
+  dividerY: 338,
+  footerY: 347,
+} as const;
+
 export class WebGL2Renderer implements IRenderer {
   private canvas: HTMLCanvasElement | null = null;
   private gl: WebGL2RenderingContext | null = null;
@@ -461,6 +480,27 @@ export class WebGL2Renderer implements IRenderer {
     this.comboFbo = this.createFbo(gl, VIRTUAL_WIDTH, VIRTUAL_HEIGHT);
 
     this.createGeometryBuffers(gl);
+    this.uploadVaultTextures(gl, vault);
+    this.drainGlErrors(gl);
+  }
+
+  public reloadVault(vault: VaultAssetBundle): void {
+    this.vault = vault;
+    const gl = this.gl;
+    if (!gl) {
+      return;
+    }
+
+    const uniqueTextures = new Set<WebGLTexture>();
+    for (const uploaded of this.textures.values()) {
+      uniqueTextures.add(uploaded.texture);
+    }
+    for (const tex of uniqueTextures) {
+      gl.deleteTexture(tex);
+    }
+    this.textures.clear();
+
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     this.uploadVaultTextures(gl, vault);
     this.drainGlErrors(gl);
   }
@@ -787,8 +827,12 @@ export class WebGL2Renderer implements IRenderer {
         }
       }
 
+      const uniqueTextures = new Set<WebGLTexture>();
       for (const t of this.textures.values()) {
-        gl.deleteTexture(t.texture);
+        uniqueTextures.add(t.texture);
+      }
+      for (const tex of uniqueTextures) {
+        gl.deleteTexture(tex);
       }
       if (this.fallbackTexture) gl.deleteTexture(this.fallbackTexture.texture);
       if (this.builtinFontTexture) {
@@ -1881,8 +1925,12 @@ export class WebGL2Renderer implements IRenderer {
       }
     }
 
-    if (p.isUrauser) {
-      pushPart('urauser', 80, 60, tick >> 1, 0.25);
+    const isApexCraft =
+      p.loadout.weapon === 5 &&
+      p.loadout.body === 5 &&
+      p.loadout.engine === 5;
+    if (isApexCraft) {
+      pushPart(this.resolveApexCraftSpriteName(sprites), 80, 60, tick >> 1, 0.25);
     } else {
       const engineFallbacks = [
         'engine_original',
@@ -2622,7 +2670,7 @@ export class WebGL2Renderer implements IRenderer {
       this.drawBitmapText(
         gl,
         smallFont,
-        'SFMT',
+        'OVERDRIVE',
         13,
         leftHudY + 1,
         smallScale,
@@ -2632,7 +2680,7 @@ export class WebGL2Renderer implements IRenderer {
       this.drawBitmapText(
         gl,
         smallFont,
-        'SFMT',
+        'OVERDRIVE',
         12,
         leftHudY,
         smallScale,
@@ -3138,7 +3186,7 @@ export class WebGL2Renderer implements IRenderer {
     const previewAngle = Math.sin(elapsedSec * 1.5) * 0.08 - 0.15;
     const previewSprites: SpriteInstance[] = [];
     const previewFallback: number[] = [];
-    const isUrauser =
+    const isApexCraft =
       hangarUi.loadout.weapon === 5 &&
       hangarUi.loadout.body === 5 &&
       hangarUi.loadout.engine === 5;
@@ -3152,8 +3200,8 @@ export class WebGL2Renderer implements IRenderer {
           x: previewX,
           y: previewY,
           angleRad: previewAngle,
-          scaleX: isUrauser ? 0.55 : 2.2,
-          scaleY: isUrauser ? 0.55 : 2.2,
+          scaleX: isApexCraft ? 0.55 : 2.2,
+          scaleY: isApexCraft ? 0.55 : 2.2,
           depth: 0.2,
           flash: 0,
           clipSea: false,
@@ -3161,8 +3209,8 @@ export class WebGL2Renderer implements IRenderer {
       }
     };
 
-    if (isUrauser) {
-      addPreviewPart('urauser');
+    if (isApexCraft) {
+      addPreviewPart(this.resolveApexCraftSpriteName(sprites));
     } else {
       addPreviewPart(hangarUi.engineSpec.sprite || 'engine_original');
       addPreviewPart(hangarUi.bodySpec.sprite || 'body_original');
@@ -3216,7 +3264,7 @@ export class WebGL2Renderer implements IRenderer {
     this.drawBitmapText(
       gl,
       smallFont,
-      'LUFTRAUSERS HANGAR  //  PROJECTOR MK-I',
+      'KRUNKED SKYBREAKER  //  HANGAR MK-I',
       VIRTUAL_WIDTH * 0.5,
       5,
       1,
@@ -3246,7 +3294,7 @@ export class WebGL2Renderer implements IRenderer {
     const bannerText = isStudioOpen
       ? 'LIVE PALETTE STUDIO'
       : isModDeckOpen
-        ? 'ACT II MOD DECK'
+        ? 'SKYBREAKER MOD DECK'
         : craftBanner;
 
     this.drawBitmapText(
@@ -3303,6 +3351,19 @@ export class WebGL2Renderer implements IRenderer {
       );
     }
 
+    const effectiveAssetMode =
+      hangarUi.assetMode ??
+      (hangarUi.vaultSource === 'steam-local' ? 'steam-local' : 'skybreaker');
+    const steamAvailable =
+      hangarUi.steamAvailable ?? effectiveAssetMode === 'steam-local';
+    const assetsValue =
+      effectiveAssetMode === 'steam-local'
+        ? 'STEAM LOCAL'
+        : steamAvailable
+          ? 'SKYBREAKER'
+          : 'SKYBREAKER [STEAM N/A]';
+    const modeLabel = hangarUi.mode === 'sfmt' ? 'OVERDRIVE' : 'NORMAL';
+
     const activeSpecDescr =
       hangarUi.activeRow === 'weapon'
         ? hangarUi.weaponSpec.descr
@@ -3312,11 +3373,13 @@ export class WebGL2Renderer implements IRenderer {
             ? hangarUi.engineSpec.descr
             : hangarUi.activeRow === 'palette'
               ? `ACTIVE PALETTE: ${hangarUi.paletteName}`
-              : hangarUi.activeRow === 'mode'
-                ? hangarUi.sfmtUnlocked
-                  ? 'SUPER FAST MODE TURBO'
-                  : 'COMPLETE ALL MISSIONS TO UNLOCK SFMT'
-                : 'PRESS SPACE OR ENTER TO LAUNCH SORTIE';
+              : hangarUi.activeRow === 'assets'
+                ? 'ORIGINAL SKYBREAKER ART & SYNTH\nOR LOCAL STEAM VAULT (IF OWNED)'
+                : hangarUi.activeRow === 'mode'
+                  ? hangarUi.sfmtUnlocked
+                    ? 'OVERDRIVE MODE - HIGH SPEED ACE WAVE'
+                    : 'COMPLETE ALL MISSIONS TO UNLOCK OVERDRIVE'
+                  : 'PRESS SPACE OR ENTER TO LAUNCH SORTIE';
 
     const rowDefs: {
       key: HangarUiState['activeRow'];
@@ -3344,11 +3407,16 @@ export class WebGL2Renderer implements IRenderer {
         value: hangarUi.paletteName.toUpperCase(),
       },
       {
+        key: 'assets',
+        label: 'ASSETS',
+        value: assetsValue,
+      },
+      {
         key: 'mode',
         label: 'MODE',
         value: hangarUi.sfmtUnlocked
-          ? hangarUi.mode.toUpperCase()
-          : `${hangarUi.mode.toUpperCase()} [SFMT LOCKED]`,
+          ? modeLabel
+          : `${modeLabel} [LOCKED]`,
       },
       {
         key: 'launch',
@@ -3360,13 +3428,26 @@ export class WebGL2Renderer implements IRenderer {
     this.solidVerts.length = 0;
     for (let i = 0; i < rowDefs.length; i++) {
       const r = rowDefs[i]!;
-      const ry = 70 + i * 38;
+      const ry = HANGAR_LAYOUT.rowStartY + i * HANGAR_LAYOUT.rowStep;
       const isSelected = hangarUi.activeRow === r.key;
       const boxCol = isSelected ? pal.colors[7] : pal.colors[3];
       if (isSelected) {
-        this.pushSolidRect(42, ry, 260, 32, boxCol);
+        this.pushSolidRect(
+          HANGAR_LAYOUT.rowX,
+          ry,
+          HANGAR_LAYOUT.rowWidth,
+          HANGAR_LAYOUT.rowHeight,
+          boxCol,
+        );
       } else {
-        this.pushSolidBorder(42, ry, 260, 32, 1, pal.colors[3]);
+        this.pushSolidBorder(
+          HANGAR_LAYOUT.rowX,
+          ry,
+          HANGAR_LAYOUT.rowWidth,
+          HANGAR_LAYOUT.rowHeight,
+          1,
+          pal.colors[3],
+        );
       }
 
       // 8-color palette preview strip on palette row
@@ -3374,23 +3455,29 @@ export class WebGL2Renderer implements IRenderer {
         for (let c = 1; c <= 7; c++) {
           this.pushSolidRect(
             188 + (c - 1) * 14,
-            ry + 18,
+            ry + 17,
             12,
-            8,
+            7,
             pal.colors[c] ?? pal.colors[7],
           );
         }
-        this.pushSolidRect(174, ry + 18, 12, 8, pal.backcol);
+        this.pushSolidRect(174, ry + 17, 12, 7, pal.backcol);
       }
     }
 
     // Active part description bar
-    this.pushSolidRect(42, 300, 260, 32, contrast.panelMidBg);
+    this.pushSolidRect(
+      HANGAR_LAYOUT.descrX,
+      HANGAR_LAYOUT.descrY,
+      HANGAR_LAYOUT.descrWidth,
+      HANGAR_LAYOUT.descrHeight,
+      contrast.panelMidBg,
+    );
     this.flushSolidArray(gl, this.solidVerts, this.screenProjMatrix);
 
     for (let i = 0; i < rowDefs.length; i++) {
       const r = rowDefs[i]!;
-      const ry = 70 + i * 38;
+      const ry = HANGAR_LAYOUT.rowStartY + i * HANGAR_LAYOUT.rowStep;
       const isSelected = hangarUi.activeRow === r.key;
       const labelCol = isSelected
         ? contrast.selectedTextInk
@@ -3404,7 +3491,7 @@ export class WebGL2Renderer implements IRenderer {
         smallFont,
         `${prefix}${r.label}`,
         48,
-        ry + 5,
+        ry + 4,
         1,
         'left',
         labelCol,
@@ -3414,7 +3501,7 @@ export class WebGL2Renderer implements IRenderer {
         smallFont,
         isSelected ? `< ${r.value} >` : r.value,
         294,
-        ry + (r.key === 'palette' ? 5 : 14),
+        ry + (r.key === 'palette' ? 4 : 14),
         1,
         'right',
         valCol,
@@ -3430,8 +3517,12 @@ export class WebGL2Renderer implements IRenderer {
     );
     const descrLineCount = descrLayout.lines.length;
     const descrStartY =
-      descrLineCount <= 1 ? 311 : descrLineCount === 2 ? 305 : 302;
-    const descrStepY = descrLineCount === 2 ? 12 : 10;
+      descrLineCount <= 1
+        ? HANGAR_LAYOUT.descrY + 13
+        : descrLineCount === 2
+          ? HANGAR_LAYOUT.descrY + 6
+          : HANGAR_LAYOUT.descrY + 3;
+    const descrStepY = descrLineCount === 2 ? 13 : 10;
     for (let i = 0; i < descrLineCount; i++) {
       const line = descrLayout.lines[i]!;
       this.drawBitmapText(
@@ -3787,7 +3878,7 @@ export class WebGL2Renderer implements IRenderer {
     this.drawBitmapText(
       gl,
       smallFont,
-      flags.moddedEnabled ? 'MODE: ACT II MODDED' : 'MODE: VANILLA 1:1 LOCKED',
+      flags.moddedEnabled ? 'MODE: SKYBREAKER MODDED' : 'MODE: VANILLA 1:1 LOCKED',
       42,
       347,
       1,
@@ -4549,6 +4640,18 @@ export class WebGL2Renderer implements IRenderer {
     gl.bindVertexArray(null);
   }
 
+  private resolveApexCraftSpriteName(
+    sprites: Record<string, SpriteEntry>,
+  ): string | undefined {
+    if (sprites['apex_omega']) {
+      return 'apex_omega';
+    }
+    const secretEntry = Object.values(sprites).find(
+      (entry) => entry.size[0] === 416 && entry.size[1] === 300,
+    );
+    return secretEntry?.name;
+  }
+
   private uploadVaultTextures(
     gl: WebGL2RenderingContext,
     vault: VaultAssetBundle,
@@ -4569,22 +4672,26 @@ export class WebGL2Renderer implements IRenderer {
     }
 
     // Fallback solid greyscale texture (index 1)
-    const fallbackBytes = new Uint8Array(16 * 16 * 4);
-    for (let i = 0; i < fallbackBytes.length; i += 4) {
-      fallbackBytes[i] = 32;
-      fallbackBytes[i + 1] = 32;
-      fallbackBytes[i + 2] = 32;
-      fallbackBytes[i + 3] = 255;
+    if (!this.fallbackTexture) {
+      const fallbackBytes = new Uint8Array(16 * 16 * 4);
+      for (let i = 0; i < fallbackBytes.length; i += 4) {
+        fallbackBytes[i] = 32;
+        fallbackBytes[i + 1] = 32;
+        fallbackBytes[i + 2] = 32;
+        fallbackBytes[i + 3] = 255;
+      }
+      this.fallbackTexture = this.uploadRgbaTexture(gl, 16, 16, fallbackBytes);
     }
-    this.fallbackTexture = this.uploadRgbaTexture(gl, 16, 16, fallbackBytes);
 
     // Built-in crisp 5x7 pixel font texture
-    this.builtinFontTexture = this.uploadRgbaTexture(
-      gl,
-      BUILTIN_FONT_WIDTH,
-      BUILTIN_FONT_HEIGHT,
-      this.builtinFontRgba,
-    );
+    if (!this.builtinFontTexture) {
+      this.builtinFontTexture = this.uploadRgbaTexture(
+        gl,
+        BUILTIN_FONT_WIDTH,
+        BUILTIN_FONT_HEIGHT,
+        this.builtinFontRgba,
+      );
+    }
   }
 
   private uploadRgbaTexture(
@@ -4792,13 +4899,20 @@ export class WebGL2Renderer implements IRenderer {
         48,
         84,
       );
+      const fallbackAssets =
+        hangarUi.assetMode === 'steam-local' ||
+        hangarUi.vaultSource === 'steam-local'
+          ? 'STEAM LOCAL'
+          : hangarUi.steamAvailable
+            ? 'SKYBREAKER'
+            : 'SKYBREAKER [STEAM N/A]';
       ctx.fillText(
-        `PALETTE: ${hangarUi.paletteName}  MODE: ${hangarUi.mode.toUpperCase()}`,
+        `PALETTE: ${hangarUi.paletteName}  ASSETS: ${fallbackAssets}  MODE: ${hangarUi.mode === 'sfmt' ? 'OVERDRIVE' : 'NORMAL'}`,
         48,
         106,
       );
       if (hangarUi.modDeckOpen) {
-        ctx.fillText('ACT II MOD DECK', 48, 132);
+        ctx.fillText('SKYBREAKER MOD DECK', 48, 132);
       }
       if (hangarUi.paletteStudio?.open) {
         ctx.fillText('LIVE PALETTE STUDIO', 48, 154);

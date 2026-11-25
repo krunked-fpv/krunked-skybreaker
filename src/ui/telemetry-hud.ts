@@ -20,8 +20,10 @@ export function formatTelemetryLines(data: TelemetryData): string[] {
     ? `${audioMetrics.interStemDriftMs.toFixed(3)}ms [${audioMetrics.source}/${audioMetrics.musicState}]`
     : 'n/a';
 
+  const assetModeLabel =
+    vaultSource === 'steam-local' ? 'steam-local' : 'skybreaker-original';
   const lines = [
-    `VAULT: ${vaultSource} | PALETTE: ${frameMetrics.activePaletteId}`,
+    `ASSETS: ${assetModeLabel} | PALETTE: ${frameMetrics.activePaletteId}`,
     `FPS: ${frameMetrics.fps.toFixed(1)} | AVG: ${frameMetrics.avgFrameDeltaMs.toFixed(2)}ms | P95: ${frameMetrics.p95FrameDeltaMs.toFixed(2)}ms | DC: ${frameMetrics.drawCalls} | GLERR: ${frameMetrics.webglErrors}`,
     `SIM: t=${snapshot.tick} phase=${snapshot.phase} mode=${snapshot.mode}${snapshot.paused ? ' [PAUSED]' : ''} craft="${p.planeName}"`,
     `POS: (${p.x.toFixed(1)}, ${p.y.toFixed(1)}) VEL: (${p.vx.toFixed(2)}, ${p.vy.toFixed(2)}) spd=${speed.toFixed(2)} ang=${p.angleDeg.toFixed(1)}deg`,

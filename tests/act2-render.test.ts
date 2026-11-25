@@ -623,12 +623,13 @@ describe('PaletteStudioController & sanitizeCustomPalette', () => {
 });
 
 describe('HangarController Act II Mod Deck & 9-Part Cycling', () => {
-  it('keeps HANGAR_ROWS untouched, toggles Mod Deck, handles keys, and clamps parts strictly by modded arsenal flag', () => {
+  it('exposes 7 HANGAR_ROWS including assets, toggles Mod Deck, handles keys, and clamps parts strictly by modded arsenal flag', () => {
     expect(HANGAR_ROWS).toEqual([
       'weapon',
       'body',
       'engine',
       'palette',
+      'assets',
       'mode',
       'launch',
     ]);
@@ -1078,7 +1079,7 @@ describe('WebGL2Renderer Act II Visuals & Shader FX Pipeline', () => {
     });
     mockGl.fontTextsLens.length = 0;
     renderer.render(hangarSnap, hangarSnap, 0, hangar.buildUiState(hangarSnap), 1.0);
-    expect(mockGl.fontTextsLens).toContain('ACT II MOD DECK'.length);
+    expect(mockGl.fontTextsLens).toContain('SKYBREAKER MOD DECK'.length);
 
     hangar.togglePaletteStudio(true);
     mockGl.fontTextsLens.length = 0;
