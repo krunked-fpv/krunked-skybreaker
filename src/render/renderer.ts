@@ -1140,7 +1140,35 @@ export class WebGL2Renderer implements IRenderer {
     }
 
     if (snapshot.phase === 'hangar') {
+      this.collectLaunchSubmarine(
+        camX,
+        snapshot.seaLevel,
+        snapshot.seaLevel,
+        0.55,
+        true,
+        sprites,
+        mainOut,
+        reflectOut,
+        solidWorldOut,
+      );
       return;
+    }
+
+    if (
+      (snapshot.phase === 'launching' || snapshot.phase === 'playing') &&
+      snapshot.launchSubY !== undefined
+    ) {
+      this.collectLaunchSubmarine(
+        0,
+        snapshot.launchSubY,
+        snapshot.seaLevel,
+        0.52,
+        snapshot.launchSubY <= snapshot.seaLevel + 8,
+        sprites,
+        mainOut,
+        reflectOut,
+        solidWorldOut,
+      );
     }
 
     // 6. PB Ghost Silhouette & dotted index-4 trail (Act II)
@@ -1229,6 +1257,70 @@ export class WebGL2Renderer implements IRenderer {
     }
   }
 
+  private collectLaunchSubmarine(
+    subX: number,
+    subY: number,
+    seaLevel: number,
+    depth: number,
+    shouldReflect: boolean,
+    sprites: Record<string, SpriteEntry>,
+    mainOut: SpriteInstance[],
+    reflectOut: SpriteInstance[],
+    solidWorldOut: number[],
+  ): void {
+    const subEntry = sprites['submarine'];
+    if (subEntry) {
+      const inst: SpriteInstance = {
+        entry: subEntry,
+        frame: 0,
+        x: subX,
+        y: subY,
+        angleRad: 0,
+        scaleX: 1,
+        scaleY: 1,
+        depth,
+        flash: 0,
+        clipSea: true,
+      };
+      mainOut.push(inst);
+      if (shouldReflect) {
+        reflectOut.push(inst);
+      }
+      return;
+    }
+
+    // Clean dark silhouette fallback (160x22 hull + 36x14 conning tower) above seaLevel
+    const hullTop = subY - 22;
+    const hullBottom = Math.min(seaLevel, subY);
+    if (hullBottom > hullTop) {
+      const hullH = hullBottom - hullTop;
+      this.pushWorldFallbackRect(
+        solidWorldOut,
+        subX,
+        hullTop + hullH * 0.5,
+        160,
+        hullH,
+        0,
+        this.activePalette.colors[1],
+      );
+    }
+
+    const towerTop = subY - 36;
+    const towerBottom = Math.min(seaLevel, subY - 22);
+    if (towerBottom > towerTop) {
+      const towerH = towerBottom - towerTop;
+      this.pushWorldFallbackRect(
+        solidWorldOut,
+        subX,
+        towerTop + towerH * 0.5,
+        36,
+        towerH,
+        0,
+        this.activePalette.colors[1],
+      );
+    }
+  }
+
   private collectGhostPose(
     ghost: NonNullable<SimSnapshot['ghostPose']>,
     solidWorldOut: number[],
@@ -1276,7 +1368,16 @@ export class WebGL2Renderer implements IRenderer {
     const ey = canInterp ? lerp(prevEnemy.y, enemy.y, alpha) : enemy.y;
     const hullTransform = resolveEnemyRenderTransform(enemy);
     const angleRad = hullTransform.angleRad;
-    const flash = enemy.flashTicks > 0 ? 1 : 0;
+    const isColossal =
+      enemy.kind === 'Blimp' ||
+      enemy.kind === 'SkyCarrier' ||
+      enemy.kind === 'BigBoat' ||
+      enemy.kind === 'Dreadnought';
+    const flash =
+      enemy.flashTicks > 0 &&
+      (isColossal ? tick % 6 < 2 : enemy.flashTicks % 2 === 1)
+        ? 1
+        : 0;
 
     const isSub = enemy.kind === 'Submarine' || enemy.kind === 'AceMarine';
     const targetList = isSub && ey > -18 ? underwaterOut : mainOut;
@@ -1329,7 +1430,7 @@ export class WebGL2Renderer implements IRenderer {
 
     if (enemy.kind === 'Blimp' || enemy.kind === 'SkyCarrier') {
       const isCarrier = enemy.kind === 'SkyCarrier';
-      const scaleMult = isCarrier ? 1.1 : 1.0;
+      const scaleMult = 1.0;
       const bodyName =
         enemy.state === 'sinking' || enemy.state === 'falling'
           ? 'blimp_die'
@@ -1462,8 +1563,8 @@ export class WebGL2Renderer implements IRenderer {
         } else {
           pushOrFallback(
             gunName,
-            ex,
-            ey - 10,
+            ex + 3 * hullTransform.scaleX,
+            ey - 14,
             enemy.gunAngleDeg * DEG_TO_RAD,
             0,
             14,
@@ -1588,6 +1689,47 @@ export class WebGL2Renderer implements IRenderer {
         };
         mainOut.push(inst);
         reflectOut.push(inst);
+      }
+    }
+
+    // LaserAce 6-frame laser_charge telegraph before beam fires
+    if (
+      enemy.kind === 'LaserAce' &&
+      !enemy.laserActive &&
+      (enemy.laserChargeTicks ?? 0) > 0
+    ) {
+      const chargeAngleRad = enemy.gunAngleDeg * DEG_TO_RAD;
+      const chargeEntry = sprites['laser_charge'];
+      if (chargeEntry) {
+        const inst: SpriteInstance = {
+          entry: chargeEntry,
+          frame: Math.max(
+            0,
+            Math.floor((24 - (enemy.laserChargeTicks ?? 0)) / 4),
+          ),
+          x: ex,
+          y: ey,
+          angleRad: chargeAngleRad,
+          scaleX: 1,
+          scaleY: 1,
+          depth: 0.38,
+          flash: 0,
+          clipSea: true,
+        };
+        mainOut.push(inst);
+        if (ey < 4) {
+          reflectOut.push(inst);
+        }
+      } else {
+        this.pushWorldFallbackRect(
+          solidWorldOut,
+          ex + Math.cos(chargeAngleRad) * 14,
+          ey + Math.sin(chargeAngleRad) * 14,
+          12,
+          12,
+          chargeAngleRad,
+          this.activePalette.colors[7],
+        );
       }
     }
 
@@ -2475,7 +2617,7 @@ export class WebGL2Renderer implements IRenderer {
     }
 
     const smallScale = 1;
-    let leftHudY = isDogfight ? 32 : subHudStartY;
+    let leftHudY = isDogfight ? 34 : subHudStartY;
     if (snapshot.mode === 'sfmt') {
       this.drawBitmapText(
         gl,
@@ -2566,7 +2708,7 @@ export class WebGL2Renderer implements IRenderer {
     // Act II Ghost world tag
     if (snapshot.ghostPose?.alive) {
       const gx = Math.round(VIRTUAL_WIDTH * 0.5 + (snapshot.ghostPose.x - camX));
-      const gy = Math.round(VIRTUAL_HEIGHT * 0.5 + (snapshot.ghostPose.y - camY) - 20);
+      const gy = Math.round(VIRTUAL_HEIGHT * 0.5 + (snapshot.ghostPose.y - camY) - 26);
       if (gx >= -24 && gx <= VIRTUAL_WIDTH + 24 && gy >= -12 && gy <= VIRTUAL_HEIGHT + 12) {
         this.drawBitmapText(gl, smallFont, 'GHOST', gx + 1, gy + 1, 1, 'center', hudShadow);
         this.drawBitmapText(gl, smallFont, 'GHOST', gx, gy, 1, 'center', pal.colors[6]);
@@ -2575,26 +2717,23 @@ export class WebGL2Renderer implements IRenderer {
 
     // Act II 2P Co-op / 1v1 Dogfight HUD: P1 & P2 craft tags, P1/P2 HP bars, Dogfight Scoreboard & Round KO banner
     if (snapshot.player2) {
-      if (snapshot.player.alive) {
-        const p1sx = Math.round(VIRTUAL_WIDTH * 0.5 + (snapshot.player.x - camX));
-        const p1sy = Math.round(VIRTUAL_HEIGHT * 0.5 + (snapshot.player.y - camY) - 24);
-        if (p1sx >= -20 && p1sx <= VIRTUAL_WIDTH + 20 && p1sy >= -12 && p1sy <= VIRTUAL_HEIGHT + 12) {
-          this.drawBitmapText(gl, smallFont, 'P1', p1sx + 1, p1sy + 1, 1, 'center', hudShadow);
-          this.drawBitmapText(gl, smallFont, 'P1', p1sx, p1sy, 1, 'center', fg);
-        }
-      }
-      if (snapshot.player2.alive) {
-        const p2sx = Math.round(VIRTUAL_WIDTH * 0.5 + (snapshot.player2.x - camX));
-        const p2sy = Math.round(VIRTUAL_HEIGHT * 0.5 + (snapshot.player2.y - camY) - 24);
-        if (p2sx >= -20 && p2sx <= VIRTUAL_WIDTH + 20 && p2sy >= -12 && p2sy <= VIRTUAL_HEIGHT + 12) {
-          const p2TagCol =
-            snapshot.activeMods?.multiplayerMode === 'dogfight1v1'
-              ? warn
-              : pal.colors[5];
-          this.drawBitmapText(gl, smallFont, 'P2', p2sx + 1, p2sy + 1, 1, 'center', hudShadow);
-          this.drawBitmapText(gl, smallFont, 'P2', p2sx, p2sy, 1, 'center', p2TagCol);
-        }
-      }
+      const p1sx = Math.round(VIRTUAL_WIDTH * 0.5 + (snapshot.player.x - camX));
+      const p1sy = Math.round(VIRTUAL_HEIGHT * 0.5 + (snapshot.player.y - camY) - 30);
+      const showP1Tag =
+        snapshot.player.alive &&
+        p1sx >= -20 &&
+        p1sx <= VIRTUAL_WIDTH + 20 &&
+        p1sy >= -12 &&
+        p1sy <= VIRTUAL_HEIGHT + 12;
+
+      const p2sx = Math.round(VIRTUAL_WIDTH * 0.5 + (snapshot.player2.x - camX));
+      const p2sy = Math.round(VIRTUAL_HEIGHT * 0.5 + (snapshot.player2.y - camY) - 30);
+      const showP2Tag =
+        snapshot.player2.alive &&
+        p2sx >= -20 &&
+        p2sx <= VIRTUAL_WIDTH + 20 &&
+        p2sy >= -12 &&
+        p2sy <= VIRTUAL_HEIGHT + 12;
 
       const p2Ratio = clamp(
         snapshot.player2.health / Math.max(1, snapshot.player2.maxHealth),
@@ -2607,16 +2746,25 @@ export class WebGL2Renderer implements IRenderer {
         1,
       );
 
-      const p1HudY = 12;
-      const p2HudY = isDogfight ? 12 : Math.max(48, subHudStartY + 2);
-      const p2BarY = p2HudY + 10;
+      const p2BoxY = isDogfight ? 6 : Math.max(44, subHudStartY);
+      const p2BarY = p2BoxY + 14;
 
       this.solidVerts.length = 0;
-      if (isDogfight) {
-        this.pushSolidRect(12, p1HudY + 10, 76, 6, hudTrackBg);
-        this.pushSolidRect(12, p1HudY + 10, Math.round(76 * p1Ratio), 6, fg);
-        this.pushSolidBorder(12, p1HudY + 10, 76, 6, 1, fg);
+      if (showP1Tag) {
+        this.pushSolidRect(p1sx - 9, p1sy - 1, 18, 10, hudBoxBg);
       }
+      if (showP2Tag) {
+        this.pushSolidRect(p2sx - 9, p2sy - 1, 18, 10, hudBoxBg);
+      }
+      if (isDogfight) {
+        this.pushSolidRect(8, 6, 86, 24, hudBoxBg);
+        this.pushSolidBorder(8, 6, 86, 24, 1, fg);
+        this.pushSolidRect(12, 20, 76, 6, hudTrackBg);
+        this.pushSolidRect(12, 20, Math.round(76 * p1Ratio), 6, fg);
+        this.pushSolidBorder(12, 20, 76, 6, 1, fg);
+      }
+      this.pushSolidRect(VIRTUAL_WIDTH - 94, p2BoxY, 86, 24, hudBoxBg);
+      this.pushSolidBorder(VIRTUAL_WIDTH - 94, p2BoxY, 86, 24, 1, fg);
       this.pushSolidRect(VIRTUAL_WIDTH - 88, p2BarY, 76, 6, hudTrackBg);
       this.pushSolidRect(
         VIRTUAL_WIDTH - 88,
@@ -2628,9 +2776,22 @@ export class WebGL2Renderer implements IRenderer {
       this.pushSolidBorder(VIRTUAL_WIDTH - 88, p2BarY, 76, 6, 1, fg);
       this.flushSolidArray(gl, this.solidVerts, this.screenProjMatrix);
 
+      if (showP1Tag) {
+        this.drawBitmapText(gl, smallFont, 'P1', p1sx + 1, p1sy + 1, 1, 'center', hudShadow);
+        this.drawBitmapText(gl, smallFont, 'P1', p1sx, p1sy, 1, 'center', fg);
+      }
+      if (showP2Tag) {
+        const p2TagCol =
+          snapshot.activeMods?.multiplayerMode === 'dogfight1v1'
+            ? warn
+            : pal.colors[5];
+        this.drawBitmapText(gl, smallFont, 'P2', p2sx + 1, p2sy + 1, 1, 'center', hudShadow);
+        this.drawBitmapText(gl, smallFont, 'P2', p2sx, p2sy, 1, 'center', p2TagCol);
+      }
+
       if (isDogfight) {
-        this.drawBitmapText(gl, smallFont, 'P1 HP', 13, p1HudY + 1, 1, 'left', hudShadow);
-        this.drawBitmapText(gl, smallFont, 'P1 HP', 12, p1HudY, 1, 'left', fg);
+        this.drawBitmapText(gl, smallFont, 'P1 HP', 13, 11, 1, 'left', hudShadow);
+        this.drawBitmapText(gl, smallFont, 'P1 HP', 12, 10, 1, 'left', fg);
       }
       const p2Label = `P2 ${snapshot.player2.alive ? `${Math.round(p2Ratio * 100)}%` : 'KO'}`;
       this.drawBitmapText(
@@ -2638,7 +2799,7 @@ export class WebGL2Renderer implements IRenderer {
         smallFont,
         p2Label,
         VIRTUAL_WIDTH - 11,
-        p2HudY + 1,
+        p2BoxY + 5,
         1,
         'right',
         hudShadow,
@@ -2648,7 +2809,7 @@ export class WebGL2Renderer implements IRenderer {
         smallFont,
         p2Label,
         VIRTUAL_WIDTH - 12,
-        p2HudY,
+        p2BoxY + 4,
         1,
         'right',
         isDogfight ? warn : pal.colors[5],

@@ -217,7 +217,7 @@ void main() {
 
   // Subtle flash tint during nuke detonation sequence
   if (delta.y > 0.0) {
-    float flashMix = clamp(delta.y / 12.0, 0.0, 0.75);
+    float flashMix = clamp(delta.y / 14.0, 0.0, 0.55);
     outColor = mix(outColor, uniform_colors[7], flashMix);
   }
 
@@ -407,6 +407,7 @@ void main() {
   }
 
   vec2 uv = vTexCoords;
+  float hudSafe = 1.0 - smoothstep(0.82, 0.88, vTexCoords.y);
   float rimBoost = 0.0;
 
   // Shockwaves (uFxFlags.w > 0.5): radial ring UV distortion + faint bright crest rim
@@ -423,8 +424,8 @@ void main() {
           float wave = cos((ringDist / band) * 1.5707963);
           wave = wave * wave;
           vec2 dir = swDelta / dist;
-          uv -= (dir / aspect) * (wave * 0.022 * sw.w);
-          rimBoost += wave * 0.28 * sw.w;
+          uv -= (dir / aspect) * (wave * 0.022 * sw.w * hudSafe);
+          rimBoost += wave * 0.28 * sw.w * hudSafe;
         }
       }
     }
@@ -436,7 +437,7 @@ void main() {
   float edgeDist = length(centered * vec2(1.15, 1.0));
   if (uFxFlags.z > 0.5 && speedNorm > 0.01) {
     float warpStrength = smoothstep(0.25, 0.78, edgeDist) * speedNorm;
-    uv -= centered * (warpStrength * 0.045);
+    uv -= centered * (warpStrength * 0.045 * hudSafe);
   }
 
   vec3 col = resolveOutColor(uv);
@@ -447,7 +448,7 @@ void main() {
   if (uFxFlags.z > 0.5) {
     vec2 streakDir = centered * (0.014 * speedNorm * smoothstep(0.22, 0.75, edgeDist));
     vec3 streakCol = resolveOutColor(uv + streakDir);
-    col = mix(col, streakCol, 0.30 * speedNorm * smoothstep(0.25, 0.75, edgeDist));
+    col = mix(col, streakCol, 0.30 * speedNorm * smoothstep(0.25, 0.75, edgeDist) * hudSafe);
     col = clamp((col - 0.5) * (1.0 + 0.14 * speedNorm) + 0.5, 0.0, 1.0);
   }
 
@@ -473,7 +474,7 @@ void main() {
       float weight = clamp(1.0 - distTo7 * 2.2, 0.0, 1.0) * 0.70 + smoothstep(0.65, 1.0, lum) * 0.30;
       bloomAcc += s * weight;
     }
-    col = clamp(col + (bloomAcc / 8.0) * 0.42, 0.0, 1.0);
+    col = clamp(col + (bloomAcc / 8.0) * 0.30, 0.0, 1.0);
   }
 
   // CRT Scanlines (uFxFlags.x > 0.5): subtle horizontal modulation + gentle CRT edge vignette
