@@ -219,10 +219,13 @@ function assembleSteamVaultBundle(src: RawSteamSources): VaultAssetBundle {
 export class VaultLoader implements IVaultLoader {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly hasCustomTransport: boolean;
 
   constructor(options?: VaultLoaderOptions) {
     this.baseUrl = (options?.baseUrl ?? '').replace(/\/+$/, '');
     this.fetchImpl = options?.fetchImpl ?? globalThis.fetch.bind(globalThis);
+    this.hasCustomTransport =
+      options?.baseUrl !== undefined || options?.fetchImpl !== undefined;
   }
 
   private async fetchText(relPath: string): Promise<string> {
@@ -246,6 +249,11 @@ export class VaultLoader implements IVaultLoader {
   }
 
   async load(): Promise<VaultAssetBundle> {
+    const hostname = (globalThis as { location?: { hostname?: string } }).location?.hostname;
+    if (!this.hasCustomTransport && typeof hostname === 'string' && hostname.endsWith('.github.io')) {
+      return createProceduralFallbackBundle();
+    }
+
     try {
       const manifestRes = await this.fetchImpl(`${this.baseUrl}/steam-vault/manifest.json`);
       if (!manifestRes.ok) {
