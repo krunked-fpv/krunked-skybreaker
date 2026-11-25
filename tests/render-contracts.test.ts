@@ -1402,4 +1402,197 @@ describe('Renderer Visual & UI Regression Contracts', () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it('uses exact integer NEAREST font scales across Hangar banner, HUD, Pause, and GameOver', () => {
+    const makeTestFontSpec = (
+      name: string,
+      lineHeight: number,
+      glyphW: number,
+      glyphH: number,
+      yoffset: number,
+    ) => {
+      const glyphs: Record<
+        number,
+        {
+          id: number;
+          x: number;
+          y: number;
+          width: number;
+          height: number;
+          xoffset: number;
+          yoffset: number;
+          xadvance: number;
+        }
+      > = {};
+      for (let code = 32; code <= 126; code++) {
+        glyphs[code] = {
+          id: code,
+          x: (code - 32) % 16 * (glyphW + 1),
+          y: Math.floor((code - 32) / 16) * (glyphH + 1),
+          width: glyphW,
+          height: glyphH,
+          xoffset: 0,
+          yoffset,
+          xadvance: glyphW + 1,
+        };
+      }
+      return {
+        name,
+        face: name,
+        size: lineHeight - 2,
+        lineHeight,
+        base: lineHeight - 4,
+        scaleW: 256,
+        scaleH: 256,
+        pageFile: `${name}_0.png`,
+        glyphs,
+      };
+    };
+
+    const runWithFonts = (withVaultFonts: boolean) => {
+      const mockGl = createMockWebGL2Context();
+      const createdPrograms: Array<{ id: number }> = [];
+      let currentProgram: unknown = null;
+      const fontQuads: Array<{ verts: Float32Array; isCombo: boolean }> = [];
+
+      mockGl.gl.createProgram = vi.fn(() => {
+        const p = { id: createdPrograms.length + 1 };
+        createdPrograms.push(p);
+        return p;
+      });
+      mockGl.gl.useProgram = vi.fn((p: unknown) => {
+        currentProgram = p;
+      });
+      mockGl.gl.bufferData = vi.fn((_target: number, data: ArrayBufferView | number) => {
+        if (!(data instanceof Float32Array) || data.length === 0) return;
+        // fontProg is 4th compiled program (index 3), comboFontProg is 5th (index 4)
+        if (currentProgram === createdPrograms[3]) {
+          fontQuads.push({ verts: new Float32Array(data), isCombo: false });
+        } else if (currentProgram === createdPrograms[4]) {
+          fontQuads.push({ verts: new Float32Array(data), isCombo: true });
+        }
+      });
+
+      const mockCanvas = {
+        width: 600,
+        height: 400,
+        style: { imageRendering: '' },
+        getContext: vi.fn((kind: string) => (kind === 'webgl2' ? mockGl.gl : null)),
+      } as unknown as HTMLCanvasElement;
+
+      const vault = createMockVaultBundle();
+      if (withVaultFonts) {
+        const blankTex = new Uint8Array(256 * 256 * 4);
+        vault.data.fonts = {
+          fntb: makeTestFontSpec('fntb', 34, 17, 23, 5),
+          fntm: makeTestFontSpec('fntm', 18, 9, 12, 3),
+          fnts: makeTestFontSpec('fnts', 10, 6, 7, 1),
+        };
+        vault.textures.fntb_0 = {
+          name: 'fntb_0',
+          width: 256,
+          height: 256,
+          rgba: blankTex,
+          source: 'procedural',
+        };
+        vault.textures.fntm_0 = {
+          name: 'fntm_0',
+          width: 256,
+          height: 256,
+          rgba: blankTex,
+          source: 'procedural',
+        };
+        vault.textures.fnts_0 = {
+          name: 'fnts_0',
+          width: 256,
+          height: 256,
+          rgba: blankTex,
+          source: 'procedural',
+        };
+      }
+
+      const renderer = new WebGL2Renderer();
+      renderer.init(mockCanvas, vault);
+
+      // 1. Hangar banner ('BEAMRAUSER')
+      fontQuads.length = 0;
+      const controller = new HangarController();
+      const hangarSnap = makeSnapshot({
+        phase: 'hangar',
+        player: { ...makeSnapshot().player, planeName: 'BEAMRAUSER' },
+      });
+      const hangarUi = { ...controller.buildUiState(hangarSnap), planeName: 'BEAMRAUSER' };
+      renderer.render(hangarSnap, hangarSnap, 0, hangarUi, 0.5);
+
+      const bannerDraw = fontQuads.find((q) => q.verts.length === 'BEAMRAUSER'.length * 24);
+      expect(bannerDraw).toBeDefined();
+      const bannerH = bannerDraw!.verts[9]! - bannerDraw!.verts[1]!;
+      const bannerY0 = bannerDraw!.verts[1]!;
+      const bannerY1 = bannerDraw!.verts[9]!;
+      if (withVaultFonts) {
+        expect(bannerH).toBe(12); // fntm glyphH=12 * scale=1 (never 0.85)
+        expect(bannerY0).toBe(39); // y=36 + yoffset=3
+      } else {
+        expect(bannerH).toBe(14); // builtin glyphH=7 * scale=2 (never 1.5)
+        expect(bannerY0).toBe(36); // y=36 + yoffset=0
+      }
+      expect(bannerY0).toBeGreaterThanOrEqual(32);
+      expect(bannerY1).toBeLessThanOrEqual(58);
+      for (let i = 0; i < bannerDraw!.verts.length; i += 4) {
+        expect(Number.isInteger(bannerDraw!.verts[i]!)).toBe(true);
+        expect(Number.isInteger(bannerDraw!.verts[i + 1]!)).toBe(true);
+      }
+
+      // 2. HUD (Score + Combo + SFMT + ACE BOT)
+      fontQuads.length = 0;
+      const hudSnap = makeSnapshot({
+        phase: 'playing',
+        mode: 'sfmt',
+        autopilotEnabled: true,
+        score: 12345,
+        combo: 4,
+        comboTimer: 90,
+        comboMaxTimer: 180,
+      });
+      renderer.render(hudSnap, hudSnap, 0, null, 0.5);
+      const comboDraw = fontQuads.find((q) => q.isCombo);
+      expect(comboDraw).toBeDefined();
+      const expectedBigH = withVaultFonts ? 23 : 14; // fntb*1=23, builtin*2=14
+      expect(comboDraw!.verts[9]! - comboDraw!.verts[1]!).toBe(expectedBigH);
+
+      // 3. Pause ('PAUSED') — drawHudPass renders 6-char score first, so take last 6-char quad
+      fontQuads.length = 0;
+      const pauseSnap = makeSnapshot({ phase: 'playing', paused: true });
+      renderer.render(pauseSnap, pauseSnap, 0, null, 0.5);
+      const pausedDraw = fontQuads
+        .filter((q) => !q.isCombo && q.verts.length === 'PAUSED'.length * 24)
+        .at(-1);
+      expect(pausedDraw).toBeDefined();
+      expect(pausedDraw!.verts[9]! - pausedDraw!.verts[1]!).toBe(withVaultFonts ? 23 : 21);
+
+      // 4. GameOver ('SHOT DOWN' + planeName subtitle)
+      fontQuads.length = 0;
+      const overSnap = makeSnapshot({
+        phase: 'gameover',
+        player: { ...makeSnapshot().player, alive: false, planeName: 'BEAMRAUSER' },
+      });
+      renderer.render(overSnap, overSnap, 0, null, 0.5);
+      const shotDownDraw = fontQuads
+        .filter((q) => !q.isCombo && q.verts.length === 'SHOT DOWN'.length * 24)
+        .at(-1);
+      expect(shotDownDraw).toBeDefined();
+      expect(shotDownDraw!.verts[9]! - shotDownDraw!.verts[1]!).toBe(expectedBigH);
+
+      const subtitleDraw = fontQuads
+        .filter((q) => !q.isCombo && q.verts.length === 'BEAMRAUSER'.length * 24)
+        .at(-1);
+      expect(subtitleDraw).toBeDefined();
+      expect(subtitleDraw!.verts[9]! - subtitleDraw!.verts[1]!).toBe(7); // fnts/builtin*1 (never 1.2)
+
+      renderer.dispose();
+    };
+
+    runWithFonts(true);
+    runWithFonts(false);
+  });
 });

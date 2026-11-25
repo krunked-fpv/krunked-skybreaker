@@ -1917,7 +1917,7 @@ export class WebGL2Renderer implements IRenderer {
     const smallFont = this.resolveFont('fnts', 'fntm');
 
     const scoreStr = String(Math.floor(snapshot.score)).padStart(6, '0');
-    const scoreScale = scoreFont.spec === this.builtinFontSpec ? 2 : 0.75;
+    const scoreScale = scoreFont.spec === this.builtinFontSpec ? 2 : 1;
     this.drawBitmapText(
       gl,
       scoreFont,
@@ -1930,9 +1930,22 @@ export class WebGL2Renderer implements IRenderer {
     );
     this.drawBitmapText(gl, scoreFont, scoreStr, 11, 9, scoreScale, 'left', fg);
 
-    const smallScale = smallFont.spec === this.builtinFontSpec ? 1 : 1;
+    const smallScale = 1;
+    const subHudStartY =
+      scoreFont.spec === this.builtinFontSpec
+        ? 28
+        : 9 + Math.round(scoreFont.spec.lineHeight * scoreScale) - 2;
     if (snapshot.mode === 'sfmt') {
-      this.drawBitmapText(gl, smallFont, 'SFMT', 12, 28, smallScale, 'left', warn);
+      this.drawBitmapText(
+        gl,
+        smallFont,
+        'SFMT',
+        12,
+        subHudStartY,
+        smallScale,
+        'left',
+        warn,
+      );
     }
     if (snapshot.autopilotEnabled) {
       this.drawBitmapText(
@@ -1940,7 +1953,7 @@ export class WebGL2Renderer implements IRenderer {
         smallFont,
         'ACE BOT',
         12,
-        snapshot.mode === 'sfmt' ? 40 : 28,
+        snapshot.mode === 'sfmt' ? subHudStartY + 12 : subHudStartY,
         smallScale,
         'left',
         pal.colors[2],
@@ -1950,7 +1963,7 @@ export class WebGL2Renderer implements IRenderer {
     // Combo text using combofont.shader vertical barh decay
     if (snapshot.combo > 1 || snapshot.comboTimer > 0) {
       const comboText = `COMBO x${snapshot.combo}`;
-      const comboScale = scoreFont.spec === this.builtinFontSpec ? 2 : 0.75;
+      const comboScale = scoreFont.spec === this.builtinFontSpec ? 2 : 1;
       const timerRatio =
         snapshot.comboMaxTimer > 0
           ? clamp(snapshot.comboTimer / snapshot.comboMaxTimer, 0, 1)
@@ -2091,14 +2104,17 @@ export class WebGL2Renderer implements IRenderer {
 
     const bigFont = this.resolveFont('fntb', 'fntm');
     const smallFont = this.resolveFont('fnts', 'fntm');
-    const titleScale = bigFont.spec === this.builtinFontSpec ? 2 : 0.9;
+    const titleScale = bigFont.spec === this.builtinFontSpec ? 2 : 1;
+    const titleY = Math.round(
+      98 + (36 - bigFont.spec.lineHeight * titleScale) * 0.5,
+    );
     const title = snapshot.player.nukeTriggered ? 'NUKED ALL!' : 'SHOT DOWN';
     this.drawBitmapText(
       gl,
       bigFont,
       title,
       VIRTUAL_WIDTH * 0.5,
-      108,
+      titleY,
       titleScale,
       'center',
       pal.colors[7],
@@ -2110,7 +2126,7 @@ export class WebGL2Renderer implements IRenderer {
       snapshot.player.planeName.toUpperCase(),
       VIRTUAL_WIDTH * 0.5,
       146,
-      1.2,
+      1,
       'center',
       pal.colors[5],
     );
@@ -2242,7 +2258,10 @@ export class WebGL2Renderer implements IRenderer {
     // 3. Left customization rows
     const smallFont = this.resolveFont('fnts', 'fntm');
     const medFont = this.resolveFont('fntm', 'fnts');
-    const medScale = medFont.spec === this.builtinFontSpec ? 1.5 : 0.85;
+    const medScale = medFont.spec === this.builtinFontSpec ? 2 : 1;
+    const bannerY = Math.round(
+      30 + (30 - medFont.spec.lineHeight * medScale) * 0.5,
+    );
 
     // Header
     this.drawBitmapText(
@@ -2262,7 +2281,7 @@ export class WebGL2Renderer implements IRenderer {
       medFont,
       hangarUi.planeName.toUpperCase(),
       VIRTUAL_WIDTH * 0.5,
-      38,
+      bannerY,
       medScale,
       'center',
       pal.colors[7],
