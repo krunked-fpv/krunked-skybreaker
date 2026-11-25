@@ -1101,7 +1101,7 @@ export class WebGL2Renderer implements IRenderer {
           true,
         );
       }
-      // Above-sea foreground (launch sub, enemies, smoke behind player, player, projectiles, flashes, explosions)
+      // Above-sea foreground (launch sub, surfaced subs/ships, enemies, smoke behind player, player, projectiles, flashes, explosions)
       if (foregroundSprites.length > 0) {
         this.drawSpriteBatch(
           gl,
@@ -1110,17 +1110,6 @@ export class WebGL2Renderer implements IRenderer {
           worldProj,
           foregroundSprites,
           true,
-        );
-      }
-      // Submerged entities & underwater particles
-      if (underwaterSprites.length > 0) {
-        this.drawSpriteBatch(
-          gl,
-          this.batchProg,
-          spritesTex,
-          worldProj,
-          underwaterSprites,
-          false,
         );
       }
     }
@@ -1140,6 +1129,18 @@ export class WebGL2Renderer implements IRenderer {
         spritesTex,
         worldProj,
         reflectSprites,
+        false,
+      );
+    }
+
+    // Submerged entities (diving subs ey > 1, underwater player) & underwater particles over water reflections
+    if (this.batchProg && underwaterSprites.length > 0) {
+      this.drawSpriteBatch(
+        gl,
+        this.batchProg,
+        spritesTex,
+        worldProj,
+        underwaterSprites,
         false,
       );
     }
@@ -1510,21 +1511,21 @@ export class WebGL2Renderer implements IRenderer {
     const fgClouds = sprites['clouds'];
     if (fgClouds) {
       const parallaxX = camX * 0.32;
-      const cellW = 310;
-      const minBand = Math.floor((camX - parallaxX - 580) / cellW);
-      const maxBand = Math.ceil((camX - parallaxX + 580) / cellW);
-      const yRows = [-145, -365, -605, -855, -1095];
+      const cellW = 395;
+      const minBand = Math.floor((camX - parallaxX - 620) / cellW);
+      const maxBand = Math.ceil((camX - parallaxX + 620) / cellW);
+      const yRows = [-175, -415, -670, -930, -1140];
       const fgFrameCount = Math.max(1, fgClouds.subs.length);
       for (let r = 0; r < yRows.length; r++) {
-        const bandY = yRows[r] ?? -180;
+        const bandY = yRows[r] ?? -185;
         if (Math.abs(bandY - camY) > 420) continue;
         for (let b = minBand; b <= maxBand; b++) {
           const hash = ((b * 83492791) ^ (r * 297121507) ^ 0x1b873593) & 0x7fffffff;
-          // Open air pockets higher up while keeping horizon cloudscape rich
-          if (r > 0 && (hash % 7) === 0) continue;
+          // Leave warm sepia sky breathing naturally between billowing cumulus clusters
+          if ((hash % 6) === 0) continue;
           const drift = elapsedSec * (6.5 + r * 1.6);
-          const cx = parallaxX + b * cellW + (hash % 150) - 50 - drift;
-          const cy = bandY + ((hash >> 6) % 96) - 48;
+          const cx = parallaxX + b * cellW + (hash % 140) - 55 - drift;
+          const cy = bandY + ((hash >> 6) % 90) - 45;
           const sx = (hash & 1) === 0 ? 1 : -1;
           const inst: SpriteInstance = {
             entry: fgClouds,
@@ -1834,8 +1835,11 @@ export class WebGL2Renderer implements IRenderer {
         : 0;
 
     const isSub = enemy.kind === 'Submarine' || enemy.kind === 'AceMarine';
-    const targetList = isSub && ey > -18 ? underwaterOut : mainOut;
-    const clipSea = !(isSub && ey > -18);
+    // Surfaced submarines (ey <= 1) render in foregroundSprites (depth 0.48) so splashes & flashes draw IN FRONT
+    // identically above & below water; only diving subs (ey > 1) use the underwater pass.
+    const isDivingSub = isSub && ey > 1;
+    const targetList = isDivingSub ? underwaterOut : mainOut;
+    const clipSea = !isDivingSub;
     const gunFrame = this.computeEnemyGunRecoilFrame(enemy);
 
     const pushOrFallback = (
@@ -2003,7 +2007,7 @@ export class WebGL2Renderer implements IRenderer {
           enemy.spriteGun || (isBig ? 'big_boat_gun' : 'small_boat_gun');
         if (isBig) {
           const turretSpread = isDread ? 72 : 55;
-          const turretY = isDread ? ey - 36 : ey - 28;
+          const turretY = isDread ? ey - 32 : ey - 23;
           pushOrFallback(
             gunName,
             ex - turretSpread * hullTransform.scaleX,
@@ -2891,7 +2895,7 @@ export class WebGL2Renderer implements IRenderer {
 
     if (nukeEntry && nukeTex !== this.fallbackTexture && this.batchProg) {
       const frameCount = Math.max(1, nukeEntry.subs.length);
-      // nukeTicks counts DOWN from 60 -> 0; play 16-frame mushroom cloud FORWARD (0 -> 15)!
+      // nukeTicks counts DOWN from 60 -> 0; play 16-frame screaming skull FORWARD (0 -> 15)!
       const elapsedNukeTicks = Math.max(0, 60 - snapshot.player.nukeTicks);
       const frame = clamp(
         Math.floor((elapsedNukeTicks / 52) * frameCount),
@@ -2899,8 +2903,18 @@ export class WebGL2Renderer implements IRenderer {
         frameCount - 1,
       );
       const scale = 0.9 + (frame / Math.max(1, frameCount - 1)) * 0.35;
+      // nukesprites.json omits `center` (normalizer defaults to [0,0]); center skull on blast origin!
+      const hasExplicitCenter =
+        Boolean(nukeEntry.center) &&
+        (nukeEntry.center[0] !== 0 || nukeEntry.center[1] !== 0);
+      const centeredNukeEntry: SpriteEntry = hasExplicitCenter
+        ? nukeEntry
+        : {
+            ...nukeEntry,
+            center: [nukeEntry.size[0] * 0.5, nukeEntry.size[1] * 0.5],
+          };
       const nukeInst: SpriteInstance = {
-        entry: nukeEntry,
+        entry: centeredNukeEntry,
         frame,
         x: snapshot.player.x,
         y: snapshot.player.y,
