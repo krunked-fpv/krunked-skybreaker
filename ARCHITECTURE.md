@@ -57,4 +57,4 @@
 
 - **`ModRegistry` (`src/sim/mod-registry.ts`):** Defaults to `vanillaLocked = true` (`VANILLA_1TO1_PROFILE`). Unlocking allows registering `FlightMutator`s (e.g., FPV acro rate curves, thrust vectoring), custom parts, and custom palettes without modifying a single line of Act I physics.
 - **Deterministic Replay (`ReplayRecording`):** Captures compact bitmask inputs per tick with seed/loadout/mode for replay playback, ghost runs, and parity regression fixtures.
-- **Live Telemetry Overlay (`src/ui/telemetry-hud.ts`):** Hidden by default during vanilla play; toggled via backtick (`` ` ``) to inspect live FPS/p95 frame delta, speed/angle/altitude, active enemies/difficulty, audio drift (`ms`), and vault mode.
+- **Live Telemetry Overlay (`src/ui/telemetry-hud.ts`):** Hidden by default during vanilla play; toggled via backtick (`` ` ``) at bottom-left (`bottom: 8px; left: 8px`) to inspect live FPS/p95 frame delta, draw calls, GL/console errors, speed/angle/altitude, active enemies/difficulty, audio drift (`ms`), and vault mode. Optional QA hotkeys (`F3/F4/F6/F7/F8/F9`) in `src/main.ts` are strictly gated to when the overlay is visible.

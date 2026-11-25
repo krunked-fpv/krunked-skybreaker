@@ -111,7 +111,7 @@ Greyscale luminance `r` in `[0..255]` maps via `idx = int(diffuse.r * 8.0)`:
 - **Health Ring Output:** When `finalColor.a == 0.0 && healthAmount < distanceToPlayer && seaExpr < 0.0`: output `healthRadius.z < 1.0 ? uniform_colors[7] : uniform_colors[6]`; else `uniform_backcol`.
 - **Letterboxed `outpass`:** Aspect ratio `targetAr = 400.0 / 600.0`, `ar = viewport.y / viewport.x`, sampled with `gl.NEAREST` (zero blur).
 
-### 3.3 Unlockable 8-Color Palettes (Minimum 10 Authentic Palettes)
+### 3.3 Unlockable 8-Color Palettes (12 Authentic Palettes)
 1. `original` ("ORIGINAL" — iconic sepia/cream/maroon `#dec796` sky, `#4b0e1c` player, `#82383e` enemies, `#f7f0d4` clouds/explosions)
 2. `lanigiro` ("LANIGIRO" — inverted Original negative)
 3. `classic` ("CLASSIC" — high-contrast black/white/sepia Flash prototype)
@@ -122,6 +122,8 @@ Greyscale luminance `r` in `[0..255]` maps via `idx = int(diffuse.r * 8.0)`:
 8. `sunset` ("DUSK" — amber/orange/charcoal)
 9. `amber` ("CRT AMBER" — phosphor amber terminal)
 10. `sfmt` ("SFMT" — razor high-contrast crimson/obsidian/white)
+11. `noir` ("NOIR" — monochrome silver-screen film)
+12. `toxic` ("TOXIC" — industrial acid-green night ops)
 
 ---
 
