@@ -476,3 +476,86 @@ describe('checkCleanRoomGitHygiene', () => {
     expect(checkCleanRoomGitHygiene(tracked)).toEqual([]);
   });
 });
+
+describe('createProceduralFontTexture narrow glyph & control-char rasterization', () => {
+  const isLit = (
+    tex: ReturnType<typeof createProceduralFontTexture>,
+    x: number,
+    y: number,
+  ): boolean => tex.rgba[(y * tex.width + x) * 4 + 3]! > 0;
+
+  it("preserves both left and right stems for 'U' (85) in a narrow 4x7 glyph box", () => {
+    const font: Parameters<typeof createProceduralFontTexture>[0] = {
+      name: 'test_u',
+      face: 'Test',
+      size: 10,
+      lineHeight: 10,
+      base: 8,
+      scaleW: 16,
+      scaleH: 16,
+      pageFile: 'test_u_0.png',
+      glyphs: {
+        85: { id: 85, x: 2, y: 3, width: 4, height: 7, xoffset: 0, yoffset: 0, xadvance: 5 },
+      },
+    };
+    const tex = createProceduralFontTexture(font);
+
+    let hasLeftCol = false;
+    let hasRightCol = false;
+    for (let gy = 0; gy < 7; gy++) {
+      if (isLit(tex, 2 + 0, 3 + gy)) hasLeftCol = true;
+      if (isLit(tex, 2 + 3, 3 + gy)) hasRightCol = true;
+    }
+    expect(hasLeftCol).toBe(true);
+    expect(hasRightCol).toBe(true);
+  });
+
+  it("preserves upper and lower dots with a middle gap for ':' (58) in a 2x6 glyph box", () => {
+    const font: Parameters<typeof createProceduralFontTexture>[0] = {
+      name: 'test_colon',
+      face: 'Test',
+      size: 10,
+      lineHeight: 10,
+      base: 8,
+      scaleW: 16,
+      scaleH: 16,
+      pageFile: 'test_colon_0.png',
+      glyphs: {
+        58: { id: 58, x: 1, y: 2, width: 2, height: 6, xoffset: 0, yoffset: 0, xadvance: 3 },
+      },
+    };
+    const tex = createProceduralFontTexture(font);
+
+    let upperLit = false;
+    let middleLit = false;
+    let lowerLit = false;
+    for (let gy = 0; gy < 6; gy++) {
+      const rowLit = isLit(tex, 1, 2 + gy) || isLit(tex, 2, 2 + gy);
+      if (gy <= 1 && rowLit) upperLit = true;
+      if (gy >= 2 && gy <= 3 && rowLit) middleLit = true;
+      if (gy >= 4 && rowLit) lowerLit = true;
+    }
+    expect(upperLit).toBe(true);
+    expect(middleLit).toBe(false);
+    expect(lowerLit).toBe(true);
+  });
+
+  it('produces zero lit pixels for control code 10 (newline)', () => {
+    const font: Parameters<typeof createProceduralFontTexture>[0] = {
+      name: 'test_newline',
+      face: 'Test',
+      size: 10,
+      lineHeight: 10,
+      base: 8,
+      scaleW: 16,
+      scaleH: 16,
+      pageFile: 'test_newline_0.png',
+      glyphs: {
+        10: { id: 10, x: 0, y: 0, width: 8, height: 8, xoffset: 0, yoffset: 0, xadvance: 0 },
+      },
+    };
+    const tex = createProceduralFontTexture(font);
+    const anyLit = tex.rgba.some((v) => v > 0);
+    expect(anyLit).toBe(false);
+  });
+});

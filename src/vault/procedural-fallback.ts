@@ -636,15 +636,41 @@ export function createProceduralFontTexture(font: BitmapFontSpec): DecodedTextur
   const rgba = new Uint8Array(width * height * 4);
 
   for (const glyph of Object.values(font.glyphs)) {
-    if (glyph.width <= 0 || glyph.height <= 0 || glyph.id === 32) {
+    if (glyph.width <= 0 || glyph.height <= 0 || glyph.id <= 32) {
       continue;
     }
     const bitmap = GLYPHS_5X7[glyph.id] ?? GLYPHS_5X7[63]!; // '?' fallback for extended glyphs
+    let minCol = 5;
+    let maxCol = -1;
+    let minRow = 7;
+    let maxRow = -1;
+    for (let row = 0; row < 7; row++) {
+      const rowBits = bitmap[row] ?? 0;
+      if (rowBits === 0) continue;
+      for (let col = 0; col < 5; col++) {
+        if ((rowBits & (1 << (4 - col))) !== 0) {
+          if (col < minCol) minCol = col;
+          if (col > maxCol) maxCol = col;
+          if (row < minRow) minRow = row;
+          if (row > maxRow) maxRow = row;
+        }
+      }
+    }
+    if (maxCol < minCol || maxRow < minRow) {
+      continue;
+    }
+
     for (let gy = 0; gy < glyph.height; gy++) {
-      const srcRow = Math.min(6, Math.floor((gy * 7) / glyph.height));
+      const srcRow =
+        glyph.height <= 1
+          ? minRow
+          : minRow + Math.round((gy / (glyph.height - 1)) * (maxRow - minRow));
       const rowBits = bitmap[srcRow] ?? 0;
       for (let gx = 0; gx < glyph.width; gx++) {
-        const srcCol = Math.min(4, Math.floor((gx * 5) / glyph.width));
+        const srcCol =
+          glyph.width <= 1
+            ? minCol
+            : minCol + Math.round((gx / (glyph.width - 1)) * (maxCol - minCol));
         if ((rowBits & (1 << (4 - srcCol))) !== 0) {
           setPixel(rgba, width, height, glyph.x + gx, glyph.y + gy, 255, 255, 255, 255);
         }
