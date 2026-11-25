@@ -10,6 +10,8 @@ import type {
 import {
   ACT2_BONUS_PALETTES,
   BATCH_FRAG,
+  BATCH_MENU_FRAG,
+  BATCH_MENU_VERT,
   BATCH_REFLECT_FRAG,
   BATCH_REFLECT_VERT,
   BATCH_VERT,
@@ -40,6 +42,7 @@ import {
   layoutMissionCardDescription,
   resolveEnemyRenderTransform,
   wrapBitmapTextLines,
+  type HangarHudPass,
 } from '../src/render/renderer';
 import {
   ACT2_CUSTOM_PALETTE_KEY,
@@ -328,23 +331,25 @@ describe('Render Palette Contracts', () => {
     }
   });
 
-  it('uses iconic Skybreaker default palette (#162030 player, #f7f3e3 cloud/health, #d6c39c sky) with all pairwise distances > 0.015', () => {
+  it('uses iconic warm sepia/cream/burgundy default palette (#61001d player, #8d494d enemy, #e5ddac sky, #ffffff highlights) with all colors[1..7] pairwise distances > 0.015', () => {
     const orig = getPaletteById('original');
     expect(orig.id).toBe('original');
     expect(orig.name).toBe('SKYBREAKER');
-    expect(orig.backcol).toEqual(hexToRgba('#d6c39c'));
-    expect(orig.colors[1]).toEqual(hexToRgba('#162030'));
-    expect(orig.colors[2]).toEqual(hexToRgba('#8c2630'));
-    expect(orig.colors[3]).toEqual(hexToRgba('#8e897f'));
-    expect(orig.colors[4]).toEqual(hexToRgba('#a89d86'));
-    expect(orig.colors[5]).toEqual(hexToRgba('#ffe066'));
-    expect(orig.colors[6]).toEqual(hexToRgba('#e3d9bc'));
-    expect(orig.colors[7]).toEqual(hexToRgba('#f7f3e3'));
+    expect(orig.backcol).toEqual(hexToRgba('#e5ddac'));
+    expect(orig.colors[1]).toEqual(hexToRgba('#61001d'));
+    expect(orig.colors[2]).toEqual(hexToRgba('#8d494d'));
+    expect(orig.colors[3]).toEqual(hexToRgba('#b9937c'));
+    expect(orig.colors[4]).toEqual(hexToRgba('#dec796'));
+    expect(orig.colors[5]).toEqual(hexToRgba('#e5ddac'));
+    expect(orig.colors[6]).toEqual(hexToRgba('#efe9cd'));
+    expect(orig.colors[7]).toEqual(hexToRgba('#ffffff'));
 
-    const allSlots: RgbaTuple[] = [orig.backcol, ...orig.colors.slice(1)];
-    for (let i = 0; i < allSlots.length; i++) {
-      for (let j = i + 1; j < allSlots.length; j++) {
-        expect(rgbDist(allSlots[i]!, allSlots[j]!)).toBeGreaterThan(0.015);
+    for (const pal of PALETTES) {
+      const slots: RgbaTuple[] = pal.colors.slice(1);
+      for (let i = 0; i < slots.length; i++) {
+        for (let j = i + 1; j < slots.length; j++) {
+          expect(rgbDist(slots[i]!, slots[j]!)).toBeGreaterThan(0.015);
+        }
       }
     }
 
@@ -358,12 +363,14 @@ describe('Render Palette Contracts', () => {
 });
 
 describe('GLSL ES 3.00 Shader & Post Uniform Contracts', () => {
-  it('declares #version 300 es on every shader stage', () => {
+  it('declares #version 300 es on every shader stage including dual-channel menu batch', () => {
     const shaders = [
       BATCH_VERT,
       BATCH_REFLECT_VERT,
       BATCH_FRAG,
       BATCH_REFLECT_FRAG,
+      BATCH_MENU_VERT,
+      BATCH_MENU_FRAG,
       POST_WATER_VERT,
       POST_WATER_FRAG,
       FONT_VERT,
@@ -379,6 +386,9 @@ describe('GLSL ES 3.00 Shader & Post Uniform Contracts', () => {
     for (const src of shaders) {
       expect(src.trimStart().startsWith('#version 300 es')).toBe(true);
     }
+    expect(BATCH_MENU_FRAG).toContain('texc.x >= 1.0');
+    expect(BATCH_MENU_FRAG).toContain('s.b');
+    expect(BATCH_MENU_FRAG).toContain('s.r');
   });
 
   it('preserves batch, post water/health quantization, combo barh, pauselines, and 600:400 outpass invariants', () => {
@@ -1288,6 +1298,7 @@ describe('Renderer Visual & UI Regression Contracts', () => {
       y: number;
       angleRad: number;
       subX: number;
+      w: number;
       scaleX: number;
       scaleY: number;
     }> = [];
@@ -1298,15 +1309,23 @@ describe('Renderer Visual & UI Regression Contracts', () => {
           y: batch[i + 1]!,
           angleRad: batch[i + 2]!,
           subX: batch[i + 3]!,
+          w: batch[i + 5]!,
           scaleX: batch[i + 9]!,
           scaleY: batch[i + 10]!,
         });
       }
     }
 
-    // Left-moving Boat (subX=0), BigBoat (subX=2), Submarine (subX=4), AceMarine (subX=5)
-    for (const expectedSubX of [0, 2, 4, 5]) {
-      const hullInst = instances.find((inst) => inst.subX === expectedSubX);
+    // Left-moving Boat (subX=0, w=60), BigBoat (subX=2, w=300), Submarine (subX=4, w=198), AceMarine (subX=5, w=240)
+    for (const [expectedSubX, expectedW] of [
+      [0, 60],
+      [2, 300],
+      [4, 198],
+      [5, 240],
+    ] as const) {
+      const hullInst = instances.find(
+        (inst) => inst.subX === expectedSubX && inst.w === expectedW,
+      );
       expect(hullInst).toBeDefined();
       expect(hullInst!.angleRad).toBe(0);
       expect(hullInst!.scaleX).toBe(-1);
@@ -2871,5 +2890,554 @@ describe('Renderer Visual & UI Regression Contracts', () => {
     expect(earned.sfmtUnlocked).toBe(false);
     expect(earned.lastLoadout).toEqual({ weapon: 0, body: 0, engine: 0 });
     expect(earned.lastMode).toBe('normal');
+  });
+
+  it('enforces world parity: unclipped ocean_line, 3-layer space_clouds + blank cap, depth sorting (smoke behind player), animated underwater prop & gun recoil, forward nuke, SFMT backcol, and HangarHudPass seam', () => {
+    const pal = getPaletteById('original');
+
+    // 1. SFMT / OVERDRIVE switches uniform_backcol to colors[3] and high-HP health circle hides when settled vs flashes on hit
+    const basePlay = makeSnapshot({ phase: 'playing', mode: 'sfmt' });
+    const uSfmt = computePostShaderUniforms(basePlay, 0, -100, 1.0, pal, 600, 400);
+    expect(uSfmt.uniform_backcol).toEqual(pal.colors[3]);
+
+    const highHpSettled = makeSnapshot({
+      phase: 'playing',
+      player: { ...makeSnapshot().player, health: 90, maxHealth: 100, flashTicks: 0 },
+    });
+    const uHighSettled = computePostShaderUniforms(highHpSettled, 0, -100, 1.0, pal, 600, 400);
+    expect(uHighSettled.healthRadius[0]).toBe(100); // hidden >60% when settled
+
+    const highHpHit = makeSnapshot({
+      phase: 'playing',
+      player: { ...makeSnapshot().player, health: 90, maxHealth: 100, flashTicks: 4 },
+    });
+    const uHighHit = computePostShaderUniforms(highHpHit, 0, -100, 1.0, pal, 600, 400);
+    expect(uHighHit.healthRadius[0]).toBe(90);
+    expect(uHighHit.healthRadius[3]).toBe(2); // bright white colors[7] hit flash
+
+    // 2. Render full world scene and inspect draw calls, clipSea flags, depth sorting, animations, and reflections
+    const mockGl = createMockWebGL2Context();
+    const batches: Array<{
+      program: unknown;
+      clipSea: number;
+      instances: Array<{
+        x: number;
+        y: number;
+        subX: number;
+        subY: number;
+        w: number;
+        h: number;
+        scaleX: number;
+        scaleY: number;
+        depth: number;
+      }>;
+    }> = [];
+    const createdPrograms: Array<{ id: number }> = [];
+    let currentProgram: unknown = null;
+    let currentClipSea = -1;
+    let lastUniformName = '';
+    const locMap = new WeakMap<object, string>();
+
+    mockGl.gl.createProgram = vi.fn(() => {
+      const p = { id: createdPrograms.length + 1 };
+      createdPrograms.push(p);
+      return p;
+    });
+    mockGl.gl.useProgram = vi.fn((p: unknown) => {
+      currentProgram = p;
+    });
+    mockGl.gl.getUniformLocation = vi.fn((_prog?: unknown, name = '') => {
+      const loc = { name };
+      locMap.set(loc, name);
+      lastUniformName = name;
+      return loc;
+    });
+    mockGl.gl.uniform1f = vi.fn((loc?: unknown, v = 0) => {
+      const name = loc && typeof loc === 'object' ? locMap.get(loc) : lastUniformName;
+      if (name === 'uClipSea') currentClipSea = v;
+    });
+    mockGl.gl.bufferSubData = vi.fn(
+      (_target: number, _offset: number, data: ArrayBufferView) => {
+        if (!(data instanceof Float32Array)) return;
+        const insts = [];
+        for (let i = 0; i < data.length; i += 13) {
+          insts.push({
+            x: data[i]!,
+            y: data[i + 1]!,
+            subX: data[i + 3]!,
+            subY: data[i + 4]!,
+            w: data[i + 5]!,
+            h: data[i + 6]!,
+            scaleX: data[i + 9]!,
+            scaleY: data[i + 10]!,
+            depth: data[i + 11]!,
+          });
+        }
+        batches.push({ program: currentProgram, clipSea: currentClipSea, instances: insts });
+      },
+    );
+
+    const mockCanvas = {
+      width: 600,
+      height: 400,
+      style: { imageRendering: '' },
+      getContext: vi.fn((kind: string) => (kind === 'webgl2' ? mockGl.gl : null)),
+    } as unknown as HTMLCanvasElement;
+
+    const vault = createMockVaultBundle();
+    vault.data.atlases.sprites.sprites = {
+      ...vault.data.atlases.sprites.sprites,
+      space_clouds: {
+        name: 'space_clouds',
+        size: [600, 100],
+        hull: [0, 0, 600, 100],
+        center: [0, 60],
+        subs: [
+          { x: 10, y: 1 }, // f0 white
+          { x: 20, y: 1 }, // f1 crimson/SFMT
+          { x: 30, y: 1 }, // f2 pale haze
+        ],
+      },
+      space_clouds_blank: {
+        name: 'space_clouds_blank',
+        size: [600, 2],
+        hull: [0, 0, 600, 2],
+        center: [0, 2],
+        subs: [{ x: 40, y: 1 }],
+      },
+      ocean_line: {
+        name: 'ocean_line',
+        size: [600, 2],
+        hull: [0, 0, 600, 2],
+        center: [300, 1],
+        subs: [{ x: 50, y: 1 }],
+      },
+      engine_underwater: {
+        name: 'engine_underwater',
+        size: [24, 24],
+        hull: [0, 0, 24, 24],
+        center: [12, 12],
+        subs: [
+          { x: 60, y: 1 },
+          { x: 61, y: 1 },
+          { x: 62, y: 1 },
+          { x: 63, y: 1 },
+          { x: 64, y: 1 },
+          { x: 65, y: 1 },
+        ],
+      },
+      small_boat: { name: 'small_boat', size: [60, 17], hull: [0, 0, 60, 17], center: [29, 17], subs: [{ x: 70, y: 1 }] },
+      small_boat_gun: {
+        name: 'small_boat_gun',
+        size: [16, 3],
+        hull: [0, 0, 16, 3],
+        center: [0, 1],
+        subs: [
+          { x: 80, y: 1 },
+          { x: 81, y: 1 },
+          { x: 82, y: 1 },
+          { x: 83, y: 1 },
+          { x: 84, y: 1 },
+          { x: 85, y: 1 },
+        ],
+      },
+      blimp: { name: 'blimp', size: [550, 219], hull: [0, 0, 550, 219], center: [275, 109], subs: [{ x: 90, y: 1 }] },
+      blimp_anim: { name: 'blimp_anim', size: [9, 49], hull: [0, 0, 9, 49], center: [-230, 33], subs: [{ x: 91, y: 1 }] },
+      blimp_die: { name: 'blimp_die', size: [550, 219], hull: [0, 0, 550, 219], center: [275, 109], subs: [{ x: 92, y: 1 }] },
+      bg_jet: { name: 'bg_jet', size: [6, 5], hull: [0, 0, 6, 5], center: [3, 1], subs: [{ x: 95, y: 1 }] },
+      bg_jet_trail: { name: 'bg_jet_trail', size: [200, 2], hull: [0, 0, 200, 0], center: [200, 0], subs: [{ x: 96, y: 1 }] },
+      fx_smoke: { name: 'fx_smoke', size: [20, 20], hull: [0, 0, 20, 20], center: [10, 10], subs: [{ x: 100, y: 1 }] },
+      fx_explodebig: { name: 'fx_explodebig', size: [96, 96], hull: [0, 0, 96, 96], center: [48, 48], subs: [{ x: 105, y: 1 }] },
+      fx_fire_flash: { name: 'fx_fire_flash', size: [30, 16], hull: [0, 0, 30, 16], center: [-8, 8], subs: [{ x: 110, y: 1 }] },
+      projectile_bullet: { name: 'projectile_bullet', size: [28, 28], hull: [0, 0, 28, 28], center: [14, 14], subs: [{ x: 120, y: 1 }, { x: 121, y: 1 }] },
+      projectile_ebullet: { name: 'projectile_ebullet', size: [28, 28], hull: [0, 0, 28, 28], center: [14, 14], subs: [{ x: 125, y: 1 }, { x: 126, y: 1 }] },
+    };
+    vault.data.atlases.nukesprites.sprites['nuke'] = {
+      name: 'nuke',
+      size: [314, 356],
+      hull: [0, 0, 314, 356],
+      center: [157, 178],
+      subs: Array.from({ length: 16 }, (_, idx) => ({ x: 200 + idx, y: 2 })),
+    };
+    vault.textures['nukesprites'] = {
+      name: 'nukesprites',
+      width: 2048,
+      height: 1024,
+      rgba: new Uint8Array(16 * 16 * 4),
+      source: 'procedural',
+    };
+
+    const renderer = new WebGL2Renderer();
+    renderer.init(mockCanvas, vault);
+    // Program indices 0..7 preserved; menuBatchProg compiled at index 8
+    expect(createdPrograms).toHaveLength(9);
+
+    // 2a. Space ceiling in Normal mode uses f2 (subX=30) + space_clouds_blank (subX=40) + f0 (subX=10), NEVER f1 (subX=20)
+    const spaceSnap = makeSnapshot({
+      phase: 'playing',
+      mode: 'normal',
+      tick: 12,
+      player: { ...makeSnapshot().player, x: 0, y: -1290, prevX: 0, prevY: -1290, vy: -2 },
+    });
+    batches.length = 0;
+    renderer.render(spaceSnap, spaceSnap, 0, null, 0.5);
+    const spaceSubs = batches.flatMap((b) => b.instances.map((i) => i.subX));
+    expect(spaceSubs).toContain(10);
+    expect(spaceSubs).toContain(30);
+    expect(spaceSubs).toContain(40);
+    expect(spaceSubs).not.toContain(20);
+
+    // 2b. Combat scene: unclipped ocean_line, smoke behind player, explosion in front, underwater propeller & gun recoil, descending Blimp, bg_jet_trail, forward nuke
+    const uwEngine = makeEngine(3, 'UNDERWATER');
+    uwEngine.sprite = 'engine_underwater';
+    const combatSnap = makeSnapshot({
+      phase: 'playing',
+      tick: 10,
+      player: {
+        ...makeSnapshot().player,
+        x: 0,
+        y: -80,
+        prevX: 0,
+        prevY: -80,
+        loadout: { weapon: 0, body: 0, engine: 3 },
+        engineSpec: uwEngine,
+        boosting: true,
+        nukeTriggered: true,
+        nukeTicks: 58, // 2 ticks after detonation -> early frame (NOT frame 15!)
+        nukeRadius: 160,
+      },
+      parallax: [
+        {
+          id: 1,
+          kind: 'bgJet',
+          spriteName: 'bg_jet',
+          x: 50,
+          y: -220,
+          vx: 2.6,
+          reversed: false,
+          depth: 10,
+          frame: 0,
+        },
+      ],
+      enemies: [
+        {
+          id: 1,
+          kind: 'Boat',
+          x: -40,
+          y: 0,
+          prevX: -40,
+          prevY: 0,
+          vx: 1,
+          vy: 0,
+          angleDeg: 0,
+          gunAngleDeg: -45,
+          health: 25,
+          maxHealth: 25,
+          active: true,
+          state: 'cruise',
+          aiTimer: 0,
+          fireTimer: 0,
+          salvoRemaining: 2,
+          salvoCooldown: 2,
+          surfaceTimer: 0,
+          fallFrames: 0,
+          lifetime: 100,
+          activationTimer: 0,
+          flashTicks: 0,
+          hitRadius: 24,
+          width: 60,
+          height: 17,
+          scoreValue: 50,
+          difficultyWeight: 40,
+          spriteMain: 'small_boat',
+          spriteGun: 'small_boat_gun',
+          laserActive: false,
+          laserLength: 0,
+          ...({ gunAnimFrame: 3 } as object),
+        },
+        {
+          id: 2,
+          kind: 'Blimp',
+          x: 120,
+          y: -180,
+          prevX: 120,
+          prevY: -180,
+          vx: -0.5,
+          vy: 1,
+          angleDeg: 180,
+          gunAngleDeg: 90,
+          health: 600,
+          maxHealth: 600,
+          active: true,
+          state: 'falling', // live descending from space -> MUST use blimp + blimp_anim, NOT blimp_die!
+          aiTimer: 0,
+          fireTimer: 0,
+          salvoRemaining: 0,
+          salvoCooldown: 20,
+          surfaceTimer: 0,
+          fallFrames: 120,
+          lifetime: 0,
+          activationTimer: 0,
+          flashTicks: 0,
+          hitRadius: 105,
+          width: 550,
+          height: 219,
+          scoreValue: 1000,
+          difficultyWeight: 1000,
+          spriteMain: 'blimp',
+          spriteGun: 'small_boat_gun',
+          laserActive: false,
+          laserLength: 0,
+        },
+      ],
+      projectiles: [
+        {
+          id: 30,
+          owner: 'player',
+          kind: 'bullet',
+          x: 15,
+          y: -80,
+          prevX: 15,
+          prevY: -80,
+          vx: 24,
+          vy: 0,
+          angleDeg: 0,
+          ttl: 60,
+          maxTtl: 60, // spawn tick -> f0 (subX=120)
+          dmg: 4,
+          radius: 4,
+          targetId: null,
+          piercing: false,
+          aoeRadius: 0,
+          fromGungine: false,
+        },
+        {
+          id: 31,
+          owner: 'player',
+          kind: 'bullet',
+          x: 65,
+          y: -80,
+          prevX: 65,
+          prevY: -80,
+          vx: 24,
+          vy: 0,
+          angleDeg: 0,
+          ttl: 50,
+          maxTtl: 60, // in-flight -> locked to f1 (subX=121)
+          dmg: 4,
+          radius: 4,
+          targetId: null,
+          piercing: false,
+          aoeRadius: 0,
+          fromGungine: false,
+        },
+        {
+          id: 32,
+          owner: 'enemy',
+          kind: 'ebullet',
+          x: 40,
+          y: -75,
+          prevX: 40,
+          prevY: -75,
+          vx: -10,
+          vy: 0,
+          angleDeg: 180,
+          ttl: 120,
+          maxTtl: 180,
+          dmg: 6,
+          radius: 5,
+          targetId: null,
+          piercing: false,
+          aoeRadius: 0,
+          fromGungine: false,
+        },
+      ],
+      particles: [
+        {
+          id: 10,
+          kind: 'smoke',
+          spriteName: 'fx_smoke',
+          x: 0,
+          y: -80,
+          vx: 0,
+          vy: 0,
+          angleDeg: 0,
+          scaleX: 1,
+          scaleY: 1,
+          frame: 0,
+          frameSpeed: 0.2,
+          frameCount: 8,
+          ttl: 20,
+          maxTtl: 20,
+          depth: -4,
+          loop: false,
+          allowBelowSea: false,
+          friction: 0,
+          gravity: 0,
+          isExplosion: false,
+        },
+        {
+          id: 11,
+          kind: 'explode_big',
+          spriteName: 'fx_explodebig',
+          x: 20,
+          y: -70,
+          vx: 0,
+          vy: 0,
+          angleDeg: 0,
+          scaleX: 1,
+          scaleY: 1,
+          frame: 0,
+          frameSpeed: 0.6,
+          frameCount: 13,
+          ttl: 20,
+          maxTtl: 20,
+          depth: -7,
+          loop: false,
+          allowBelowSea: false,
+          friction: 0,
+          gravity: 0,
+          isExplosion: true,
+        },
+        {
+          id: 12,
+          kind: 'fireFlash',
+          spriteName: 'fx_fire_flash',
+          x: 0,
+          y: -80,
+          vx: 0,
+          vy: 0,
+          angleDeg: 0,
+          scaleX: 1,
+          scaleY: 1,
+          frame: 0,
+          frameSpeed: 0.6,
+          frameCount: 3,
+          ttl: 5,
+          maxTtl: 5,
+          depth: -5,
+          loop: false,
+          allowBelowSea: false,
+          friction: 0,
+          gravity: 0,
+          isExplosion: false,
+        },
+      ],
+    });
+    batches.length = 0;
+    renderer.render(combatSnap, combatSnap, 0, null, 1.0);
+
+    // ocean_line (subX=50) rendered with uClipSea === 0
+    const oceanBatch = batches.find((b) => b.instances.some((i) => i.subX === 50));
+    expect(oceanBatch).toBeDefined();
+    expect(oceanBatch!.clipSea).toBe(0);
+
+    // bg_jet_trail (subX=96) rendered behind bg_jet (subX=95)
+    const skyInsts = batches[0]?.instances ?? [];
+    expect(skyInsts.some((i) => i.subX === 96)).toBe(true);
+    expect(skyInsts.some((i) => i.subX === 95)).toBe(true);
+
+    // Foreground batch depth ordering: smoke (100) < player engine (60..65) < player bullet (120/121) < fireFlash (110) < explode_big (105) < ebullet (125/126)
+    const fgBatch = batches.find((b) => b.instances.some((i) => i.subX === 100) && b.program === createdPrograms[0]);
+    expect(fgBatch).toBeDefined();
+    const smokeIdx = fgBatch!.instances.findIndex((i) => i.subX === 100);
+    const engineIdx = fgBatch!.instances.findIndex((i) => i.subX >= 60 && i.subX <= 65);
+    const bulletSpawnIdx = fgBatch!.instances.findIndex((i) => i.subX === 120);
+    const bulletFlightIdx = fgBatch!.instances.findIndex((i) => i.subX === 121);
+    const flashIdx = fgBatch!.instances.findIndex((i) => i.subX === 110);
+    const explodeIdx = fgBatch!.instances.findIndex((i) => i.subX === 105);
+    const ebulletIdx = fgBatch!.instances.findIndex((i) => i.subX === 125 || i.subX === 126);
+    expect(smokeIdx).toBeGreaterThanOrEqual(0);
+    expect(engineIdx).toBeGreaterThan(smokeIdx);
+    expect(bulletSpawnIdx).toBeGreaterThan(engineIdx);
+    expect(bulletFlightIdx).toBeGreaterThan(engineIdx);
+    expect(flashIdx).toBeGreaterThan(bulletFlightIdx);
+    expect(explodeIdx).toBeGreaterThan(flashIdx);
+    expect(ebulletIdx).toBeGreaterThan(explodeIdx);
+
+    // Underwater propeller animates across ticks (tick=10 vs tick=12)
+    const uwEngineTick10 = fgBatch!.instances[engineIdx]!.subX;
+    const combatSnapTick12 = { ...combatSnap, tick: 12 };
+    batches.length = 0;
+    renderer.render(combatSnapTick12, combatSnapTick12, 0, null, 1.03);
+    const fgBatch12 = batches.find(
+      (b) => b.instances.some((i) => i.subX === 100) && b.program === createdPrograms[0],
+    );
+    const uwEngineTick12 = fgBatch12!.instances.find((i) => i.subX >= 60 && i.subX <= 65)!.subX;
+    expect(uwEngineTick12).not.toBe(uwEngineTick10);
+
+    const boatGunInst = fgBatch!.instances.find((i) => i.subX >= 80 && i.subX <= 85);
+    expect(boatGunInst?.subX).toBe(83); // gunAnimFrame = 3!
+
+    // Live descending Blimp uses blimp (90) + blimp_anim (91), NOT blimp_die (92)
+    expect(fgBatch!.instances.some((i) => i.subX === 90)).toBe(true);
+    expect(fgBatch!.instances.some((i) => i.subX === 91)).toBe(true);
+    expect(fgBatch!.instances.some((i) => i.subX === 92)).toBe(false);
+
+    // Reflect pass (program index 1) includes smoke (100), fireFlash (110), explode_big (105), and blimp (90)
+    const reflectBatch = batches.find((b) => b.program === createdPrograms[1]);
+    expect(reflectBatch).toBeDefined();
+    const reflectSubs = reflectBatch!.instances.map((i) => i.subX);
+    expect(reflectSubs).toContain(100);
+    expect(reflectSubs).toContain(110);
+    expect(reflectSubs).toContain(105);
+    expect(reflectSubs).toContain(90);
+
+    // Nuke plays FORWARD: at nukeTicks=58 (2 ticks in), subX = 200 (frame 0), NOT 215 (frame 15)
+    const nukeInsts = batches.flatMap((b) => b.instances).filter((i) => i.subX >= 200 && i.subX <= 215);
+    expect(nukeInsts.length).toBe(2); // main + reflect
+    expect(nukeInsts[0]!.subX).toBe(200);
+
+    // 3. HangarHudPass delegation seam works cleanly with dual-channel menuBatchProg
+    const menuSpy = vi.fn();
+    const hudSpy = vi.fn();
+    const pauseSpy = vi.fn();
+    const gameOverSpy = vi.fn();
+    const customPass: HangarHudPass = {
+      drawHangarMenuPass: (ctx, snap, ui, t) => {
+        menuSpy(snap.phase, ui.activeRow, t);
+        const menuTex = ctx.resolveAtlasTexture(ctx.vault?.data.atlases.menusprites, ['menusprites']);
+        ctx.drawSpriteBatch(
+          menuTex,
+          [
+            {
+              entry: vault.data.atlases.sprites.sprites['ocean_line']!,
+              frame: 0,
+              x: 300,
+              y: 100,
+              angleRad: 0,
+              scaleX: 1,
+              scaleY: 1,
+              depth: 0.1,
+              flash: 0,
+              clipSea: false,
+            },
+          ],
+          undefined,
+          true,
+        );
+      },
+      drawInGameHudPass: hudSpy,
+      drawPauseOverlayPass: pauseSpy,
+      drawGameOverDebriefPass: gameOverSpy,
+    };
+    renderer.setHangarHudPass(customPass);
+
+    const controller = new HangarController();
+    const hSnap = makeSnapshot({ phase: 'hangar' });
+    batches.length = 0;
+    renderer.render(hSnap, hSnap, 0, controller.buildUiState(hSnap), 2.0);
+    expect(menuSpy).toHaveBeenCalledWith('hangar', 'weapon', 2.0);
+    // Menu sprite batch dispatched through menuBatchProg (createdPrograms[8])
+    expect(batches.some((b) => b.program === createdPrograms[8])).toBe(true);
+
+    const overPausedSnap = makeSnapshot({ phase: 'gameover', paused: true });
+    renderer.render(overPausedSnap, overPausedSnap, 0, null, 2.5);
+    expect(hudSpy).toHaveBeenCalledTimes(1);
+    expect(pauseSpy).toHaveBeenCalledTimes(1);
+    expect(gameOverSpy).toHaveBeenCalledTimes(1);
+
+    expect(renderer.getFrameMetrics().webglErrors).toBe(0);
+    renderer.dispose();
   });
 });

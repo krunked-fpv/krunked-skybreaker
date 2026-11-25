@@ -91,6 +91,9 @@ in float vFlash;
 out vec4 fragColor;
 
 void main() {
+  if (vTexCoords.x < 0.0 || vTexCoords.y < 0.0 || vTexCoords.x > 1.0 || vTexCoords.y > 1.0) {
+    discard;
+  }
   vec4 diffuse = texture(diffuseTex, vTexCoords);
   if (diffuse.rgb == vec3(0.0) || diffuse.a == 0.0) {
     discard;
@@ -100,6 +103,9 @@ void main() {
   }
 
   int thecolind = clamp(int(diffuse.r * 8.0), 0, 7);
+  if (thecolind == 0) {
+    discard;
+  }
   vec4 outdiffuse = uniform_colors[thecolind];
   if (vFlash > 0.5) {
     outdiffuse = uniform_colors[7];
@@ -121,6 +127,9 @@ in float vFlash;
 out vec4 fragColor;
 
 void main() {
+  if (vTexCoords.x < 0.0 || vTexCoords.y < 0.0 || vTexCoords.x > 1.0 || vTexCoords.y > 1.0) {
+    discard;
+  }
   vec4 diffuse = texture(diffuseTex, vTexCoords);
   if (diffuse.rgb == vec3(0.0) || diffuse.a == 0.0) {
     discard;
@@ -130,6 +139,92 @@ void main() {
   }
 
   int thecolind = clamp(int(diffuse.r * 8.0), 0, 7);
+  if (thecolind == 0) {
+    discard;
+  }
+  vec4 outdiffuse = uniform_colors[thecolind];
+  if (vFlash > 0.5) {
+    outdiffuse = uniform_colors[7];
+  }
+  fragColor = outdiffuse;
+}
+`;
+
+export const BATCH_MENU_VERT = `#version 300 es
+precision highp float;
+
+layout(location = 0) in vec2 aCorner;
+layout(location = 1) in vec3 iWorldPosAngle; // x, y, angleRad
+layout(location = 2) in vec4 iAtlasRect;     // ax, ay, w, h
+layout(location = 3) in vec4 iCenterScale;   // cx, cy, sx, sy
+layout(location = 4) in vec2 iDepthFlash;    // depth, flash
+
+uniform mat4 uViewProjMatrix;
+uniform vec2 uSpritesheetSize;
+
+out vec4 vWorldPos;
+out vec2 vTexCoords;
+out float vFlash;
+
+void main() {
+  vec2 uv01 = aCorner;
+  vec2 localPx = (uv01 * iAtlasRect.zw - iCenterScale.xy) * iCenterScale.zw;
+
+  float c = cos(iWorldPosAngle.z);
+  float s = sin(iWorldPosAngle.z);
+  vec2 rotated = vec2(
+    localPx.x * c - localPx.y * s,
+    localPx.x * s + localPx.y * c
+  );
+
+  vec4 pos = vec4(floor(rotated + iWorldPosAngle.xy + 0.5), iDepthFlash.x, 1.0);
+  vWorldPos = pos;
+  vTexCoords = (iAtlasRect.xy + uv01 * iAtlasRect.zw) / uSpritesheetSize;
+  vFlash = iDepthFlash.y;
+  gl_Position = uViewProjMatrix * pos;
+}
+`;
+
+export const BATCH_MENU_FRAG = `#version 300 es
+precision highp float;
+
+uniform sampler2D diffuseTex;
+uniform vec4 uniform_colors[8];
+
+in vec4 vWorldPos;
+in vec2 vTexCoords;
+in float vFlash;
+
+out vec4 fragColor;
+
+void main() {
+  vec2 texc = vTexCoords;
+  if (texc.x < 0.0 || texc.y < 0.0 || texc.y > 1.0 || texc.x >= 2.0) {
+    discard;
+  }
+  float colv;
+  if (texc.x >= 1.0) {
+    texc.x -= 1.0;
+    vec4 s = texture(diffuseTex, texc);
+    if (s.a == 0.0) {
+      discard;
+    }
+    colv = s.b;
+  } else {
+    vec4 s = texture(diffuseTex, texc);
+    if (s.a == 0.0) {
+      discard;
+    }
+    colv = s.r;
+  }
+  if (colv == 0.0) {
+    discard;
+  }
+
+  int thecolind = clamp(int(colv * 8.0), 0, 7);
+  if (thecolind == 0) {
+    discard;
+  }
   vec4 outdiffuse = uniform_colors[thecolind];
   if (vFlash > 0.5) {
     outdiffuse = uniform_colors[7];
@@ -207,7 +302,9 @@ void main() {
   vec4 outColor;
   if (finalColor.a == 0.0) {
     if (healthAmount < distanceToPlayer && seaExpr < 0.0) {
-      outColor = healthRadius.z < 1.0 ? uniform_colors[7] : uniform_colors[6];
+      outColor = (healthRadius.z >= 0.5 || healthRadius.w >= 1.5)
+        ? uniform_colors[7]
+        : uniform_colors[6];
     } else {
       outColor = uniform_backcol;
     }
@@ -532,14 +629,31 @@ export function computePostShaderUniforms(
   const rawHp =
     snapshot.phase === 'hangar' ? maxHp : Math.max(0, snapshot.player.health);
   const hpRatio = rawHp / maxHp;
+  const damageFlashActive =
+    snapshot.phase === 'playing' && snapshot.player.flashTicks > 0;
 
-  // Critical HP (< 33.33%) alternates between colors[7] and colors[6] via healthRadius.z
+  // Authentic Health Circle behavior:
+  // - Hidden when hpRatio > 0.60 and damage flash has settled (prevents corner bleed on minor grazes)
+  // - Flashes bright colors[7] (w = 2) on damage ticks, settles to soft colors[6] (z = 0, w < 1.5)
+  // - Pulses colors[7] <-> colors[6] via z = 1 <-> 0 at critical HP (< 33.33%)
+  const hideSettledHighHp =
+    snapshot.phase === 'playing' && hpRatio > 0.6 && !damageFlashActive;
+  const effectiveHp = hideSettledHighHp ? maxHp : rawHp;
+
   const isCritical =
     snapshot.phase === 'playing' && hpRatio > 0 && hpRatio < 0.333333;
   const pulse =
     isCritical && Math.floor(Math.max(0, elapsedSec) * 10) % 2 === 0 ? 1 : 0;
+  const flashOrHealFlag = damageFlashActive
+    ? 2
+    : snapshot.player.healing
+      ? 1
+      : 0;
 
   const cameraYViewSpace = cameraY / VIRTUAL_HEIGHT;
+  // In OVERDRIVE (sfmt) mode, sky/sea uniform_backcol shifts to darker stormy colors[3]
+  const activeBackcol =
+    snapshot.mode === 'sfmt' ? palette.colors[3] : palette.backcol;
 
   return {
     viewport: [
@@ -553,10 +667,10 @@ export function computePostShaderUniforms(
       0,
     ],
     healthRadius: [
-      rawHp,
+      effectiveHp,
       maxHp,
       pulse,
-      snapshot.player.healing ? 1 : 0,
+      flashOrHealFlag,
     ],
     playerPosition: [
       snapshot.player.x,
@@ -571,7 +685,7 @@ export function computePostShaderUniforms(
       snapshot.screenShake,
       elapsedSec,
     ],
-    uniform_backcol: [...palette.backcol] as PaletteDefinition['backcol'],
+    uniform_backcol: [...activeBackcol] as PaletteDefinition['backcol'],
     uniform_colors: palette.colors.map(
       (c) => [...c] as PaletteDefinition['backcol'],
     ),
