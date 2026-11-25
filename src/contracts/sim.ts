@@ -106,6 +106,12 @@ export interface EnemyEntity {
   laserLength: number;
   /** Countdown ticks while LaserAce charges its beam before firing (renders laser_charge telegraph) */
   laserChargeTicks?: number;
+  /** Countdown ticks after a naval/blimp turret fires (10 -> 0) for 6-frame recoil animation */
+  gunRecoilTicks?: number;
+  /** 0..5 sprite sub-frame index for small_boat_gun / big_boat_gun recoil animation */
+  gunAnimFrame?: number;
+  /** Optional visual boost indicator for Ace/LaserAce thruster animation */
+  boosting?: boolean;
   /** Optional Act II boss squadron / carrier spawn timer */
   squadronId?: number;
   carrierLaunchTimer?: number;
@@ -186,6 +192,8 @@ export interface ParallaxEntity {
   reversed: boolean;
   depth: number;
   frame: number;
+  /** Optional pitch angle (degrees) for distant swooping aircraft silhouettes */
+  angleDeg?: number;
 }
 
 export interface ShockwaveEvent {

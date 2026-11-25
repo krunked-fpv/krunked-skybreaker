@@ -713,6 +713,23 @@ describe('synth-fallback', () => {
       expect(peak).toBeGreaterThan(0.01);
       expect(peak).toBeLessThanOrEqual(1.0);
     }
+
+    // Punchy arcade explosions, splashes, and weapons have strong transient presence without clipping
+    const rmsOf = (cueId: AudioCueId): number => {
+      const buf = bank.sfx.get(cueId)!;
+      const samples = buf.getChannelData(0);
+      let sumSq = 0;
+      for (let i = 0; i < samples.length; i++) {
+        const s = samples[i] ?? 0;
+        sumSq += s * s;
+      }
+      return Math.sqrt(sumSq / Math.max(1, samples.length));
+    };
+    expect(rmsOf('sndnuke')).toBeGreaterThan(0.15);
+    expect(rmsOf('sndboatdie')).toBeGreaterThan(0.12);
+    expect(rmsOf('sndcannon')).toBeGreaterThan(0.12);
+    expect(rmsOf('sndsplashl')).toBeGreaterThan(0.08);
+    expect(rmsOf('sndsfmt')).toBeGreaterThan(0.12);
   });
 });
 

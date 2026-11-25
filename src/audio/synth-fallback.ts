@@ -167,8 +167,11 @@ function fillBassStem(
     }
 
     lp += clamp01(cutoff) * (raw - lp);
-    const sub = Math.sin(TWO_PI * subPhase) * 0.46 * (0.45 + 0.55 * env) * gate;
-    data[i] = (lp * 0.78 + sub) * 0.72;
+    const beatPhase = (t / beatSec) % 1;
+    // Gentle quarter-note kick-lock ducking keeps low end tight and punchy
+    const sidechain = 0.72 + 0.28 * clamp01(beatPhase * 3.8);
+    const sub = Math.sin(TWO_PI * subPhase) * 0.48 * (0.45 + 0.55 * env) * gate;
+    data[i] = (lp * 0.82 + sub) * 0.76 * sidechain;
   }
 }
 
@@ -260,20 +263,20 @@ function fillDrumStem(
 
     // Punchy arcade kick: transient beater click + exponential sub-bass drop
     if (kickT < 0.17) {
-      const baseHz = variant === 4 ? 45 : 52;
-      const sweepHz = baseHz + 150 * Math.exp(-kickT * 48);
+      const baseHz = variant === 4 ? 46 : 54;
+      const sweepHz = baseHz + 165 * Math.exp(-kickT * 52);
       kickPhase += sweepHz * dt;
-      const kickBody = Math.sin(TWO_PI * kickPhase) * Math.exp(-kickT * (variant === 4 ? 15 : 21));
-      const click = Math.sin(TWO_PI * 1650 * kickT) * Math.exp(-kickT * 190) * 0.25;
-      sample += (kickBody * 0.92 + click);
+      const kickBody = Math.sin(TWO_PI * kickPhase) * Math.exp(-kickT * (variant === 4 ? 14 : 20));
+      const click = Math.sin(TWO_PI * 1850 * kickT) * Math.exp(-kickT * 210) * 0.32;
+      sample += kickBody * 0.98 + click;
     }
 
-    // Snappy synthwave snare: crisp 200Hz shell crack + high-passed sizzle
+    // Snappy synthwave snare: crisp 210Hz shell crack + high-passed sizzle
     if (snareT < 0.16) {
-      const toneSweep = 195 + 85 * Math.exp(-snareT * 55);
-      const tone = Math.sin(TWO_PI * toneSweep * snareT) * Math.exp(-snareT * 34);
-      const snareNoise = hpNoise * Math.exp(-snareT * 21);
-      sample += (snareNoise * 0.52 + tone * 0.52) * 0.72;
+      const toneSweep = 205 + 95 * Math.exp(-snareT * 58);
+      const tone = Math.sin(TWO_PI * toneSweep * snareT) * Math.exp(-snareT * 32);
+      const snareNoise = hpNoise * Math.exp(-snareT * 19);
+      sample += (snareNoise * 0.58 + tone * 0.56) * 0.78;
     }
 
     // Bar-4 fill synth tom
@@ -409,7 +412,8 @@ function fillLeadStem(
     }
 
     lp += clamp01(cutoff) * (raw - lp);
-    data[i] = lp * 0.62;
+    const sparkle = Math.sin(TWO_PI * phase * 2) * env * 0.08;
+    data[i] = (lp + sparkle) * 0.66;
   }
 }
 
@@ -653,6 +657,256 @@ function makeSweepRecipe(
   };
 }
 
+function makeExplosionRecipe(
+  durationSec: number,
+  opts: {
+    subStartHz: number;
+    subEndHz: number;
+    toneStartHz?: number;
+    toneEndHz?: number;
+    toneMix?: number;
+    crushStart?: number;
+    crushEnd?: number;
+    decayRate: number;
+    gain: number;
+    seed: number;
+    crackGain?: number;
+  },
+): SfxRecipe {
+  return {
+    durationSec,
+    synth: (data, sampleRate) => {
+      const rng = createPrng(opts.seed);
+      const invSr = 1 / sampleRate;
+      const dur = data.length * invSr;
+      const crushStart = opts.crushStart ?? 2;
+      const crushEnd = opts.crushEnd ?? 10;
+      const toneMix = opts.toneMix ?? 0.22;
+      const crackGain = opts.crackGain ?? 0.5;
+      let subPhase = 0;
+      let tonePhase = 0;
+      let heldNoise = 0;
+      let holdCounter = 0;
+      let lpNoise = 0;
+
+      for (let i = 0; i < data.length; i++) {
+        const t = i * invSr;
+        const u = dur > 0 ? t / dur : 0;
+
+        // Stepped sample-and-hold crunch produces crisp retro arcade fireball texture
+        holdCounter--;
+        if (holdCounter <= 0) {
+          heldNoise = rng() * 2 - 1;
+          holdCounter = Math.max(1, Math.round(crushStart + (crushEnd - crushStart) * u * u));
+        }
+        const cutoff = 0.07 + 0.55 * Math.pow(1 - u, 1.5);
+        lpNoise += cutoff * (heldNoise - lpNoise);
+
+        // Initial shock transient crack (first 16ms)
+        const crack =
+          t < 0.018
+            ? (rng() * 2 - 1) * Math.exp(-t * 220) * crackGain
+            : 0;
+
+        // Exponential sub-bass punch
+        const subHz =
+          opts.subEndHz + (opts.subStartHz - opts.subEndHz) * Math.exp(-u * 6.5);
+        subPhase += subHz * invSr;
+        const sub = Math.sin(TWO_PI * subPhase) * Math.exp(-u * (opts.decayRate * 0.72));
+
+        // Optional hull groan / jet whine harmonic
+        let tone = 0;
+        if (opts.toneStartHz && opts.toneEndHz) {
+          const thz =
+            opts.toneEndHz +
+            (opts.toneStartHz - opts.toneEndHz) * Math.pow(1 - u, 1.4);
+          tonePhase += thz * invSr;
+          tone =
+            (sawWave(tonePhase) * 0.65 + squareWave(tonePhase * 0.5, 0.35) * 0.35) *
+            Math.exp(-u * (opts.decayRate * 1.05)) *
+            toneMix;
+        }
+
+        const env = Math.exp(-u * opts.decayRate) * Math.min(1, t / 0.0014);
+        const tailFade = u > 0.86 ? (1 - u) / 0.14 : 1;
+        data[i] = (lpNoise * env * 0.86 + sub * 0.62 + tone + crack) * tailFade * opts.gain;
+      }
+    },
+  };
+}
+
+function makeSplashRecipe(
+  durationSec: number,
+  size: 'm' | 'l',
+  seed: number,
+): SfxRecipe {
+  return {
+    durationSec,
+    synth: (data, sampleRate) => {
+      const rng = createPrng(seed);
+      const invSr = 1 / sampleRate;
+      const dur = data.length * invSr;
+      const isLarge = size === 'l';
+      let lpLow = 0;
+      let lpHigh = 0;
+      let bubblePhase = 0;
+      let bubbleHz = isLarge ? 320 : 480;
+      let bubbleTimer = 0;
+      let subPhase = 0;
+
+      for (let i = 0; i < data.length; i++) {
+        const t = i * invSr;
+        const u = dur > 0 ? t / dur : 0;
+        const raw = rng() * 2 - 1;
+
+        // Swept bandpass foam wash
+        const hiCut = clamp01((isLarge ? 0.52 : 0.65) * (1 - u * 0.75) + 0.08);
+        const loCut = clamp01(hiCut * 0.28);
+        lpHigh += hiCut * (raw - lpHigh);
+        lpLow += loCut * (raw - lpLow);
+        const foam = (lpHigh - lpLow * 0.65) * Math.exp(-u * (isLarge ? 3.2 : 4.4));
+
+        // Resonant water droplet / bubble plops
+        bubbleTimer -= invSr;
+        if (bubbleTimer <= 0) {
+          bubbleTimer = (isLarge ? 0.018 : 0.012) + rng() * 0.022;
+          bubbleHz = (isLarge ? 180 : 280) + rng() * (isLarge ? 420 : 540);
+        }
+        bubbleHz *= 1 + invSr * 8;
+        bubblePhase += bubbleHz * invSr;
+        const bubble =
+          Math.sin(TWO_PI * bubblePhase) *
+          Math.exp(-u * (isLarge ? 3.6 : 5.0)) *
+          0.22;
+
+        // Low water plunge thud
+        const plungeHz = (isLarge ? 140 : 190) * Math.exp(-u * 4.5) + 48;
+        subPhase += plungeHz * invSr;
+        const plunge =
+          Math.sin(TWO_PI * subPhase) *
+          Math.exp(-u * (isLarge ? 5.5 : 7.5)) *
+          (isLarge ? 0.42 : 0.28);
+
+        const attack = Math.min(1, t / 0.004);
+        const tailFade = u > 0.85 ? (1 - u) / 0.15 : 1;
+        data[i] =
+          (foam * 0.92 + bubble + plunge) *
+          attack *
+          tailFade *
+          (isLarge ? 0.82 : 0.68);
+      }
+    },
+  };
+}
+
+function makeWeaponRecipe(
+  durationSec: number,
+  opts: {
+    startHz: number;
+    endHz: number;
+    wave: 'square' | 'saw' | 'tri';
+    noiseMix: number;
+    decayRate: number;
+    gain: number;
+    seed: number;
+    subPunchHz?: number;
+    snapMs?: number;
+    ringModHz?: number;
+  },
+): SfxRecipe {
+  return {
+    durationSec,
+    synth: (data, sampleRate) => {
+      const rng = createPrng(opts.seed);
+      const invSr = 1 / sampleRate;
+      const dur = data.length * invSr;
+      const snapSec = (opts.snapMs ?? 4) / 1000;
+      let phase = 0;
+      let subPhase = 0;
+      let lpNoise = 0;
+      let prevRaw = 0;
+
+      for (let i = 0; i < data.length; i++) {
+        const t = i * invSr;
+        const u = dur > 0 ? t / dur : 0;
+        const curve = 1 - Math.pow(1 - u, 1.85);
+        const hz = opts.startHz + (opts.endHz - opts.startHz) * curve;
+        phase += hz * invSr;
+
+        let osc =
+          opts.wave === 'square'
+            ? squareWave(phase, 0.34)
+            : opts.wave === 'saw'
+              ? sawWave(phase)
+              : triangleWave(phase);
+        if (opts.ringModHz) {
+          osc = osc * (0.65 + 0.35 * Math.sin(TWO_PI * opts.ringModHz * t));
+        }
+
+        const raw = rng() * 2 - 1;
+        const hpCrack = raw - prevRaw * 0.72;
+        prevRaw = raw;
+        lpNoise += (0.18 + 0.62 * (1 - u)) * (raw - lpNoise);
+
+        const snap = t < snapSec ? hpCrack * (1 - t / snapSec) * 0.55 : 0;
+        let sub = 0;
+        if (opts.subPunchHz) {
+          const subHz = opts.subPunchHz * (0.4 + 0.6 * Math.exp(-u * 7));
+          subPhase += subHz * invSr;
+          sub = Math.sin(TWO_PI * subPhase) * Math.exp(-u * (opts.decayRate * 0.78)) * 0.5;
+        }
+
+        const env = Math.exp(-u * opts.decayRate) * Math.min(1, t / 0.0012);
+        const tailFade = u > 0.86 ? (1 - u) / 0.14 : 1;
+        data[i] =
+          ((osc * (1 - opts.noiseMix) + lpNoise * opts.noiseMix) * env + sub + snap) *
+          tailFade *
+          opts.gain;
+      }
+    },
+  };
+}
+
+function makePowerChordRecipe(
+  durationSec: number,
+  freqsHz: readonly number[],
+  decayRate: number,
+  gain: number,
+  seed: number,
+): SfxRecipe {
+  return {
+    durationSec,
+    synth: (data, sampleRate) => {
+      const rng = createPrng(seed);
+      const invSr = 1 / sampleRate;
+      const dur = data.length * invSr;
+      const phases = new Float64Array(freqsHz.length);
+      let lp = 0;
+
+      for (let i = 0; i < data.length; i++) {
+        const t = i * invSr;
+        const u = dur > 0 ? t / dur : 0;
+        let sum = 0;
+        for (let k = 0; k < freqsHz.length; k++) {
+          const base = freqsHz[k] ?? 110;
+          const glide = base * (1 - 0.08 * u);
+          phases[k] = (phases[k] ?? 0) + glide * invSr;
+          sum += sawWave(phases[k] ?? 0) * 0.55 + squareWave((phases[k] ?? 0) * 0.5, 0.4) * 0.45;
+        }
+        const raw =
+          (sum / Math.max(1, freqsHz.length)) * 1.8 +
+          Math.sin(TWO_PI * (phases[0] ?? 0) * 0.5) * 0.55 +
+          (rng() * 2 - 1) * 0.14 * Math.exp(-u * 4.5);
+        const cutoff = clamp01(0.16 + 0.55 * Math.exp(-u * 1.8));
+        lp += cutoff * (raw - lp);
+        const env = Math.exp(-u * decayRate) * Math.min(1, t / 0.005);
+        const tailFade = u > 0.85 ? (1 - u) / 0.15 : 1;
+        data[i] = lp * env * tailFade * gain;
+      }
+    },
+  };
+}
+
 function makeArpRecipe(
   notesHz: readonly number[],
   noteDurSec: number,
@@ -665,6 +919,7 @@ function makeArpRecipe(
       const invSr = 1 / sampleRate;
       let phase = 0;
       let harmonicPhase = 0;
+      let fifthPhase = 0;
       for (let i = 0; i < data.length; i++) {
         const t = i * invSr;
         const noteIdx = Math.min(notesHz.length - 1, Math.floor(t / noteDurSec));
@@ -676,15 +931,18 @@ function makeArpRecipe(
         }
         phase += hz * invSr;
         harmonicPhase += hz * 2 * invSr;
+        fifthPhase += hz * 1.4983 * invSr;
         const osc =
           wave === 'square'
-            ? squareWave(phase, 0.35) * 0.8 + Math.sin(TWO_PI * harmonicPhase) * 0.2
+            ? squareWave(phase, 0.32) * 0.74 +
+              Math.sin(TWO_PI * harmonicPhase) * 0.2 +
+              Math.sin(TWO_PI * fifthPhase) * 0.06
             : wave === 'saw'
-              ? sawWave(phase)
+              ? sawWave(phase) * 0.82 + Math.sin(TWO_PI * harmonicPhase) * 0.18
               : wave === 'tri'
-                ? triangleWave(phase) * 0.82 + Math.sin(TWO_PI * harmonicPhase) * 0.18
-                : Math.sin(TWO_PI * phase);
-        const env = Math.exp(-localT * 13) * Math.min(1, localT / 0.002);
+                ? triangleWave(phase) * 0.76 + Math.sin(TWO_PI * harmonicPhase) * 0.24
+                : Math.sin(TWO_PI * phase) * 0.85 + Math.sin(TWO_PI * harmonicPhase) * 0.15;
+        const env = Math.exp(-localT * 12) * Math.min(1, localT / 0.0018);
         data[i] = osc * env * gain;
       }
     },
@@ -692,58 +950,267 @@ function makeArpRecipe(
 }
 
 const SFX_RECIPES: Record<AudioCueId, SfxRecipe> = {
-  sndacespawn: makeSweepRecipe(0.4, 240, 980, 'saw', 0.22, 2.8, 101, 0.75, 110),
-  sndacespawndist: makeSweepRecipe(0.32, 210, 760, 'sine', 0.18, 3.5, 102, 0.48),
-  sndadd1: makeArpRecipe([587.33, 739.99], 0.052, 'square', 0.52),
-  sndadd2: makeArpRecipe([739.99, 880], 0.052, 'square', 0.54),
-  sndadd3: makeArpRecipe([880, 1174.66], 0.058, 'square', 0.58),
-  sndboatdie: makeSweepRecipe(0.48, 170, 34, 'saw', 0.65, 3.8, 106, 0.84, 72),
-  sndboost: makeSweepRecipe(0.24, 92, 235, 'saw', 0.66, 3.0, 107, 0.68, 68),
-  sndbullet: makeSweepRecipe(0.058, 760, 145, 'square', 0.34, 6.2, 108, 0.58),
-  sndcannon: makeSweepRecipe(0.24, 300, 44, 'saw', 0.44, 4.8, 109, 0.84, 86),
-  sndcannonexplo: makeSweepRecipe(0.42, 185, 28, 'saw', 0.72, 4.1, 110, 0.88, 66),
-  sndcannonfail: makeSweepRecipe(0.08, 250, 115, 'tri', 0.2, 7.0, 111, 0.46),
-  sndcannonreload: makeArpRecipe([329.63, 493.88, 659.25], 0.042, 'tri', 0.52),
-  sndcombodrop: makeArpRecipe([440, 293.66], 0.11, 'saw', 0.56),
-  sndcombowarn: makeArpRecipe([987.77, 0, 987.77], 0.052, 'square', 0.5),
-  snddeny: makeArpRecipe([185, 146.83], 0.078, 'square', 0.52),
-  sndebullet: makeSweepRecipe(0.072, 560, 195, 'saw', 0.16, 5.4, 116, 0.5),
+  sndacespawn: makeSweepRecipe(0.42, 230, 1020, 'saw', 0.26, 2.5, 101, 0.78, 120),
+  sndacespawndist: makeSweepRecipe(0.34, 200, 760, 'sine', 0.2, 3.3, 102, 0.5),
+  sndadd1: makeArpRecipe([587.33, 739.99], 0.048, 'square', 0.56),
+  sndadd2: makeArpRecipe([739.99, 880], 0.048, 'square', 0.58),
+  sndadd3: makeArpRecipe([880, 1174.66], 0.054, 'square', 0.62),
+  sndboatdie: makeExplosionRecipe(0.56, {
+    subStartHz: 115,
+    subEndHz: 26,
+    toneStartHz: 185,
+    toneEndHz: 38,
+    toneMix: 0.3,
+    crushStart: 2,
+    crushEnd: 12,
+    decayRate: 3.3,
+    gain: 0.9,
+    seed: 106,
+    crackGain: 0.55,
+  }),
+  sndboost: makeSweepRecipe(0.25, 88, 260, 'saw', 0.68, 2.7, 107, 0.72, 74),
+  sndbullet: makeWeaponRecipe(0.064, {
+    startHz: 780,
+    endHz: 135,
+    wave: 'square',
+    noiseMix: 0.36,
+    decayRate: 6.4,
+    gain: 0.62,
+    seed: 108,
+    subPunchHz: 160,
+    snapMs: 3.5,
+  }),
+  sndcannon: makeWeaponRecipe(0.28, {
+    startHz: 380,
+    endHz: 46,
+    wave: 'saw',
+    noiseMix: 0.44,
+    decayRate: 4.2,
+    gain: 0.88,
+    seed: 109,
+    subPunchHz: 115,
+    snapMs: 8,
+  }),
+  sndcannonexplo: makeExplosionRecipe(0.46, {
+    subStartHz: 135,
+    subEndHz: 24,
+    toneStartHz: 240,
+    toneEndHz: 36,
+    toneMix: 0.26,
+    crushStart: 2,
+    crushEnd: 11,
+    decayRate: 3.8,
+    gain: 0.92,
+    seed: 110,
+    crackGain: 0.65,
+  }),
+  sndcannonfail: makeSweepRecipe(0.08, 250, 115, 'tri', 0.2, 7.0, 111, 0.48),
+  sndcannonreload: makeArpRecipe([329.63, 493.88, 659.25], 0.04, 'tri', 0.56),
+  sndcombodrop: makeArpRecipe([440, 329.63, 246.94], 0.095, 'saw', 0.58),
+  sndcombowarn: makeArpRecipe([987.77, 0, 987.77], 0.048, 'square', 0.54),
+  snddeny: makeArpRecipe([185, 138.59], 0.075, 'square', 0.54),
+  sndebullet: makeWeaponRecipe(0.074, {
+    startHz: 580,
+    endHz: 185,
+    wave: 'saw',
+    noiseMix: 0.18,
+    decayRate: 5.5,
+    gain: 0.52,
+    seed: 116,
+    snapMs: 2.5,
+  }),
   sndebulletdist: makeSweepRecipe(0.072, 450, 175, 'sine', 0.12, 6.0, 117, 0.34),
-  sndebullet2: makeSweepRecipe(0.082, 790, 265, 'square', 0.2, 5.4, 118, 0.5),
+  sndebullet2: makeWeaponRecipe(0.082, {
+    startHz: 810,
+    endHz: 255,
+    wave: 'square',
+    noiseMix: 0.22,
+    decayRate: 5.4,
+    gain: 0.52,
+    seed: 118,
+    snapMs: 2.5,
+  }),
   sndebullet2dist: makeSweepRecipe(0.082, 630, 235, 'sine', 0.15, 6.0, 119, 0.34),
-  sndexplom: makeSweepRecipe(0.35, 200, 36, 'saw', 0.74, 4.6, 120, 0.82, 74),
-  sndgungine: makeSweepRecipe(0.088, 450, 98, 'saw', 0.52, 5.0, 121, 0.62),
-  sndhangar: makeSweepRecipe(0.18, 148, 64, 'tri', 0.34, 4.8, 122, 0.56, 62),
-  sndheal: makeArpRecipe([659.25, 880], 0.044, 'sine', 0.44),
-  sndhealed: makeArpRecipe([659.25, 783.99, 987.77, 1318.51], 0.052, 'tri', 0.58),
-  sndhit1: makeSweepRecipe(0.068, 340, 92, 'square', 0.45, 7.0, 125, 0.56),
-  sndhit2: makeSweepRecipe(0.068, 405, 108, 'square', 0.45, 7.0, 126, 0.56),
-  sndhit3: makeSweepRecipe(0.068, 475, 125, 'square', 0.45, 7.0, 127, 0.56),
-  sndhit4: makeSweepRecipe(0.068, 545, 145, 'square', 0.45, 7.0, 128, 0.56),
-  sndjetdie: makeSweepRecipe(0.38, 660, 52, 'saw', 0.66, 4.2, 129, 0.78, 70),
-  sndlaser: makeSweepRecipe(0.095, 1040, 880, 'saw', 0.12, 2.4, 130, 0.52),
-  sndlaunch: makeSweepRecipe(0.46, 78, 360, 'saw', 0.58, 2.6, 131, 0.82, 82),
-  sndmaxcombo: makeArpRecipe([659.25, 783.99, 987.77, 1318.51, 1567.98], 0.058, 'square', 0.64),
-  sndmessage: makeArpRecipe([783.99, 1046.5], 0.04, 'sine', 0.46),
-  sndmisempty: makeSweepRecipe(0.045, 380, 185, 'tri', 0.25, 8.0, 134, 0.46),
-  sndmissile: makeSweepRecipe(0.25, 250, 650, 'saw', 0.62, 3.6, 135, 0.65),
-  sndmisspawn: makeSweepRecipe(0.16, 440, 810, 'square', 0.4, 4.6, 136, 0.54),
+  sndexplom: makeExplosionRecipe(0.38, {
+    subStartHz: 145,
+    subEndHz: 32,
+    toneStartHz: 210,
+    toneEndHz: 42,
+    toneMix: 0.2,
+    crushStart: 2,
+    crushEnd: 9,
+    decayRate: 4.3,
+    gain: 0.86,
+    seed: 120,
+    crackGain: 0.58,
+  }),
+  sndgungine: makeWeaponRecipe(0.092, {
+    startHz: 470,
+    endHz: 92,
+    wave: 'saw',
+    noiseMix: 0.52,
+    decayRate: 4.8,
+    gain: 0.66,
+    seed: 121,
+    subPunchHz: 130,
+    snapMs: 4.5,
+  }),
+  sndhangar: makeSweepRecipe(0.2, 160, 62, 'tri', 0.36, 4.4, 122, 0.58, 66),
+  sndheal: makeArpRecipe([659.25, 880], 0.04, 'sine', 0.46),
+  sndhealed: makeArpRecipe([659.25, 783.99, 987.77, 1318.51], 0.048, 'tri', 0.62),
+  sndhit1: makeWeaponRecipe(0.068, {
+    startHz: 340,
+    endHz: 92,
+    wave: 'square',
+    noiseMix: 0.48,
+    decayRate: 7.0,
+    gain: 0.58,
+    seed: 125,
+    snapMs: 3,
+  }),
+  sndhit2: makeWeaponRecipe(0.068, {
+    startHz: 410,
+    endHz: 110,
+    wave: 'square',
+    noiseMix: 0.48,
+    decayRate: 7.0,
+    gain: 0.58,
+    seed: 126,
+    snapMs: 3,
+  }),
+  sndhit3: makeWeaponRecipe(0.068, {
+    startHz: 485,
+    endHz: 128,
+    wave: 'square',
+    noiseMix: 0.48,
+    decayRate: 7.0,
+    gain: 0.58,
+    seed: 127,
+    snapMs: 3,
+  }),
+  sndhit4: makeWeaponRecipe(0.068, {
+    startHz: 560,
+    endHz: 148,
+    wave: 'square',
+    noiseMix: 0.48,
+    decayRate: 7.0,
+    gain: 0.58,
+    seed: 128,
+    snapMs: 3,
+  }),
+  sndjetdie: makeExplosionRecipe(0.42, {
+    subStartHz: 125,
+    subEndHz: 36,
+    toneStartHz: 780,
+    toneEndHz: 54,
+    toneMix: 0.38,
+    crushStart: 2,
+    crushEnd: 9,
+    decayRate: 3.9,
+    gain: 0.84,
+    seed: 129,
+    crackGain: 0.5,
+  }),
+  sndlaser: makeWeaponRecipe(0.105, {
+    startHz: 1080,
+    endHz: 860,
+    wave: 'saw',
+    noiseMix: 0.14,
+    decayRate: 2.2,
+    gain: 0.54,
+    seed: 130,
+    ringModHz: 92,
+    snapMs: 2,
+  }),
+  sndlaunch: makeSweepRecipe(0.48, 72, 390, 'saw', 0.62, 2.4, 131, 0.86, 92),
+  sndmaxcombo: makeArpRecipe([659.25, 783.99, 987.77, 1318.51, 1567.98], 0.052, 'square', 0.68),
+  sndmessage: makeArpRecipe([783.99, 1046.5], 0.038, 'sine', 0.48),
+  sndmisempty: makeSweepRecipe(0.045, 380, 185, 'tri', 0.25, 8.0, 134, 0.48),
+  sndmissile: makeWeaponRecipe(0.26, {
+    startHz: 230,
+    endHz: 720,
+    wave: 'saw',
+    noiseMix: 0.64,
+    decayRate: 3.4,
+    gain: 0.68,
+    seed: 135,
+    snapMs: 5,
+  }),
+  sndmisspawn: makeSweepRecipe(0.16, 440, 840, 'square', 0.42, 4.4, 136, 0.56),
   sndmisspawndist: makeSweepRecipe(0.15, 370, 640, 'sine', 0.3, 5.0, 137, 0.36),
-  sndmove: makeSweepRecipe(0.036, 560, 720, 'square', 0.05, 7.2, 138, 0.44),
-  sndnuke: makeSweepRecipe(0.9, 195, 22, 'saw', 0.78, 2.6, 139, 0.92, 58),
-  sndplanedie: makeSweepRecipe(0.34, 360, 46, 'saw', 0.7, 4.4, 140, 0.78, 70),
-  sndplayerdie: makeSweepRecipe(0.66, 275, 26, 'saw', 0.74, 3.1, 141, 0.88, 62),
-  sndplayerhit: makeSweepRecipe(0.16, 295, 56, 'square', 0.54, 5.2, 142, 0.75, 84),
-  sndpopup: makeArpRecipe([587.33, 739.99, 880], 0.058, 'tri', 0.58),
-  sndprojector: makeSweepRecipe(0.042, 840, 340, 'tri', 0.38, 7.8, 144, 0.4),
-  sndprojectorstart: makeSweepRecipe(0.28, 92, 275, 'tri', 0.48, 3.0, 145, 0.54),
-  sndsfmt: makeSweepRecipe(0.44, 124, 54, 'saw', 0.38, 2.8, 146, 0.82, 65),
-  sndsplashl: makeSweepRecipe(0.36, 440, 105, 'sine', 0.9, 4.2, 147, 0.72),
-  sndsplashm: makeSweepRecipe(0.19, 540, 155, 'sine', 0.85, 5.2, 148, 0.58),
-  sndspread: makeSweepRecipe(0.15, 380, 72, 'saw', 0.64, 5.2, 149, 0.72, 85),
-  sndswap: makeArpRecipe([493.88, 659.25], 0.036, 'square', 0.48),
-  snduboost: makeSweepRecipe(0.22, 128, 188, 'sine', 0.44, 3.4, 151, 0.6, 60),
-  sndunboost: makeSweepRecipe(0.14, 248, 82, 'tri', 0.34, 5.2, 152, 0.5),
+  sndmove: makeSweepRecipe(0.036, 560, 740, 'square', 0.06, 7.2, 138, 0.46),
+  sndnuke: makeExplosionRecipe(0.95, {
+    subStartHz: 110,
+    subEndHz: 18,
+    toneStartHz: 240,
+    toneEndHz: 24,
+    toneMix: 0.34,
+    crushStart: 2,
+    crushEnd: 16,
+    decayRate: 2.3,
+    gain: 0.96,
+    seed: 139,
+    crackGain: 0.8,
+  }),
+  sndplanedie: makeExplosionRecipe(0.36, {
+    subStartHz: 135,
+    subEndHz: 34,
+    toneStartHz: 420,
+    toneEndHz: 48,
+    toneMix: 0.28,
+    crushStart: 2,
+    crushEnd: 9,
+    decayRate: 4.1,
+    gain: 0.82,
+    seed: 140,
+    crackGain: 0.52,
+  }),
+  sndplayerdie: makeExplosionRecipe(0.7, {
+    subStartHz: 125,
+    subEndHz: 22,
+    toneStartHz: 320,
+    toneEndHz: 28,
+    toneMix: 0.32,
+    crushStart: 2,
+    crushEnd: 14,
+    decayRate: 2.8,
+    gain: 0.92,
+    seed: 141,
+    crackGain: 0.72,
+  }),
+  sndplayerhit: makeExplosionRecipe(0.18, {
+    subStartHz: 170,
+    subEndHz: 46,
+    toneStartHz: 310,
+    toneEndHz: 62,
+    toneMix: 0.35,
+    crushStart: 2,
+    crushEnd: 6,
+    decayRate: 5.4,
+    gain: 0.8,
+    seed: 142,
+    crackGain: 0.65,
+  }),
+  sndpopup: makeArpRecipe([587.33, 739.99, 880, 1174.66], 0.052, 'tri', 0.62),
+  sndprojector: makeSweepRecipe(0.044, 860, 320, 'tri', 0.42, 7.6, 144, 0.42),
+  sndprojectorstart: makeSweepRecipe(0.3, 88, 290, 'tri', 0.5, 2.8, 145, 0.58, 72),
+  sndsfmt: makePowerChordRecipe(0.48, [82.41, 123.47, 164.81, 196.0], 1.8, 0.92, 146),
+  sndsplashl: makeSplashRecipe(0.4, 'l', 147),
+  sndsplashm: makeSplashRecipe(0.22, 'm', 148),
+  sndspread: makeWeaponRecipe(0.16, {
+    startHz: 410,
+    endHz: 68,
+    wave: 'saw',
+    noiseMix: 0.64,
+    decayRate: 4.9,
+    gain: 0.78,
+    seed: 149,
+    subPunchHz: 105,
+    snapMs: 6,
+  }),
+  sndswap: makeArpRecipe([493.88, 659.25], 0.036, 'square', 0.5),
+  snduboost: makeSweepRecipe(0.24, 116, 196, 'sine', 0.48, 3.1, 151, 0.66, 62),
+  sndunboost: makeSweepRecipe(0.15, 255, 78, 'tri', 0.38, 5.0, 152, 0.52),
 };
 
 /**
