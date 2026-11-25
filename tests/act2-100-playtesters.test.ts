@@ -56,12 +56,20 @@ import {
   PaletteStudioController,
   TelemetryHud,
 } from '../src/ui';
-import { loadVaultFromDisk } from '../src/vault';
+import { createProceduralFallbackBundle, loadVaultFromDisk } from '../src/vault';
 
 // Load live Steam vault once (falls back cleanly to procedural-fallback if Steam absent)
 const vault = loadVaultFromDisk();
+const skybreakerVault = createProceduralFallbackBundle();
 const gameData = vault.data;
 const VALID_STEM_SET = new Set<string>(ALL_STEM_IDS);
+
+function expectedVanillaPlaneName(w: number, b: number, e: number): string {
+  const entry = gameData.global.planenames.find(
+    (p) => p.weapon === w && p.body === b && p.engine === e,
+  );
+  return entry?.name ?? 'SKYBREAKER';
+}
 
 const IDLE_INPUT: InputState = {
   left: false,
@@ -524,18 +532,18 @@ function runVanillaPuristSortie(
 
 describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
   describe('Group 1: PT-001..PT-015 — 15 Vanilla 1:1 Purists (Vanilla Lock Regression Gate)', () => {
-    it('PT-001: original [0,0,0] Normal 1,200-tick autopilot sortie stays bit-identical & mod-free', () => {
+    it('PT-001: standard [0,0,0] Normal 1,200-tick autopilot sortie stays bit-identical & mod-free', () => {
       const { finalSnap } = runVanillaPuristSortie(
         { weapon: 0, body: 0, engine: 0 },
         'normal',
         10001,
         1200,
-        'original',
+        expectedVanillaPlaneName(0, 0, 0),
       );
       expect(finalSnap.tick).toBe(1200);
     });
 
-    it('PT-002: beamrauser [1,0,0] Normal enforces 1/3 laser turn divisor while firing & bit-identical replay', () => {
+    it('PT-002: beam [1,0,0] Normal enforces 1/3 laser turn divisor while firing & bit-identical replay', () => {
       const reg = createLockedRegistryWithAllModPacks();
       const sim = new Simulation(gameData, reg);
       launchToPlaying(sim, { weapon: 1, body: 0, engine: 0 }, 'normal', 10002);
@@ -550,27 +558,27 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
         'normal',
         10002,
         700,
-        'beamrauser',
+        expectedVanillaPlaneName(1, 0, 0),
       );
     });
 
-    it('PT-003: kozilek [2,1,0] Normal spread+armor sortie runs 700 ticks with clean replay parity', () => {
+    it('PT-003: spread+armor [2,1,0] Normal sortie runs 700 ticks with clean replay parity', () => {
       runVanillaPuristSortie(
         { weapon: 2, body: 1, engine: 0 },
         'normal',
         10003,
         700,
-        'kozilek',
+        expectedVanillaPlaneName(2, 1, 0),
       );
     });
 
-    it('PT-004: maverick [3,0,0] Normal caps homing missiles at 4 active across 700 ticks', () => {
+    it('PT-004: missiles [3,0,0] Normal caps homing missiles at 4 active across 700 ticks', () => {
       const { finalSnap } = runVanillaPuristSortie(
         { weapon: 3, body: 0, engine: 0 },
         'normal',
         10004,
         700,
-        'maverick',
+        expectedVanillaPlaneName(3, 0, 0),
         (_s, t) => ({
           left: t % 17 === 0,
           right: false,
@@ -584,23 +592,23 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
       expect(activeMissiles.length).toBeLessThanOrEqual(4);
     });
 
-    it('PT-005: hubble [4,0,0] Normal cannon plasmaball sortie runs 700 ticks with clean replay parity', () => {
+    it('PT-005: cannon [4,0,0] Normal plasmaball sortie runs 700 ticks with clean replay parity', () => {
       runVanillaPuristSortie(
         { weapon: 4, body: 0, engine: 0 },
         'normal',
         10005,
         700,
-        'hubble',
+        expectedVanillaPlaneName(4, 0, 0),
       );
     });
 
-    it('PT-006: mosquito [0,0,2] Normal gungine rear bullet propulsion runs 700 ticks cleanly', () => {
+    it('PT-006: gungine [0,0,2] Normal rear bullet propulsion runs 700 ticks cleanly', () => {
       runVanillaPuristSortie(
         { weapon: 0, body: 0, engine: 2 },
         'normal',
         10006,
         700,
-        'mosquito',
+        expectedVanillaPlaneName(0, 0, 2),
       );
     });
 
@@ -628,19 +636,19 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
       expect(sawUnderwater).toBe(true);
     });
 
-    it('PT-008: floatrauser [0,0,4] SFMT mode runs 900 ticks with zero custom bosses & exact replay', () => {
+    it('PT-008: hover [0,0,4] SFMT mode runs 900 ticks with zero custom bosses & exact replay', () => {
       const { finalSnap } = runVanillaPuristSortie(
         { weapon: 0, body: 0, engine: 4 },
         'sfmt',
         10008,
         900,
-        'floatrauser',
+        expectedVanillaPlaneName(0, 0, 4),
       );
       expect(finalSnap.mode).toBe('sfmt');
       expect(finalSnap.difficulty).toBeGreaterThan(200);
     });
 
-    it('PT-009: kamikaze [0,3,1] Normal triggers nuke-on-death without shockwaves on vanilla lock', () => {
+    it('PT-009: nuke [0,3,1] Normal triggers nuke-on-death without shockwaves on vanilla lock', () => {
       const reg = createLockedRegistryWithAllModPacks();
       const sim = new Simulation(gameData, reg);
       launchToPlaying(sim, { weapon: 0, body: 3, engine: 1 }, 'normal', 10009);
@@ -655,7 +663,7 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
       expect(snap.phase).toBe('gameover');
     });
 
-    it('PT-010: jouster [1,2,0] Normal melee ramming immunity survives enemy impacts for 700 ticks', () => {
+    it('PT-010: melee [1,2,0] Normal ramming immunity survives enemy impacts for 700 ticks', () => {
       const reg = createLockedRegistryWithAllModPacks();
       const sim = new Simulation(gameData, reg);
       const start = launchToPlaying(sim, { weapon: 1, body: 2, engine: 0 }, 'normal', 10010);
@@ -667,11 +675,11 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
         'normal',
         10010,
         700,
-        'jouster',
+        expectedVanillaPlaneName(1, 2, 0),
       );
     });
 
-    it('PT-011: luftbomber [0,4,0] Normal bomb body spawns gravity bombs & stays replay-identical', () => {
+    it('PT-011: bomb [0,4,0] Normal body spawns gravity bombs & stays replay-identical', () => {
       const reg = createLockedRegistryWithAllModPacks();
       const sim = new Simulation(gameData, reg);
       launchToPlaying(sim, { weapon: 0, body: 4, engine: 0 }, 'normal', 10011);
@@ -682,20 +690,21 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
         'normal',
         10011,
         700,
-        'luftbomber',
+        expectedVanillaPlaneName(0, 4, 0),
       );
     });
 
-    it('PT-012: URAUSER [5,5,5] SFMT 900 ticks keeps 120 maxHealth, urauser stem, and bit-identical replay', () => {
+    it('PT-012: APEX OMEGA / [5,5,5] SFMT 900 ticks keeps 120 maxHealth, apex stem, and bit-identical replay', () => {
       const { finalSnap } = runVanillaPuristSortie(
         { weapon: 5, body: 5, engine: 5 },
         'sfmt',
         10012,
         900,
-        'URAUSER',
+        expectedVanillaPlaneName(5, 5, 5),
       );
       expect(finalSnap.player.isUrauser).toBe(true);
       expect(finalSnap.player.maxHealth).toBe(120);
+      expect(skybreakerVault.data.global.planenames[125]?.name).toBe('APEX OMEGA');
       const stemRes = resolveActiveStems(
         'playing',
         false,
@@ -872,12 +881,12 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
       }
     });
 
-    it('PT-019: RAILRAUSER [6,0,0] pierces multiple enemies in line + emits shockwave against Dreadnought', () => {
+    it('PT-019: RAILBREAKER [6,0,0] pierces multiple enemies in line + emits shockwave against Dreadnought', () => {
       const sim = createModdedSim({
         shaderFx: { crtScanlines: false, phosphorBloom: false, speedWarp: false, shockwaves: true },
       });
       const start = launchToPlaying(sim, { weapon: 6, body: 0, engine: 0 }, 'normal', 20019);
-      expect(start.player.planeName).toBe('RAILRAUSER');
+      expect(start.player.planeName).toBe('RAILBREAKER');
       const f1 = sim.spawnEnemy('Fighter', start.player.x, start.player.y - 55);
       const f2 = sim.spawnEnemy('Fighter', start.player.x, start.player.y - 110);
       const boss = sim.spawnEnemy('Dreadnought', start.player.x + 150);
@@ -896,12 +905,12 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
       }
     });
 
-    it('PT-020: FLAKRAUSER [7,0,0] vs AceSquadron bursts into 6 radial shards on proximity & TTL', () => {
+    it('PT-020: FLAKBREAKER [7,0,0] vs AceSquadron bursts into 6 radial shards on proximity & TTL', () => {
       const sim = createModdedSim({
         shaderFx: { crtScanlines: false, phosphorBloom: false, speedWarp: false, shockwaves: true },
       });
       const start = launchToPlaying(sim, { weapon: 7, body: 0, engine: 0 }, 'normal', 20020);
-      expect(start.player.planeName).toBe('FLAKRAUSER');
+      expect(start.player.planeName).toBe('FLAKBREAKER');
       sim.spawnAceSquadron(start.player.x, start.player.y - 95);
 
       sim.step(FIRE_INPUT);
@@ -933,12 +942,12 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
       }
     });
 
-    it('PT-022: AEGIS RAUSER [0,6,0] vs Dreadnought blocks hit, recharges in 300 ticks, keeps finite state', () => {
+    it('PT-022: AEGIS BREAKER [0,6,0] vs Dreadnought blocks hit, recharges in 300 ticks, keeps finite state', () => {
       const sim = createModdedSim({
         shaderFx: { crtScanlines: false, phosphorBloom: false, speedWarp: false, shockwaves: true },
       });
       const start = launchToPlaying(sim, { weapon: 0, body: 6, engine: 0 }, 'normal', 20022);
-      expect(start.player.planeName).toBe('AEGIS RAUSER');
+      expect(start.player.planeName).toBe('AEGIS BREAKER');
       sim.spawnEnemy('Dreadnought', start.player.x + 200);
       sim.damagePlayer(9);
       expect(sim.getSnapshot().player.shieldReady).toBe(false);
@@ -950,10 +959,10 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
       }
     });
 
-    it('PT-023: VAMPIRE RAUSER [0,7,0] vs SkyCarrier heals +2.5 HP per kill even while firing', () => {
+    it('PT-023: VAMPIRE BREAKER [0,7,0] vs SkyCarrier heals +2.5 HP per kill even while firing', () => {
       const sim = createModdedSim();
       const start = launchToPlaying(sim, { weapon: 0, body: 7, engine: 0 }, 'normal', 20023);
-      expect(start.player.planeName).toBe('VAMPIRE RAUSER');
+      expect(start.player.planeName).toBe('VAMPIRE BREAKER');
       sim.spawnEnemy('SkyCarrier', start.player.x - 180);
       for (let t = 0; t < 650; t++) {
         const s = sim.step(computeAutopilotInput(sim.getSnapshot()));
@@ -961,10 +970,10 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
       }
     });
 
-    it('PT-024: OVERCLOCK RAUSER [0,8,0] SFMT vs Dreadnought runs 25% faster fire rate + 1.15x speed', () => {
+    it('PT-024: OVERCLOCK BREAKER [0,8,0] SFMT vs Dreadnought runs 25% faster fire rate + 1.15x speed', () => {
       const sim = createModdedSim();
       const start = launchToPlaying(sim, { weapon: 0, body: 8, engine: 0 }, 'sfmt', 20024);
-      expect(start.player.planeName).toBe('OVERCLOCK RAUSER');
+      expect(start.player.planeName).toBe('OVERCLOCK BREAKER');
       expect(start.player.bodySpec.speedmodifier).toBe(1.15);
       sim.spawnEnemy('Dreadnought', start.player.x + 120);
       for (let t = 0; t < 650; t++) {
@@ -990,10 +999,10 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
       expect(peakSpd).toBeLessThanOrEqual(12.501);
     });
 
-    it('PT-026: VECTOR RAUSER [0,0,7] executes 11 deg unboosted / 7 deg boosted turns vs AceSquadron', () => {
+    it('PT-026: VECTOR BREAKER [0,0,7] executes 11 deg unboosted / 7 deg boosted turns vs AceSquadron', () => {
       const sim = createModdedSim();
       const start = launchToPlaying(sim, { weapon: 0, body: 0, engine: 7 }, 'normal', 20026);
-      expect(start.player.planeName).toBe('VECTOR RAUSER');
+      expect(start.player.planeName).toBe('VECTOR BREAKER');
       const unboosted = sim.step({ left: false, right: true, thrust: false, fire: false });
       expect(unboosted.player.angleDeg - unboosted.player.prevAngleDeg).toBeCloseTo(11, 5);
       const boosted = sim.step({ left: false, right: true, thrust: true, fire: false });
@@ -1005,10 +1014,10 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
       }
     });
 
-    it('PT-027: ION RAUSER [0,0,8] is waterproof, takes halved space damage (0.2) & fights SkyCarrier', () => {
+    it('PT-027: ION BREAKER [0,0,8] is waterproof, takes halved space damage (0.2) & fights SkyCarrier', () => {
       const sim = createModdedSim();
       const start = launchToPlaying(sim, { weapon: 0, body: 0, engine: 8 }, 'normal', 20027);
-      expect(start.player.planeName).toBe('ION RAUSER');
+      expect(start.player.planeName).toBe('ION BREAKER');
       expect(start.player.engineSpec.waterproof).toBe(true);
       expect(start.player.engineSpec.spacedmg).toBe(0.2);
       sim.spawnEnemy('SkyCarrier', start.player.x - 200);
@@ -1021,7 +1030,7 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
     it('PT-028: Cross-hybrid [6,2,6] (Railgun+Melee+Afterburner) rams & snipes Dreadnought', () => {
       const sim = createModdedSim();
       const start = launchToPlaying(sim, { weapon: 6, body: 2, engine: 6 }, 'normal', 20028);
-      expect(start.player.planeName).toBe(resolveModdedPlaneName(6, 2, 6, 'RAUSER'));
+      expect(start.player.planeName).toBe(resolveModdedPlaneName(6, 2, 6, 'SKYBREAKER'));
       sim.spawnEnemy('Dreadnought', start.player.x + 60);
       for (let t = 0; t < 650; t++) {
         const s = sim.step(computeAutopilotInput(sim.getSnapshot()));
@@ -1035,7 +1044,7 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
         shaderFx: { crtScanlines: false, phosphorBloom: false, speedWarp: false, shockwaves: true },
       });
       const start = launchToPlaying(sim, { weapon: 7, body: 3, engine: 7 }, 'normal', 20029);
-      expect(start.player.planeName).toBe(resolveModdedPlaneName(7, 3, 7, 'RAUSER'));
+      expect(start.player.planeName).toBe(resolveModdedPlaneName(7, 3, 7, 'SKYBREAKER'));
       sim.spawnEnemy('SkyCarrier', start.player.x, start.player.y - 120);
       for (let t = 0; t < 550; t++) {
         const s = sim.step(computeAutopilotInput(sim.getSnapshot()));
@@ -1055,7 +1064,7 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
     it('PT-030: Cross-hybrid [8,4,8] (Lightning+Bomb+Ion) drops bombs + arcs over Dreadnought', () => {
       const sim = createModdedSim();
       const start = launchToPlaying(sim, { weapon: 8, body: 4, engine: 8 }, 'normal', 20030);
-      expect(start.player.planeName).toBe(resolveModdedPlaneName(8, 4, 8, 'RAUSER'));
+      expect(start.player.planeName).toBe(resolveModdedPlaneName(8, 4, 8, 'SKYBREAKER'));
       sim.spawnEnemy('Dreadnought', start.player.x + 80);
       let sawBomb = false;
       for (let t = 0; t < 650; t++) {
@@ -1071,7 +1080,7 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
         shaderFx: { crtScanlines: false, phosphorBloom: false, speedWarp: false, shockwaves: true },
       });
       const start = launchToPlaying(sim, { weapon: 4, body: 8, engine: 6 }, 'normal', 20031);
-      expect(start.player.planeName).toBe(resolveModdedPlaneName(4, 8, 6, 'RAUSER'));
+      expect(start.player.planeName).toBe(resolveModdedPlaneName(4, 8, 6, 'SKYBREAKER'));
       const fireSnap = sim.step(FIRE_INPUT);
       expect(fireSnap.player.fireCooldown).toBe(59);
       sim.spawnEnemy('Dreadnought', start.player.x + 150);
@@ -1084,7 +1093,7 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
     it('PT-032: Cross-hybrid [3,7,2] (Missiles+Vampire+Gungine) fires homing missiles + rear gungine bullets', () => {
       const sim = createModdedSim();
       const start = launchToPlaying(sim, { weapon: 3, body: 7, engine: 2 }, 'normal', 20032);
-      expect(start.player.planeName).toBe(resolveModdedPlaneName(3, 7, 2, 'RAUSER'));
+      expect(start.player.planeName).toBe(resolveModdedPlaneName(3, 7, 2, 'SKYBREAKER'));
       sim.spawnAceSquadron(start.player.x + 160, -240);
       let sawGungine = false;
       let sawMissile = false;
@@ -1101,7 +1110,7 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
     it('PT-033: Cross-hybrid [1,6,4] (Laser+Aegis+Hover) fights SkyCarrier for 650 ticks', () => {
       const sim = createModdedSim();
       const start = launchToPlaying(sim, { weapon: 1, body: 6, engine: 4 }, 'normal', 20033);
-      expect(start.player.planeName).toBe(resolveModdedPlaneName(1, 6, 4, 'RAUSER'));
+      expect(start.player.planeName).toBe(resolveModdedPlaneName(1, 6, 4, 'SKYBREAKER'));
       sim.spawnEnemy('SkyCarrier', start.player.x + 140);
       for (let t = 0; t < 650; t++) {
         const s = sim.step(computeAutopilotInput(sim.getSnapshot()));
@@ -1113,7 +1122,7 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
     it('PT-034: Cross-hybrid [2,8,3] (Spread+Overclock+Underwater) reduces Spread cooldown 9 -> 7', () => {
       const sim = createModdedSim();
       const start = launchToPlaying(sim, { weapon: 2, body: 8, engine: 3 }, 'normal', 20034);
-      expect(start.player.planeName).toBe(resolveModdedPlaneName(2, 8, 3, 'RAUSER'));
+      expect(start.player.planeName).toBe(resolveModdedPlaneName(2, 8, 3, 'SKYBREAKER'));
       const fireSnap = sim.step(FIRE_INPUT);
       expect(fireSnap.player.fireCooldown).toBe(7);
       sim.spawnEnemy('Dreadnought', start.player.x - 160);
@@ -2282,7 +2291,7 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
   });
 
   describe('Group 6: PT-081..PT-090 — 10 Hangar Mod Switcher & State-Thrash Testers', () => {
-    it('PT-081: Rapid Tab Mod Deck toggle 50x preserves clean Hangar state & closes Palette Studio on close', () => {
+    it('PT-081: Rapid Tab Mod Deck toggle 50x + live SKYBREAKER <-> STEAM LOCAL Hangar/Sim/Renderer/Audio asset hot-swap', async () => {
       const hangar = new HangarController();
       for (let i = 0; i < 50; i++) {
         expect(hangar.toggleModDeck(true)).toBe(true);
@@ -2290,8 +2299,69 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
         expect(hangar.toggleModDeck(false)).toBe(false);
         expect(hangar.getPaletteStudio().isOpen()).toBe(false);
       }
-      expect(HANGAR_ROWS).toHaveLength(6);
+      expect(HANGAR_ROWS).toHaveLength(7);
+      expect(HANGAR_ROWS).toContain('assets');
       expect(MOD_DECK_ROWS).toHaveLength(12);
+
+      // Verify Hangar ASSETS row cycling (locked when Steam unavailable, toggles cleanly when available)
+      const sim = new Simulation(skybreakerVault.data, new ModRegistry(true));
+      sim.unlockAll();
+      sim.setLoadout({ weapon: 5, body: 5, engine: 5 });
+      expect(sim.getSnapshot().player.planeName).toBe('APEX OMEGA');
+
+      hangar.setActiveRow('assets');
+      hangar.setSteamAvailable(false);
+      const denied = hangar.cycleCurrent(1, sim.getSnapshot(), sim);
+      expect(denied.locked).toBe(true);
+      expect(denied.cue).toBe('snddeny');
+      expect(hangar.getAssetMode()).toBe('skybreaker');
+
+      hangar.setSteamAvailable(true);
+      const toSteam = hangar.cycleCurrent(1, sim.getSnapshot(), sim);
+      expect(toSteam.changed).toBe(true);
+      expect(toSteam.cue).toBe('sndswap');
+      expect(toSteam.assetMode).toBe('steam-local');
+      expect(hangar.getAssetMode()).toBe('steam-local');
+
+      // Live hot-swap Sim + WebGL2Renderer + AudioEngine across skybreaker <-> steam-local
+      const glMock = createMockWebGL2();
+      const renderer = new WebGL2Renderer();
+      renderer.init(glMock.canvas, skybreakerVault);
+      const mockAudio = createMockAudioContext();
+      const audio = new AudioEngine({ context: mockAudio.ctx });
+      await audio.init(skybreakerVault);
+      await audio.unlock();
+      audio.syncFromSnapshot(sim.getSnapshot());
+
+      sim.setGameData(vault.data);
+      renderer.reloadVault(vault);
+      hangar.setVaultSource(vault.data.vaultSource);
+      mockAudio.setTime(1.5);
+      await audio.init(vault);
+      audio.syncFromSnapshot(sim.getSnapshot());
+      expect(sim.getSnapshot().player.loadout).toEqual({ weapon: 5, body: 5, engine: 5 });
+      expect(sim.getSnapshot().player.planeName).toBe(expectedVanillaPlaneName(5, 5, 5));
+      renderer.render(sim.getSnapshot(), sim.getSnapshot(), 0, hangar.buildUiState(sim.getSnapshot()), 1.5);
+      expect(renderer.getFrameMetrics().webglErrors).toBe(0);
+      expect(audio.getSyncMetrics().interStemDriftMs).toBeLessThan(1.0);
+
+      // Toggle back to SKYBREAKER original procedural pack cleanly
+      const toSky = hangar.cycleCurrent(1, sim.getSnapshot(), sim);
+      expect(toSky.changed).toBe(true);
+      expect(toSky.assetMode).toBe('skybreaker');
+      sim.setGameData(skybreakerVault.data);
+      renderer.reloadVault(skybreakerVault);
+      hangar.setVaultSource(skybreakerVault.data.vaultSource);
+      mockAudio.setTime(2.5);
+      await audio.init(skybreakerVault);
+      audio.syncFromSnapshot(sim.getSnapshot());
+      expect(sim.getSnapshot().player.planeName).toBe('APEX OMEGA');
+      renderer.render(sim.getSnapshot(), sim.getSnapshot(), 0, hangar.buildUiState(sim.getSnapshot()), 2.5);
+      expect(renderer.getFrameMetrics().webglErrors).toBe(0);
+      expect(audio.getSyncMetrics().interStemDriftMs).toBeLessThan(1.0);
+      glMock.assertAllUniformsFinite();
+      audio.dispose();
+      renderer.dispose();
     });
 
     it('PT-082: VANILLA 1:1 <-> MODDED toggle while holding [8,8,8] clamps strictly to <= 5 in Vanilla', () => {
@@ -2405,7 +2475,7 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
       expect(deniedMode.locked).toBe(true);
       expect(deniedMode.cue).toBe('snddeny');
 
-      const deniedPal = hangar.selectPaletteByIndex(9, sim.getSnapshot()); // sfmt palette
+      const deniedPal = hangar.selectPaletteByIndex(9, sim.getSnapshot()); // overdrive palette
       expect(deniedPal.locked).toBe(true);
       expect(deniedPal.cue).toBe('snddeny');
 

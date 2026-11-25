@@ -4,6 +4,7 @@ import {
   DEFAULT_SHADER_FX,
   VANILLA_1TO1_PROFILE,
   type Act2ModFlags,
+  type AssetPackMode,
   type EnemyKind,
   type GameMode,
   type InputState,
@@ -11,10 +12,11 @@ import {
   type PaletteDefinition,
   type PartIndex,
   type PilotProfile,
-  type RauserDebugApi,
-  type RauserDebugState,
   type ReplayRecording,
   type SimSnapshot,
+  type SkybreakerDebugApi,
+  type SkybreakerDebugState,
+  type VaultAssetBundle,
 } from './contracts';
 import {
   ACT2_BONUS_PALETTES,
@@ -35,10 +37,11 @@ import {
 import { HangarController, TelemetryHud } from './ui';
 import { VaultLoader } from './vault';
 
-const PROFILE_STORAGE_KEY = 'krunked_luftrausers_profile_v1';
-const ACT2_MODS_STORAGE_KEY = 'krunked_luftrausers_act2_mods_v1';
-const ACT2_CUSTOM_PALETTE_KEY = 'krunked_luftrausers_act2_custom_palette_v1';
-const ACT2_PB_GHOST_KEY = 'krunked_luftrausers_act2_pb_ghost_v1';
+const PROFILE_STORAGE_KEY = 'krunked_skybreaker_profile_v1';
+const ACT2_MODS_STORAGE_KEY = 'krunked_skybreaker_act2_mods_v1';
+const ACT2_CUSTOM_PALETTE_KEY = 'krunked_skybreaker_act2_custom_palette_v1';
+const ACT2_PB_GHOST_KEY = 'krunked_skybreaker_act2_pb_ghost_v1';
+const ASSET_MODE_STORAGE_KEY = 'krunked_skybreaker_asset_mode_v1';
 
 const FIXED_DT = 1 / VANILLA_1TO1_PROFILE.fixedTimestepHz;
 const MAX_SUB_STEPS = VANILLA_1TO1_PROFILE.maxSubSteps;
@@ -206,6 +209,23 @@ function saveStoredPbGhost(recording: ReplayRecording): void {
   }
 }
 
+function loadStoredAssetMode(): AssetPackMode {
+  try {
+    const raw = window.localStorage.getItem(ASSET_MODE_STORAGE_KEY);
+    return raw === 'steam-local' ? 'steam-local' : 'skybreaker';
+  } catch {
+    return 'skybreaker';
+  }
+}
+
+function saveStoredAssetMode(mode: AssetPackMode): void {
+  try {
+    window.localStorage.setItem(ASSET_MODE_STORAGE_KEY, mode);
+  } catch {
+    // ignore
+  }
+}
+
 export function exportProfileJson(profile: PilotProfile): string {
   return JSON.stringify(profile, null, 2);
 }
@@ -224,9 +244,10 @@ export function importProfileJson(raw: string): PilotProfile | null {
 }
 
 async function bootstrap(): Promise<void> {
-  const canvas = document.getElementById('rauser-canvas') as HTMLCanvasElement | null;
+  const canvas = (document.getElementById('skybreaker-canvas') ??
+    document.getElementById('rauser-canvas')) as HTMLCanvasElement | null;
   if (!canvas) {
-    throw new Error('Missing #rauser-canvas element');
+    throw new Error('Missing #skybreaker-canvas element');
   }
 
   let consoleErrorCount = 0;
@@ -238,7 +259,13 @@ async function bootstrap(): Promise<void> {
   });
 
   const vaultLoader = new VaultLoader();
-  const vault = await vaultLoader.load();
+  const steamAvailable = (await vaultLoader.isSteamAvailable?.()) ?? false;
+  const storedAssetMode = loadStoredAssetMode();
+  const initialRequestedMode: AssetPackMode =
+    storedAssetMode === 'steam-local' && steamAvailable ? 'steam-local' : 'skybreaker';
+  let vault: VaultAssetBundle = await vaultLoader.load(initialRequestedMode);
+  let activeAssetMode: AssetPackMode =
+    vault.data.vaultSource === 'steam-local' ? 'steam-local' : 'skybreaker';
 
   const storedProfile = loadStoredProfile();
   let modFlags = loadStoredModFlags();
@@ -259,6 +286,8 @@ async function bootstrap(): Promise<void> {
     vaultSource: vault.data.vaultSource,
     totalMissionsCount: vault.data.global.missions.length,
   });
+  hangar.setSteamAvailable(steamAvailable);
+  hangar.setAssetMode(activeAssetMode);
 
   const savedCustomPalette = loadStoredCustomPalette();
   if (savedCustomPalette) {
@@ -282,8 +311,8 @@ async function bootstrap(): Promise<void> {
   renderer.setPalette(hangar.getSelectedPalette().id);
 
   const audio = new AudioEngine();
-  // Start Steam audio decode asynchronously so keyboard handlers, Backquote HUD toggle,
-  // and WebGL2 rendering come online immediately without waiting for all 72 audio files.
+  // Initialize audio buffers asynchronously so keyboard handlers, Backquote HUD toggle,
+  // and WebGL2 rendering come online immediately.
   void audio.init(vault);
 
   const telemetryHud = new TelemetryHud(document.body);
@@ -412,6 +441,52 @@ async function bootstrap(): Promise<void> {
     persistCurrentProfile();
   };
 
+  let assetSwitchSeq = 0;
+
+  const switchAssetMode = async (
+    nextMode: AssetPackMode,
+    playCue = true,
+  ): Promise<void> => {
+    if (nextMode === 'steam-local' && !steamAvailable) {
+      hangar.setAssetMode('skybreaker');
+      if (playCue) {
+        audio.playSfx('snddeny');
+      }
+      renderFrame(1);
+      return;
+    }
+
+    const seq = ++assetSwitchSeq;
+    const targetMode: AssetPackMode =
+      nextMode === 'steam-local' && steamAvailable ? 'steam-local' : 'skybreaker';
+    const nextVault = await vaultLoader.load(targetMode);
+    if (seq !== assetSwitchSeq) {
+      return;
+    }
+
+    vault = nextVault;
+    const actualMode: AssetPackMode =
+      nextVault.data.vaultSource === 'steam-local' ? 'steam-local' : 'skybreaker';
+    activeAssetMode = actualMode;
+
+    sim.setGameData(nextVault.data);
+    renderer.reloadVault(nextVault);
+    hangar.setAssetMode(actualMode);
+    hangar.setVaultSource(nextVault.data.vaultSource);
+    hangar.setTotalMissionsCount(nextVault.data.global.missions.length);
+    saveStoredAssetMode(actualMode);
+
+    currSnapshot = sim.getSnapshot();
+    prevSnapshot = currSnapshot;
+
+    void audio.init(nextVault);
+    audio.syncFromSnapshot(currSnapshot);
+    if (playCue) {
+      audio.playSfx('sndswap');
+    }
+    renderFrame(1);
+  };
+
   const handleHangarKeyAction = (code: string): boolean => {
     const snap = sim.getSnapshot();
 
@@ -469,6 +544,17 @@ async function bootstrap(): Promise<void> {
       return true;
     }
 
+    if (code === 'KeyV') {
+      if (!steamAvailable) {
+        audio.playSfx('snddeny');
+        return true;
+      }
+      const nextMode: AssetPackMode =
+        activeAssetMode === 'skybreaker' ? 'steam-local' : 'skybreaker';
+      void switchAssetMode(nextMode, true);
+      return true;
+    }
+
     if (code === 'KeyM') {
       const nextMode: GameMode = snap.mode === 'normal' ? 'sfmt' : 'normal';
       const res = hangar.selectMode(nextMode, snap, sim);
@@ -483,6 +569,10 @@ async function bootstrap(): Promise<void> {
     const res = hangar.handleKey(code, snap, sim);
     if (res.action === 'none') {
       return false;
+    }
+    if (res.row === 'assets' && res.changed && res.assetMode) {
+      void switchAssetMode(res.assetMode, true);
+      return true;
     }
     audio.playSfx(res.cue);
     if (res.paletteId) {
@@ -880,7 +970,7 @@ async function bootstrap(): Promise<void> {
     requestAnimationFrame(rafLoop);
   };
 
-  const buildDebugState = (): RauserDebugState => {
+  const buildDebugState = (): SkybreakerDebugState => {
     const snap = sim.getSnapshot();
     const enemyCountsByKind: Record<string, number> = {};
     for (const enemy of snap.enemies) {
@@ -890,6 +980,8 @@ async function bootstrap(): Promise<void> {
     const fm = renderer.getFrameMetrics();
     return {
       vaultSource: vault.data.vaultSource,
+      assetMode: activeAssetMode,
+      steamAvailable,
       phase: snap.phase,
       mode: snap.mode,
       paused: snap.paused,
@@ -941,7 +1033,7 @@ async function bootstrap(): Promise<void> {
     };
   };
 
-  const debugApi: RauserDebugApi = {
+  const debugApi: SkybreakerDebugApi = {
     getState: buildDebugState,
     setLoadout(w: number, b: number, e: number): void {
       const maxPart = modFlags.moddedEnabled && modFlags.arsenalBosses ? 8 : 5;
@@ -1068,6 +1160,15 @@ async function bootstrap(): Promise<void> {
       telemetryHud.toggle(visible);
       renderFrame(1);
     },
+    async setAssetMode(mode: AssetPackMode): Promise<void> {
+      await switchAssetMode(mode, true);
+    },
+    getAssetMode(): AssetPackMode {
+      return activeAssetMode;
+    },
+    isSteamAvailable(): boolean {
+      return steamAvailable;
+    },
     setModFlags(flags: Partial<Act2ModFlags>): void {
       applyModFlags(flags);
       renderFrame(1);
@@ -1117,6 +1218,7 @@ async function bootstrap(): Promise<void> {
     },
   };
 
+  window.__SKYBREAKER_DEBUG__ = debugApi;
   window.__RAUSER_DEBUG__ = debugApi;
 
   // Initial draw & start 60Hz loop

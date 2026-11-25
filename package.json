@@ -1,9 +1,9 @@
 {
-  "name": "krunked-luftrausers",
+  "name": "krunked-skybreaker",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Clean-room 1:1 playable recreation of LUFTRAUSERS with read-only local Steam asset bridge and deterministic procedural fallbacks.",
+  "description": "KRUNKED SKYBREAKER — Clean-room 60Hz WebGL2 arcade dogfighter with original procedural art/synth and optional read-only local Steam asset vault toggle.",
   "scripts": {
     "dev": "vite --port 5173 --strictPort",
     "start": "vite --port 5173",
