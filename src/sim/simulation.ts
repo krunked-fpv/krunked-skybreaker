@@ -204,6 +204,7 @@ const DOGFIGHT_ROUND_BANNER_TICKS = 75;
 const DOGFIGHT_BEST_OF = 5;
 const DOGFIGHT_WINS_NEEDED = 3;
 const MAX_ACTIVE_SHOCKWAVES = 4;
+const MAX_PROJECTILES = 240;
 
 export function encodeInputMask(input: InputState): number {
   return (
@@ -290,6 +291,10 @@ function clampLoadoutToVanilla(loadout: Loadout): Loadout {
     body: clampPartToVanilla(loadout.body),
     engine: clampPartToVanilla(loadout.engine),
   };
+}
+
+function isSameLoadout(a: Loadout, b: Loadout): boolean {
+  return a.weapon === b.weapon && a.body === b.body && a.engine === b.engine;
 }
 
 function resolvePartSpec<T extends { id: number }>(
@@ -544,6 +549,41 @@ export class Simulation implements ISimulation {
     return this.modRegistry.getEffectiveMultiplayerMode?.() ?? this.modFlags.multiplayerMode;
   }
 
+  private areCustomPartsEnabled(): boolean {
+    return (
+      !this.modRegistry.isVanillaLocked() &&
+      this.modFlags.moddedEnabled &&
+      this.modFlags.arsenalBosses
+    );
+  }
+
+  private sanitizeLoadoutForFlags(loadout: Loadout): Loadout {
+    return this.areCustomPartsEnabled()
+      ? { ...loadout }
+      : clampLoadoutToVanilla(loadout);
+  }
+
+  private refreshPlayerLoadoutPreservePose(
+    existing: PlayerState,
+    loadout: Loadout,
+    playerIndex?: 1 | 2,
+  ): PlayerState {
+    const next = this.buildPlayerState(loadout, playerIndex);
+    next.x = existing.x;
+    next.prevX = existing.prevX;
+    next.y = existing.y;
+    next.prevY = existing.prevY;
+    next.vx = existing.vx;
+    next.vy = existing.vy;
+    next.angleDeg = existing.angleDeg;
+    next.prevAngleDeg = existing.prevAngleDeg;
+    next.alive = existing.alive;
+    next.health = existing.alive
+      ? Math.min(existing.health, next.maxHealth)
+      : 0;
+    return next;
+  }
+
   private getSpawnCoordinator(): SpawnCoordinatorSpec {
     return this.mode === 'sfmt'
       ? this.data.spawnCoordinatorSfmt
@@ -563,11 +603,17 @@ export class Simulation implements ISimulation {
     maxHealth: number;
     sanitizedLoadout: Loadout;
   } {
-    const modded = !this.modRegistry.isVanillaLocked();
-    const effectiveLoadout = modded ? { ...loadout } : clampLoadoutToVanilla(loadout);
-    const customWeapons = modded ? (this.modRegistry.getCustomWeapons?.() ?? []) : [];
-    const customBodies = modded ? (this.modRegistry.getCustomBodies?.() ?? []) : [];
-    const customEngines = modded ? (this.modRegistry.getCustomEngines?.() ?? []) : [];
+    const customPartsEnabled = this.areCustomPartsEnabled();
+    const effectiveLoadout = this.sanitizeLoadoutForFlags(loadout);
+    const customWeapons = customPartsEnabled
+      ? (this.modRegistry.getCustomWeapons?.() ?? [])
+      : [];
+    const customBodies = customPartsEnabled
+      ? (this.modRegistry.getCustomBodies?.() ?? [])
+      : [];
+    const customEngines = customPartsEnabled
+      ? (this.modRegistry.getCustomEngines?.() ?? [])
+      : [];
 
     const weaponSpec = resolvePartSpec(
       this.data.player.weaponsById,
@@ -602,7 +648,7 @@ export class Simulation implements ISimulation {
 
     let planeName: string;
     if (
-      modded &&
+      customPartsEnabled &&
       (effectiveLoadout.weapon >= 6 ||
         effectiveLoadout.body >= 6 ||
         effectiveLoadout.engine >= 6)
@@ -644,8 +690,9 @@ export class Simulation implements ISimulation {
   private buildPlayerState(loadout: Loadout, playerIndex?: 1 | 2): PlayerState {
     const resolved = this.resolveAircraft(loadout);
     const seaLevel = this.data.room.sealevel;
-    const modded = !this.modRegistry.isVanillaLocked();
-    const hasAegis = modded && resolved.bodySpec.flags.includes('body-aegis-shield');
+    const hasAegis =
+      this.areCustomPartsEnabled() &&
+      resolved.bodySpec.flags.includes('body-aegis-shield');
 
     const state: PlayerState = {
       x: 0,
@@ -708,34 +755,46 @@ export class Simulation implements ISimulation {
     registerAct2ModPacks(this.modRegistry, this.modFlags);
 
     if (!this.modFlags.moddedEnabled) {
-      this.profile.lastLoadout = clampLoadoutToVanilla(this.profile.lastLoadout);
-      this.p2Loadout = clampLoadoutToVanilla(this.p2Loadout);
       this.shockwaves = [];
       this.player2 = null;
       this.dogfight = null;
       this.dailySeedId = null;
       this.p1RespawnTicks = 0;
       this.p2RespawnTicks = 0;
+    } else if (this.modFlags.replayGhost && this.ghostReplay && !this.ghostRunner) {
+      this.ghostRunner = new GhostRunner(this.data, this.ghostReplay);
+    }
+
+    if (!this.areCustomPartsEnabled()) {
+      this.profile.lastLoadout = clampLoadoutToVanilla(this.profile.lastLoadout);
+      this.p2Loadout = clampLoadoutToVanilla(this.p2Loadout);
       if (this.phase === 'hangar') {
         this.player = this.buildPlayerState(this.profile.lastLoadout);
       } else {
-        const clamped = clampLoadoutToVanilla(this.player.loadout);
-        if (
-          clamped.weapon !== this.player.loadout.weapon ||
-          clamped.body !== this.player.loadout.body ||
-          clamped.engine !== this.player.loadout.engine
-        ) {
-          this.player = this.buildPlayerState(clamped);
+        const clampedP1 = clampLoadoutToVanilla(this.player.loadout);
+        if (!isSameLoadout(clampedP1, this.player.loadout)) {
+          this.player = this.modFlags.moddedEnabled
+            ? this.refreshPlayerLoadoutPreservePose(
+                this.player,
+                clampedP1,
+                this.player.playerIndex,
+              )
+            : this.buildPlayerState(clampedP1);
+        }
+        if (this.player2) {
+          const clampedP2 = clampLoadoutToVanilla(this.player2.loadout);
+          if (!isSameLoadout(clampedP2, this.player2.loadout)) {
+            this.player2 = this.refreshPlayerLoadoutPreservePose(
+              this.player2,
+              clampedP2,
+              this.player2.playerIndex ?? 2,
+            );
+          }
         }
       }
       this.missionTracker.refreshActiveMissions(this.player.loadout, this.profile);
-    } else {
-      if (this.modFlags.replayGhost && this.ghostReplay && !this.ghostRunner) {
-        this.ghostRunner = new GhostRunner(this.data, this.ghostReplay);
-      }
-      if (this.phase === 'hangar') {
-        this.player = this.buildPlayerState(this.profile.lastLoadout);
-      }
+    } else if (this.phase === 'hangar') {
+      this.player = this.buildPlayerState(this.profile.lastLoadout);
     }
   }
 
@@ -753,9 +812,7 @@ export class Simulation implements ISimulation {
   }
 
   setP2Loadout(loadout: Loadout): void {
-    this.p2Loadout = this.modRegistry.isVanillaLocked()
-      ? clampLoadoutToVanilla(loadout)
-      : { ...loadout };
+    this.p2Loadout = this.sanitizeLoadoutForFlags(loadout);
     if (this.player2) {
       const idx = this.player2.playerIndex ?? 2;
       const prevX = this.player2.x;
@@ -777,7 +834,8 @@ export class Simulation implements ISimulation {
 
   launch(loadout: Loadout, mode: GameMode, seed?: number): void {
     const modded = !this.modRegistry.isVanillaLocked();
-    const effectiveLoadout = modded ? { ...loadout } : clampLoadoutToVanilla(loadout);
+    const effectiveLoadout = this.sanitizeLoadoutForFlags(loadout);
+    this.p2Loadout = this.sanitizeLoadoutForFlags(this.p2Loadout);
     const mpMode = this.getEffectiveMultiplayerMode();
 
     this.mode = mode;
@@ -963,9 +1021,7 @@ export class Simulation implements ISimulation {
   }
 
   setLoadout(loadout: Loadout): void {
-    const effective = this.modRegistry.isVanillaLocked()
-      ? clampLoadoutToVanilla(loadout)
-      : { ...loadout };
+    const effective = this.sanitizeLoadoutForFlags(loadout);
     this.profile.lastLoadout = { ...effective };
     this.player = this.buildPlayerState(effective);
     this.missionTracker.refreshActiveMissions(effective, this.profile);
@@ -3451,7 +3507,7 @@ export class Simulation implements ISimulation {
     }
 
     for (const shard of spawnedDuringStep) {
-      nextList.push(shard);
+      this.pushProjectileWithCap(nextList, shard);
     }
     this.projectiles = nextList;
   }
@@ -3964,10 +4020,31 @@ export class Simulation implements ISimulation {
     this.particles = next;
   }
 
+  private pushProjectileWithCap(
+    list: ProjectileEntity[],
+    proj: ProjectileEntity,
+  ): void {
+    while (list.length >= MAX_PROJECTILES) {
+      let evictIdx = 0;
+      if (proj.owner === 'player') {
+        const enemyIdx = list.findIndex((p) => p.owner === 'enemy');
+        if (enemyIdx !== -1) {
+          evictIdx = enemyIdx;
+        }
+      }
+      const removed =
+        evictIdx === 0 ? list.shift() : list.splice(evictIdx, 1)[0];
+      if (removed) {
+        this.piercingHitIds.delete(removed.id);
+      }
+    }
+    list.push(proj);
+  }
+
   private spawnProjectile(
     init: Omit<ProjectileEntity, 'id' | 'prevX' | 'prevY' | 'maxTtl'>,
   ): void {
-    this.projectiles.push({
+    this.pushProjectileWithCap(this.projectiles, {
       ...init,
       id: this.nextEntityId++,
       prevX: init.x,
@@ -4219,9 +4296,9 @@ export class Simulation implements ISimulation {
   }
 
   unlockAll(): void {
-    const allParts: PartIndex[] = this.modRegistry.isVanillaLocked()
-      ? [0, 1, 2, 3, 4, 5]
-      : [0, 1, 2, 3, 4, 5, 6, 7, 8];
+    const allParts: PartIndex[] = this.areCustomPartsEnabled()
+      ? [0, 1, 2, 3, 4, 5, 6, 7, 8]
+      : [0, 1, 2, 3, 4, 5];
     this.profile.unlockedWeapons = [...allParts];
     this.profile.unlockedBodies = [...allParts];
     this.profile.unlockedEngines = [...allParts];
