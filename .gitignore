@@ -31,3 +31,5 @@ fnt*_0.png
 Thumbs.db
 .vscode/
 .idea/
+*.md
+!README.md
