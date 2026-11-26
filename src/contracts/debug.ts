@@ -1,4 +1,5 @@
 import type { AudioSyncMetrics } from './audio';
+import type { ControllerStatusSnapshot } from './input';
 import type { Act2ModFlags } from './mod';
 import type { FrameMetrics, PaletteDefinition, PostShaderUniforms } from './render';
 import type {
@@ -64,6 +65,8 @@ export interface SkybreakerDebugState {
   player2Alive?: boolean;
   dogfight?: DogfightState | null;
   shockwaveCount?: number;
+  /** Controller, Gamepad & Touch status telemetry */
+  controller?: ControllerStatusSnapshot;
 }
 
 export type RauserDebugState = SkybreakerDebugState;
@@ -101,6 +104,9 @@ export interface SkybreakerDebugApi {
   getDailySeed?(): { dateId: string; seed: number };
   setP2Loadout?(w: number, b: number, e: number): void;
   setP2Input?(partial: Partial<InputState>): void;
+  /** Controller & Touch Controls QA Seams */
+  getControllerState?(): ControllerStatusSnapshot;
+  setTouchControlsVisible?(visible: boolean | null): void;
 }
 
 export type RauserDebugApi = SkybreakerDebugApi;

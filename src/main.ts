@@ -4,7 +4,10 @@ import {
   DEFAULT_SHADER_FX,
   VANILLA_1TO1_PROFILE,
   type Act2ModFlags,
+  type ActiveInputSource,
   type AssetPackMode,
+  type ControllerMenuCommand,
+  type ControllerStatusSnapshot,
   type EnemyKind,
   type GameMode,
   type InputState,
@@ -16,6 +19,15 @@ import {
   type SkybreakerDebugState,
   type VaultAssetBundle,
 } from './contracts';
+import {
+  ControllerToast,
+  GamepadHaptics,
+  GamepadManager,
+  TouchControlsOverlay,
+  TouchEnvironmentDetector,
+  clientToVirtualPoint,
+  resolveCanvasTapCommand,
+} from './input';
 import {
   ACT2_BONUS_PALETTES,
   DEFAULT_PALETTE_ID,
@@ -41,6 +53,7 @@ import {
   serializeReplay,
 } from './sim';
 import {
+  HANGAR_ROWS,
   HangarController,
   TelemetryHud,
   applyBrowserFullRosterUnlocks,
@@ -171,6 +184,35 @@ async function bootstrap(): Promise<void> {
   const telemetryHud = new TelemetryHud(document.body);
   telemetryHud.bindKeyboardToggle(window);
 
+  const gamepadManager = new GamepadManager();
+  gamepadManager.attach(window);
+  const gamepadHaptics = new GamepadHaptics();
+  const touchDetector = new TouchEnvironmentDetector();
+  touchDetector.attach(window);
+  const touchControls = new TouchControlsOverlay(document.body);
+  const controllerToast = new ControllerToast(document.body);
+
+  let activeInputSource: ActiveInputSource = touchDetector.touchOverlayVisible
+    ? 'touch'
+    : 'keyboard';
+
+  touchControls.setVisible(touchDetector.touchOverlayVisible);
+  touchDetector.onChange((state) => {
+    touchControls.setVisible(state.touchOverlayVisible);
+    if (state.touchOverlayVisible) {
+      activeInputSource = 'touch';
+    }
+  });
+
+  const getControllerStatus = (): ControllerStatusSnapshot => ({
+    activeSource: activeInputSource,
+    touchSensed: touchDetector.touchSensed,
+    touchOverlayVisible: touchDetector.touchOverlayVisible,
+    isTeslaBrowser:
+      touchDetector.isTeslaBrowser || gamepadManager.isTeslaBrowser(),
+    gamepads: gamepadManager.getConnectedGamepads(),
+  });
+
   const resizeCanvas = (): void => {
     const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
     const width = Math.max(1, Math.floor(window.innerWidth * dpr));
@@ -184,7 +226,6 @@ async function bootstrap(): Promise<void> {
   const keysDown = new Set<string>();
   const debugInputOverride: Partial<InputState> = {};
   const debugP2InputOverride: Partial<InputState> = {};
-  let prevGamepadMask = 0;
 
   let prevSnapshot: SimSnapshot = sim.getSnapshot();
   let currSnapshot: SimSnapshot = prevSnapshot;
@@ -512,10 +553,206 @@ async function bootstrap(): Promise<void> {
     return true;
   };
 
+  const executePauseAction = (action: 'resume' | 'retry' | 'hangar'): void => {
+    if (action === 'resume') {
+      sim.setPaused(false);
+      currSnapshot = sim.getSnapshot();
+      audio.playSfx('sndmove');
+      audio.syncFromSnapshot(currSnapshot);
+    } else if (action === 'retry') {
+      sim.setPaused(false);
+      launchCurrentSortie(undefined, false);
+    } else {
+      returnToHangarUi(true);
+    }
+  };
+
+  const toggleFlightPause = (): void => {
+    const snap = sim.getSnapshot();
+    if (snap.phase !== 'playing' && snap.phase !== 'launching') {
+      return;
+    }
+    const nextPaused = !snap.paused;
+    sim.setPaused(nextPaused);
+    if (nextPaused) {
+      setPauseMenuSelection(0);
+    }
+    currSnapshot = sim.getSnapshot();
+    audio.playSfx('sndmove');
+    audio.syncFromSnapshot(currSnapshot);
+  };
+
+  const dispatchControllerCommand = (cmd: ControllerMenuCommand): void => {
+    const snap = sim.getSnapshot();
+
+    switch (cmd.kind) {
+      case 'pause-toggle': {
+        if (snap.phase === 'playing' || snap.phase === 'launching') {
+          toggleFlightPause();
+        }
+        return;
+      }
+
+      case 'launch': {
+        if (snap.phase === 'hangar') {
+          if (hangar.getPaletteStudio().isOpen()) {
+            hangar.getPaletteStudio().setOpen(false);
+          }
+          if (hangar.isModDeckOpen()) {
+            hangar.toggleModDeck(false);
+          }
+          launchCurrentSortie();
+        }
+        return;
+      }
+
+      case 'relaunch': {
+        if (snap.phase === 'gameover' || snap.paused) {
+          sim.setPaused(false);
+          launchCurrentSortie(undefined, false);
+        }
+        return;
+      }
+
+      case 'return-hangar': {
+        if (snap.phase !== 'hangar') {
+          returnToHangarUi(true);
+        }
+        return;
+      }
+
+      case 'toggle-mod-deck': {
+        if (snap.phase === 'hangar') {
+          if (hangar.getPaletteStudio().isOpen()) {
+            handleHangarKeyAction('Escape');
+          } else {
+            handleHangarKeyAction('Tab');
+          }
+        }
+        return;
+      }
+
+      case 'hangar-row-tap': {
+        if (
+          snap.phase !== 'hangar' ||
+          hangar.isModDeckOpen() ||
+          hangar.getPaletteStudio().isOpen()
+        ) {
+          return;
+        }
+        const targetRow = HANGAR_ROWS[cmd.rowIndex];
+        if (!targetRow) return;
+        hangar.setActiveRow(targetRow);
+        if (cmd.action === 'prev') {
+          handleHangarKeyAction('ArrowLeft');
+        } else if (cmd.action === 'next') {
+          handleHangarKeyAction('ArrowRight');
+        } else if (cmd.action === 'activate') {
+          handleHangarKeyAction('Enter');
+        } else {
+          audio.playSfx('sndmove');
+        }
+        return;
+      }
+
+      case 'pause-option-tap': {
+        if (!snap.paused) return;
+        setPauseMenuSelection(cmd.optionIndex);
+        executePauseAction(getSelectedPauseAction());
+        return;
+      }
+
+      case 'key': {
+        if (snap.phase === 'hangar') {
+          handleHangarKeyAction(cmd.code);
+          return;
+        }
+        if (snap.paused) {
+          if (cmd.code === 'ArrowUp' || cmd.code === 'KeyW') {
+            movePauseMenuSelection(-1);
+            audio.playSfx('sndmove');
+          } else if (cmd.code === 'ArrowDown' || cmd.code === 'KeyS') {
+            movePauseMenuSelection(1);
+            audio.playSfx('sndmove');
+          } else if (cmd.code === 'KeyR') {
+            executePauseAction('retry');
+          } else if (
+            cmd.code === 'KeyH' ||
+            cmd.code === 'Backspace' ||
+            cmd.code === 'KeyX'
+          ) {
+            executePauseAction('hangar');
+          } else if (cmd.code === 'Escape' || cmd.code === 'KeyP') {
+            executePauseAction('resume');
+          } else if (cmd.code === 'Enter' || cmd.code === 'Space') {
+            executePauseAction(getSelectedPauseAction());
+          }
+          return;
+        }
+        if (snap.phase === 'gameover') {
+          if (
+            cmd.code === 'Enter' ||
+            cmd.code === 'Space' ||
+            cmd.code === 'KeyX' ||
+            cmd.code === 'KeyZ' ||
+            cmd.code === 'KeyR'
+          ) {
+            launchCurrentSortie(undefined, false);
+          } else if (
+            cmd.code === 'Escape' ||
+            cmd.code === 'KeyH' ||
+            cmd.code === 'Backspace'
+          ) {
+            returnToHangarUi(true);
+          }
+        }
+        return;
+      }
+    }
+  };
+
   window.addEventListener('pointerdown', unlockAudio);
+
+  canvas.addEventListener('pointerdown', (e: PointerEvent) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) {
+      return;
+    }
+    unlockAudio();
+    const snap = sim.getSnapshot();
+    if (snap.phase !== 'hangar' && snap.phase !== 'gameover' && !snap.paused) {
+      return;
+    }
+    const virtualPt = clientToVirtualPoint(
+      e.clientX,
+      e.clientY,
+      canvas.getBoundingClientRect(),
+    );
+    if (!virtualPt) return;
+
+    const activeRowIdx = Math.max(0, HANGAR_ROWS.indexOf(hangar.getActiveRow()));
+    const cmd = resolveCanvasTapCommand(virtualPt.x, virtualPt.y, {
+      phase: snap.phase,
+      paused: snap.paused,
+      modDeckOpen: hangar.isModDeckOpen(),
+      paletteStudioOpen: hangar.getPaletteStudio().isOpen(),
+      activeHangarRowIndex: activeRowIdx,
+    });
+    if (cmd) {
+      if (e.pointerType === 'touch') {
+        activeInputSource = 'touch';
+      }
+      dispatchControllerCommand(cmd);
+      renderFrame(1);
+    }
+  });
 
   window.addEventListener('keydown', (e: KeyboardEvent) => {
     unlockAudio();
+
+    if (e.code !== 'Backquote' && e.key !== '`' && e.key !== '~') {
+      activeInputSource = 'keyboard';
+      touchDetector.notifyNonTouchInput('keyboard');
+    }
 
     if (
       e.code === 'ArrowUp' ||
@@ -651,146 +888,96 @@ async function bootstrap(): Promise<void> {
 
   window.addEventListener('blur', () => {
     keysDown.clear();
+    touchControls.resetInputs();
   });
 
-  const readGamepadSlot = (slotIndex: number): {
-    input: InputState;
-    pad: Gamepad | null;
-  } => {
-    const input: InputState = { left: false, right: false, thrust: false, fire: false };
-    if (typeof navigator === 'undefined' || typeof navigator.getGamepads !== 'function') {
-      return { input, pad: null };
-    }
-    const pads = navigator.getGamepads();
-    const connected: Gamepad[] = [];
-    for (let i = 0; i < pads.length; i++) {
-      const p = pads[i];
-      if (p?.connected) connected.push(p);
-    }
-    const pad = connected[slotIndex] ?? null;
-    if (!pad) return { input, pad: null };
-
-    const axX = pad.axes[0] ?? 0;
-    const axY = pad.axes[1] ?? 0;
-    const btn = (idx: number): boolean => Boolean(pad.buttons[idx]?.pressed);
-    input.left = btn(14) || axX < -0.35;
-    input.right = btn(15) || axX > 0.35;
-    input.thrust = btn(12) || axY < -0.5 || btn(0) || btn(7);
-    input.fire = btn(2) || btn(1) || btn(5);
-    return { input, pad };
-  };
-
-  const pollGamepad = (): { p1: InputState; p2: InputState } => {
-    const slot0 = readGamepadSlot(0);
-    const slot1 = readGamepadSlot(1);
-
-    const pad = slot0.pad;
-    if (!pad) {
-      prevGamepadMask = 0;
-      return { p1: slot0.input, p2: slot1.input };
-    }
-
-    const axX = pad.axes[0] ?? 0;
-    const axY = pad.axes[1] ?? 0;
-    const btn = (idx: number): boolean => Boolean(pad.buttons[idx]?.pressed);
-
-    const up = btn(12) || axY < -0.5;
-    const down = btn(13) || axY > 0.5;
-    const left = btn(14) || axX < -0.35;
-    const right = btn(15) || axX > 0.35;
-    const aBtn = btn(0);
-    const bBtn = btn(1);
-    const startBtn = btn(9);
-    const selectBtn = btn(8);
-
-    const mask =
-      (up ? 1 : 0) |
-      (down ? 2 : 0) |
-      (left ? 4 : 0) |
-      (right ? 8 : 0) |
-      (aBtn ? 16 : 0) |
-      (startBtn ? 32 : 0) |
-      (bBtn ? 64 : 0) |
-      (selectBtn ? 128 : 0);
-    const rising = mask & ~prevGamepadMask;
-    prevGamepadMask = mask;
-
+  const sampleFlightInputs = (nowMs: number): { p1: InputState; p2: InputState } => {
     const snap = sim.getSnapshot();
-    if (rising !== 0) {
-      unlockAudio();
-      if (snap.phase === 'hangar') {
-        if (rising & 128) handleHangarKeyAction('Tab');
-        else if (rising & 1) handleHangarKeyAction('ArrowUp');
-        else if (rising & 2) handleHangarKeyAction('ArrowDown');
-        else if (rising & 4) handleHangarKeyAction('ArrowLeft');
-        else if (rising & 8) handleHangarKeyAction('ArrowRight');
-        else if (rising & (16 | 32)) handleHangarKeyAction('Enter');
-        else if (rising & 64) handleHangarKeyAction('Escape');
-      } else if (snap.phase === 'gameover') {
-        if (rising & (16 | 32)) {
-          launchCurrentSortie(undefined, false);
-        } else if (rising & 64) {
-          returnToHangarUi(true);
-        }
-      } else if (snap.paused) {
-        if (rising & 1) {
-          movePauseMenuSelection(-1);
-          audio.playSfx('sndmove');
-        } else if (rising & 2) {
-          movePauseMenuSelection(1);
-          audio.playSfx('sndmove');
-        } else if (rising & 32) {
-          sim.setPaused(false);
-          currSnapshot = sim.getSnapshot();
-          audio.playSfx('sndmove');
-          audio.syncFromSnapshot(currSnapshot);
-        } else if (rising & 16) {
-          const action = getSelectedPauseAction();
-          if (action === 'resume') {
-            sim.setPaused(false);
-            currSnapshot = sim.getSnapshot();
-            audio.playSfx('sndmove');
-            audio.syncFromSnapshot(currSnapshot);
-          } else if (action === 'retry') {
-            sim.setPaused(false);
-            launchCurrentSortie(undefined, false);
-          } else {
-            returnToHangarUi(true);
-          }
-        } else if (rising & 64) {
-          returnToHangarUi(true);
-        }
-      } else if (rising & 32) {
-        sim.setPaused(true);
-        setPauseMenuSelection(0);
-        currSnapshot = sim.getSnapshot();
-        audio.playSfx('sndmove');
-        audio.syncFromSnapshot(currSnapshot);
+    const gp = gamepadManager.poll({
+      phase: snap.phase,
+      paused: snap.paused,
+      modDeckOpen: hangar.isModDeckOpen(),
+      paletteStudioOpen: hangar.getPaletteStudio().isOpen(),
+      nowMs,
+    });
+
+    if (gp.connectionEvents.length > 0) {
+      const activePal = renderer.getPalette();
+      for (const ev of gp.connectionEvents) {
+        const verb = ev.type === 'connected' ? 'CONNECTED' : 'DISCONNECTED';
+        controllerToast.show(
+          `${ev.info.label} ${verb} (P${ev.info.slot + 1})`,
+          activePal,
+        );
       }
     }
 
-    return { p1: slot0.input, p2: slot1.input };
-  };
+    if (gp.p1DisconnectedInFlight) {
+      sim.setPaused(true);
+      setPauseMenuSelection(0);
+      currSnapshot = sim.getSnapshot();
+      audio.playSfx('sndmove');
+      audio.syncFromSnapshot(currSnapshot);
+      controllerToast.show(
+        'CONTROLLER DISCONNECTED - PAUSED',
+        renderer.getPalette(),
+      );
+    }
 
-  const sampleFlightInputs = (): { p1: InputState; p2: InputState } => {
-    const gp = pollGamepad();
+    if (gp.hadActivity) {
+      unlockAudio();
+      activeInputSource = 'gamepad';
+      touchDetector.notifyNonTouchInput('gamepad');
+    }
+
+    for (const cmd of gp.commands) {
+      dispatchControllerCommand(cmd);
+    }
+
+    const touchCmds = touchControls.drainCommands(nowMs);
+    if (touchCmds.length > 0) {
+      unlockAudio();
+      activeInputSource = 'touch';
+      for (const cmd of touchCmds) {
+        dispatchControllerCommand(cmd);
+      }
+    }
+
+    const touchFlight = touchControls.getFlightInput();
+    if (
+      touchFlight.left ||
+      touchFlight.right ||
+      touchFlight.thrust ||
+      touchFlight.fire
+    ) {
+      unlockAudio();
+      activeInputSource = 'touch';
+    }
+
     const isHuman2P =
       modFlags.moddedEnabled &&
       modFlags.multiplayerMode !== 'solo' &&
       !modFlags.p2BotEnabled;
 
     if (isHuman2P) {
-      // Split-keyboard + dual-gamepad: P1 = WASD + F/Space/LShift, P2 = Arrows + Numpad0/Slash/M/Enter
+      // Split-keyboard + dual-gamepad + touch: P1 = WASD + F/Space/LShift, P2 = Arrows + Numpad0/Slash/M/Enter
       const p1: InputState = {
-        left: debugInputOverride.left ?? (keysDown.has('KeyA') || gp.p1.left),
-        right: debugInputOverride.right ?? (keysDown.has('KeyD') || gp.p1.right),
-        thrust: debugInputOverride.thrust ?? (keysDown.has('KeyW') || gp.p1.thrust),
+        left:
+          debugInputOverride.left ??
+          (keysDown.has('KeyA') || gp.p1.left || touchFlight.left),
+        right:
+          debugInputOverride.right ??
+          (keysDown.has('KeyD') || gp.p1.right || touchFlight.right),
+        thrust:
+          debugInputOverride.thrust ??
+          (keysDown.has('KeyW') || gp.p1.thrust || touchFlight.thrust),
         fire:
           debugInputOverride.fire ??
           (keysDown.has('KeyF') ||
             keysDown.has('Space') ||
             keysDown.has('ShiftLeft') ||
-            gp.p1.fire),
+            gp.p1.fire ||
+            touchFlight.fire),
       };
       const p2: InputState = {
         left: debugP2InputOverride.left ?? (keysDown.has('ArrowLeft') || gp.p2.left),
@@ -811,19 +998,29 @@ async function bootstrap(): Promise<void> {
     const p1: InputState = {
       left:
         debugInputOverride.left ??
-        (keysDown.has('ArrowLeft') || keysDown.has('KeyA') || gp.p1.left),
+        (keysDown.has('ArrowLeft') ||
+          keysDown.has('KeyA') ||
+          gp.p1.left ||
+          touchFlight.left),
       right:
         debugInputOverride.right ??
-        (keysDown.has('ArrowRight') || keysDown.has('KeyD') || gp.p1.right),
+        (keysDown.has('ArrowRight') ||
+          keysDown.has('KeyD') ||
+          gp.p1.right ||
+          touchFlight.right),
       thrust:
         debugInputOverride.thrust ??
-        (keysDown.has('ArrowUp') || keysDown.has('KeyW') || gp.p1.thrust),
+        (keysDown.has('ArrowUp') ||
+          keysDown.has('KeyW') ||
+          gp.p1.thrust ||
+          touchFlight.thrust),
       fire:
         debugInputOverride.fire ??
         (keysDown.has('KeyZ') ||
           keysDown.has('Space') ||
           keysDown.has('KeyJ') ||
-          gp.p1.fire),
+          gp.p1.fire ||
+          touchFlight.fire),
     };
 
     let p2: InputState = { left: false, right: false, thrust: false, fire: false };
@@ -875,12 +1072,20 @@ async function bootstrap(): Promise<void> {
           })
         : null;
     renderer.render(currSnapshot, prevSnapshot, alpha, hangarUi, elapsedSec);
+    touchControls.updateContext({
+      phase: currSnapshot.phase,
+      paused: currSnapshot.paused,
+      modDeckOpen: hangar.isModDeckOpen(),
+      paletteStudioOpen: hangar.getPaletteStudio().isOpen(),
+      palette: renderer.getPalette(),
+    });
     telemetryHud.update({
       snapshot: currSnapshot,
       frameMetrics: renderer.getFrameMetrics(),
       vaultSource: vault.data.vaultSource,
       audioMetrics: audio.getSyncMetrics(),
       consoleErrorCount,
+      controllerStatus: getControllerStatus(),
     });
   };
 
@@ -903,6 +1108,12 @@ async function bootstrap(): Promise<void> {
       currSnapshot = sim.step(p1Input);
     }
     audio.syncFromSnapshot(currSnapshot);
+    gamepadHaptics.syncFromSnapshot(
+      prevSnapshot,
+      currSnapshot,
+      gamepadManager.getRawConnectedPads(),
+      performance.now(),
+    );
     if (currSnapshot.phase === 'gameover' && prevSnapshot.phase !== 'gameover') {
       maybeUpdatePbGhost(currSnapshot);
     }
@@ -921,7 +1132,7 @@ async function bootstrap(): Promise<void> {
     accumulator += dt;
 
     let subSteps = 0;
-    const { p1, p2 } = sampleFlightInputs();
+    const { p1, p2 } = sampleFlightInputs(now);
     while (accumulator >= FIXED_DT && subSteps < MAX_SUB_STEPS) {
       stepOneTick(p1, p2);
       accumulator -= FIXED_DT;
@@ -996,6 +1207,7 @@ async function bootstrap(): Promise<void> {
       player2Alive: Boolean(snap.player2?.alive),
       dogfight: snap.dogfight ?? null,
       shockwaveCount: snap.shockwaves?.length ?? 0,
+      controller: getControllerStatus(),
     };
   };
 
@@ -1175,6 +1387,14 @@ async function bootstrap(): Promise<void> {
         engine: clampPartIndex(e, maxPart),
       });
       currSnapshot = sim.getSnapshot();
+      renderFrame(1);
+    },
+    getControllerState(): ControllerStatusSnapshot {
+      return getControllerStatus();
+    },
+    setTouchControlsVisible(visible: boolean | null): void {
+      touchDetector.setForceVisible(visible);
+      touchControls.setVisible(touchDetector.touchOverlayVisible);
       renderFrame(1);
     },
   };

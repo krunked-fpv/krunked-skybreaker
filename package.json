@@ -10,7 +10,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --port 4173",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run tests/vault.test.ts tests/sim-parity.test.ts tests/render-contracts.test.ts tests/audio-mixer.test.ts tests/act2-sim.test.ts tests/act2-render.test.ts",
+    "test": "vitest run tests/vault.test.ts tests/sim-parity.test.ts tests/render-contracts.test.ts tests/audio-mixer.test.ts tests/act2-sim.test.ts tests/act2-render.test.ts tests/gamepad-controller.test.ts tests/touch-controls.test.ts",
     "test:parity": "vitest run tests/e2e-parity/",
     "test:playtesters": "vitest run tests/act2-100-playtesters.test.ts",
     "audit:parity": "node --experimental-strip-types tools/parity-audit.ts"

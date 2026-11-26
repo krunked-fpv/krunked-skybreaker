@@ -1,4 +1,5 @@
 import type { AudioSyncMetrics } from '../contracts/audio';
+import type { ControllerStatusSnapshot } from '../contracts/input';
 import type { FrameMetrics } from '../contracts/render';
 import type { SimSnapshot } from '../contracts/sim';
 import type { VaultSource } from '../contracts/vault';
@@ -9,11 +10,18 @@ export interface TelemetryData {
   vaultSource: VaultSource;
   audioMetrics?: AudioSyncMetrics | null;
   consoleErrorCount?: number;
+  controllerStatus?: ControllerStatusSnapshot | null;
 }
 
 export function formatTelemetryLines(data: TelemetryData): string[] {
-  const { snapshot, frameMetrics, vaultSource, audioMetrics, consoleErrorCount } =
-    data;
+  const {
+    snapshot,
+    frameMetrics,
+    vaultSource,
+    audioMetrics,
+    consoleErrorCount,
+    controllerStatus,
+  } = data;
   const p = snapshot.player;
   const speed = Math.hypot(p.vx, p.vy);
   const driftText = audioMetrics
@@ -57,6 +65,25 @@ export function formatTelemetryLines(data: TelemetryData): string[] {
     const swCount = snapshot.shockwaves?.length ?? 0;
     lines.push(
       `MODS: ${modsSummary} | GHOST=${ghostStr} | P2=${p2Str} | SW=${swCount}`,
+    );
+  }
+
+  if (controllerStatus) {
+    const padLabels =
+      controllerStatus.gamepads.length > 0
+        ? controllerStatus.gamepads
+            .map((g) => `P${g.slot + 1}:${g.label}`)
+            .join(',')
+        : 'NONE';
+    const srcLabel = controllerStatus.activeSource.toUpperCase();
+    const touchLabel = controllerStatus.touchOverlayVisible
+      ? 'ON'
+      : controllerStatus.touchSensed
+        ? 'HIDDEN'
+        : 'OFF';
+    const teslaTag = controllerStatus.isTeslaBrowser ? ' | TESLA' : '';
+    lines.push(
+      `INPUT: ${srcLabel} | PADS=${controllerStatus.gamepads.length}[${padLabels}] | TOUCH=${touchLabel}${teslaTag}`,
     );
   }
 

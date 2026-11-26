@@ -2,7 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
     <title>KRUNKED SKYBREAKER</title>
     <link
       rel="icon"
@@ -20,14 +23,23 @@
         background: #000000;
         user-select: none;
         -webkit-user-select: none;
+        touch-action: none;
+        overscroll-behavior: none;
+        -webkit-touch-callout: none;
+        -webkit-tap-highlight-color: transparent;
       }
       #skybreaker-canvas {
         display: block;
         width: 100vw;
         height: 100vh;
+        height: 100dvh;
         image-rendering: pixelated;
         image-rendering: crisp-edges;
         outline: none;
+        touch-action: none;
+        overscroll-behavior: none;
+        -webkit-touch-callout: none;
+        -webkit-tap-highlight-color: transparent;
       }
     </style>
   </head>
