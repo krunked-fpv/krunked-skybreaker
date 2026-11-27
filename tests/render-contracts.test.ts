@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { DEFAULT_ACT2_MOD_FLAGS } from '../src/contracts/mod';
 import type { RgbaTuple } from '../src/contracts/render';
+import { HANGAR_HUD_PASS } from '../src/render/hangar-hud-pass';
 import type { Loadout, PilotProfile, SimSnapshot } from '../src/contracts/sim';
 import type {
   BodySpec,
@@ -3548,12 +3550,55 @@ describe('Renderer Visual & UI Regression Contracts', () => {
     renderer.init(canvas, vault);
 
     const controller = new HangarController({ assistMode: true, allUnlocked: true });
+    controller.setActiveRow('mode');
     expect(controller.isAssistMode()).toBe(true);
 
+    const drawnTexts: Array<{ text: string; x: number; y: number }> = [];
+    renderer.setHangarHudPass({
+      ...HANGAR_HUD_PASS,
+      drawHangarMenuPass: (ctx, snap, uiState, t) => {
+        const wrappedCtx = {
+          ...ctx,
+          drawBitmapText: (
+            font: Parameters<typeof ctx.drawBitmapText>[0],
+            text: string,
+            x: number,
+            y: number,
+            scale: number,
+            align: Parameters<typeof ctx.drawBitmapText>[5],
+            color: Parameters<typeof ctx.drawBitmapText>[6],
+          ) => {
+            drawnTexts.push({ text, x, y });
+            ctx.drawBitmapText(font, text, x, y, scale, align, color);
+          },
+        };
+        HANGAR_HUD_PASS.drawHangarMenuPass(wrappedCtx, snap, uiState, t);
+      },
+    });
+
+    const dailyModFlags = {
+      ...DEFAULT_ACT2_MOD_FLAGS,
+      moddedEnabled: true,
+      dailySeed: true,
+    };
+    controller.setModFlags(dailyModFlags);
     const hangarSnap = makeSnapshot({ phase: 'hangar', assistMode: true });
-    const ui = controller.buildUiState(hangarSnap);
+    const ui = controller.buildUiState(hangarSnap, undefined, {
+      modFlags: dailyModFlags,
+      dailySeedId: '20261127',
+    });
     expect(ui.assistMode).toBe(true);
     renderer.render(hangarSnap, hangarSnap, 0, ui, 0.5);
+
+    const assistHeaderDraw = drawnTexts.find(
+      (d) => d.text === '[E] ASSIST: ON' && d.x === 26 && d.y <= 22,
+    );
+    const dailyDraw = drawnTexts.find((d) => d.text === 'DAILY 20261127');
+    expect(assistHeaderDraw).toBeDefined();
+    expect(dailyDraw).toBeDefined();
+    expect(dailyDraw!.x !== assistHeaderDraw!.x || dailyDraw!.y !== assistHeaderDraw!.y).toBe(true);
+    expect(drawnTexts.some((d) => d.text.includes('+35% HULL'))).toBe(true);
+    expect(drawnTexts.some((d) => d.text.includes('+50% HULL'))).toBe(false);
 
     const playSnap = makeSnapshot({ phase: 'playing', assistMode: true });
     renderer.render(playSnap, playSnap, 0, null, 1.0);

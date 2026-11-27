@@ -2413,15 +2413,10 @@ function renderHangarProjectorInternal(
   const showDailyHeader = Boolean(
     moddedEnabled && hangarUi.modFlags?.dailySeed && hangarUi.dailySeedId,
   );
-  const leftHeaderLabel = showDailyHeader
-    ? `DAILY ${hangarUi.dailySeedId}`
-    : assistActive
-      ? '[E] ASSIST: ON'
-      : '[E] ASSIST: OFF';
-  const leftHeaderCol =
-    showDailyHeader || assistActive
-      ? contrast.darkPanelAccent
-      : contrast.darkPanelFg;
+  const leftHeaderLabel = assistActive ? '[E] ASSIST: ON' : '[E] ASSIST: OFF';
+  const leftHeaderCol = assistActive
+    ? contrast.darkPanelAccent
+    : contrast.darkPanelFg;
   if (menuSprites['projector_top']) {
     drawOutlinedHeaderText(
       ctx,
@@ -2529,19 +2524,20 @@ function renderHangarProjectorInternal(
     return;
   }
 
+  const pBackLuma = luma(stageSky);
+  const p1Luma = luma(previewPal.colors[1]);
+  const stageOverlayCol: RgbaTuple =
+    pBackLuma > 0.45 && p1Luma > 0.45
+      ? [0.08, 0.04, 0.12, 0.96]
+      : pBackLuma <= 0.45 && p1Luma <= 0.45
+        ? previewPal.colors[7]
+        : previewPal.colors[1];
+
   if (
     moddedEnabled &&
     hangarUi.modFlags &&
     hangarUi.modFlags.multiplayerMode !== 'solo'
   ) {
-    const pBackLuma = luma(stageSky);
-    const p1Luma = luma(previewPal.colors[1]);
-    const p2PreviewCol: RgbaTuple =
-      pBackLuma > 0.45 && p1Luma > 0.45
-        ? [0.08, 0.04, 0.12, 0.96]
-        : pBackLuma <= 0.45 && p1Luma <= 0.45
-          ? previewPal.colors[7]
-          : previewPal.colors[1];
     ctx.drawBitmapText(
       smallFont,
       `P2: ${(hangarUi.p2PlaneName ?? (hangarUi.modFlags.p2BotEnabled ? 'ACE BOT' : 'HUMAN')).toUpperCase()}`,
@@ -2549,7 +2545,19 @@ function renderHangarProjectorInternal(
       151 + offsetY,
       1,
       'left',
-      p2PreviewCol,
+      stageOverlayCol,
+    );
+  }
+
+  if (showDailyHeader) {
+    ctx.drawBitmapText(
+      smallFont,
+      `DAILY ${hangarUi.dailySeedId}`,
+      554,
+      151 + offsetY,
+      1,
+      'right',
+      stageOverlayCol,
     );
   }
 
@@ -2605,7 +2613,7 @@ function renderHangarProjectorInternal(
               : hangarUi.activeRow === 'mode'
                 ? modeAvailable
                   ? assistActive
-                    ? 'ASSIST ON: +50% HULL, MERCY I-FRAMES, FAST HEAL\nPRESS E TO TOGGLE ASSIST  -  LT/RT: MODE'
+                    ? 'ASSIST ON: +35% HULL, MERCY I-FRAMES, FAST HEAL\nPRESS E TO TOGGLE ASSIST  -  LT/RT: MODE'
                     : 'OVERDRIVE MODE - HIGH SPEED ACE WAVE\nPRESS E FOR ASSIST MODE (FORGIVING COMBAT)'
                   : 'COMPLETE 15 MISSIONS OR SINK A BLIMP TO UNLOCK\nPRESS E FOR ASSIST MODE (FORGIVING COMBAT)'
                 : 'PRESS SPACE OR ENTER TO LAUNCH SORTIE';
