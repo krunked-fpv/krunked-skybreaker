@@ -2107,7 +2107,7 @@ describe('Deterministic 60Hz Simulation Parity', () => {
     expect(hangarSnap.audioEvents.some((e) => e.cue === 'sndhangar')).toBe(true);
   });
 
-  it('25. Combat balance: post-hit i-frames, Last-Stand Health Gate, forward-cone on-screen Fighter firing, and neutral Boat turrets', () => {
+  it('25. Combat balance: dial-backed i-frames, Last-Stand cooldown & resets, anti-immortality lethality, forward-cone Fighter firing, and neutral Boat turrets', () => {
     const data = createProceduralFallbackBundle().data;
 
     // 1. Off-screen Fighter & backwards-facing on-screen Fighter must NOT snipe the player
@@ -2135,51 +2135,172 @@ describe('Deterministic 60Hz Simulation Parity', () => {
     const spawnedBoat = simAi.spawnEnemy('Boat', preAi.player.x + 200, 0);
     expect(spawnedBoat.gunAngleDeg).toBe(-90);
 
-    // 3. Post-hit combat i-frames (>= 20 ticks) + Last-Stand Health Gate prevent cheap rapid deletion
+    // 3. Dialed-back i-frames (15 ticks Normal) + Last-Stand Health Gate (40% threshold, 6s cooldown)
     const simMercy = new Simulation(data);
-    launchToPlaying(simMercy, { weapon: 0, body: 0, engine: 0 }, 'normal', 2502);
-    // Drop to 5 HP (31.25% >= 25% threshold) and spawn a Fighter directly underneath firing up along x = player.x
-    simMercy.damagePlayer(11);
+    // Melee body has maxHealth=11: 5 HP = 45.5% (>= 40% Normal threshold) and a single 6-dmg bullet is lethal
+    launchToPlaying(simMercy, { weapon: 0, body: 2, engine: 4 }, 'normal', 2502);
+    simMercy.damagePlayer(6); // 11 -> 5 HP (45.5%)
     expect(simMercy.getSnapshot().player.health).toBeCloseTo(5, 4);
-    // Clear debug hit flash while holding fire so cease-fire heal does not trigger
     for (let i = 0; i < 8; i++) simMercy.step({ left: false, right: false, thrust: false, fire: true });
 
-    const curM = simMercy.getSnapshot().player;
-    const shooter = simMercy.spawnEnemy('Fighter', curM.x, curM.y + 60);
-    shooter.angleDeg = -90; // Aimed straight up at player along the same vertical axis
-    shooter.vx = 0;
-    shooter.vy = -5;
-    shooter.fireTimer = 0;
-    let sawMercySave = false;
-    let sawLongIframes = false;
-    for (let t = 0; t < 20; t++) {
-      const s = simMercy.step({ left: false, right: false, thrust: false, fire: true });
-      if (s.player.flashTicks >= 20) {
-        sawLongIframes = true;
+    const shootPlayerFromBelow = (sim: Simulation, fireHold: boolean, maxSteps = 20) => {
+      const cur = sim.getSnapshot().player;
+      const shooter = sim.spawnEnemy('Fighter', cur.x, cur.y + 55);
+      shooter.angleDeg = -90;
+      shooter.vx = 0;
+      shooter.vy = -5;
+      shooter.fireTimer = 0;
+      let peakFlash = 0;
+      let lowestAliveHp = cur.health;
+      for (let t = 0; t < maxSteps && sim.getSnapshot().player.alive; t++) {
+        const s = sim.step({ left: false, right: false, thrust: false, fire: fireHold });
+        peakFlash = Math.max(peakFlash, s.player.flashTicks);
+        if (s.player.alive) lowestAliveHp = Math.min(lowestAliveHp, s.player.health);
+        if (peakFlash > 0) {
+          shooter.active = false;
+          break;
+        }
       }
-      if (s.player.alive && s.player.health < 5 && s.player.health >= 1.5) {
-        sawMercySave = true;
-      }
-    }
-    expect(sawLongIframes).toBe(true);
-    expect(sawMercySave).toBe(true);
+      return { peakFlash, lowestAliveHp, snap: sim.getSnapshot() };
+    };
 
-    // Once combat i-frames expire while below critical HP (< 25%), a subsequent enemy hit DOES kill cleanly
-    while (simMercy.getSnapshot().player.flashTicks > 0 && simMercy.getSnapshot().player.alive) {
-      simMercy.step({ left: false, right: false, thrust: false, fire: true });
+    const firstHit = shootPlayerFromBelow(simMercy, true, 18);
+    expect(firstHit.snap.player.alive).toBe(true);
+    expect(firstHit.peakFlash).toBeGreaterThanOrEqual(14);
+    expect(firstHit.peakFlash).toBeLessThanOrEqual(15);
+    expect(firstHit.lowestAliveHp).toBeGreaterThanOrEqual(1.5);
+    expect(firstHit.lowestAliveHp).toBeLessThan(2.5);
+
+    // Heal back ABOVE 40% (> 4.4 HP) while STILL inside the 360-tick Last-Stand cooldown:
+    // the gate MUST NOT re-trigger, so a second lethal hit kills cleanly (breaks infinite loop!)
+    while (
+      simMercy.getSnapshot().player.alive &&
+      (simMercy.getSnapshot().player.flashTicks > 0 ||
+        simMercy.getSnapshot().player.health < 5.0)
+    ) {
+      simMercy.step(IDLE_INPUT);
     }
-    const postM = simMercy.getSnapshot().player;
-    if (postM.alive) {
-      const finisher = simMercy.spawnEnemy('Fighter', postM.x, postM.y + 50);
-      finisher.angleDeg = -90;
-      finisher.vx = 0;
-      finisher.vy = -5;
-      finisher.fireTimer = 0;
-      for (let t = 0; t < 20 && simMercy.getSnapshot().player.alive; t++) {
-        simMercy.step({ left: false, right: false, thrust: false, fire: true });
+    expect(simMercy.getSnapshot().player.health).toBeGreaterThanOrEqual(5.0);
+    expect(simMercy.getSnapshot().player.health).toBeLessThan(6.0);
+    const secondHit = shootPlayerFromBelow(simMercy, true, 24);
+    expect(secondHit.snap.player.alive).toBe(false);
+
+    // 4. Relaunch resets Last-Stand cooldown cleanly so a fresh sortie gets its save again
+    launchToPlaying(simMercy, { weapon: 0, body: 2, engine: 4 }, 'normal', 2503);
+    simMercy.damagePlayer(6);
+    for (let i = 0; i < 8; i++) simMercy.step({ left: false, right: false, thrust: false, fire: true });
+    const freshHit = shootPlayerFromBelow(simMercy, true, 18);
+    expect(freshHit.snap.player.alive).toBe(true);
+    expect(freshHit.lowestAliveHp).toBeGreaterThanOrEqual(1.5);
+
+    // 5. Co-op P2 respawn resets P2's Last-Stand cooldown cleanly
+    const modReg = new ModRegistry(false);
+    const simCoop = new Simulation(data, modReg);
+    simCoop.setModFlags({
+      ...DEFAULT_ACT2_MOD_FLAGS,
+      moddedEnabled: true,
+      multiplayerMode: 'coop2p',
+      p2BotEnabled: false,
+    });
+    simCoop.setP2Loadout({ weapon: 0, body: 2, engine: 4 });
+    simCoop.launch({ weapon: 0, body: 1, engine: 4 }, 'normal', 2504);
+    while (simCoop.getSnapshot().phase === 'launching') {
+      simCoop.step2P(IDLE_INPUT, IDLE_INPUT);
+    }
+    const shootP2 = (maxSteps = 22) => {
+      const p2 = simCoop.getSnapshot().player2!;
+      const fighter = simCoop.spawnEnemy('Fighter', p2.x, p2.y + 55);
+      fighter.angleDeg = -90;
+      fighter.vx = 0;
+      fighter.vy = -5;
+      fighter.fireTimer = 0;
+      for (let t = 0; t < maxSteps && simCoop.getSnapshot().player2?.alive; t++) {
+        const beforeFlash = simCoop.getSnapshot().player2?.flashTicks ?? 0;
+        simCoop.step2P(IDLE_INPUT, { left: false, right: false, thrust: false, fire: true });
+        const afterFlash = simCoop.getSnapshot().player2?.flashTicks ?? 0;
+        if (afterFlash > beforeFlash || !simCoop.getSnapshot().player2?.alive) {
+          fighter.active = false;
+          break;
+        }
       }
+      return simCoop.getSnapshot().player2!;
+    };
+    // Drop P2 from 11 -> 5 HP (45.5% >= 40%) via one fighter hit, clear flash, then trigger Last-Stand
+    const p2AfterHit1 = shootP2(22);
+    expect(p2AfterHit1.alive).toBe(true);
+    expect(p2AfterHit1.health).toBeCloseTo(5, 4);
+    while ((simCoop.getSnapshot().player2?.flashTicks ?? 0) > 0) {
+      simCoop.step2P(IDLE_INPUT, { left: false, right: false, thrust: false, fire: true });
     }
-    expect(simMercy.getSnapshot().player.alive).toBe(false);
+    // Second 6-dmg hit from 5 HP triggers P2 Last-Stand save (floors at 1.5 HP)
+    const p2Saved = shootP2(22);
+    expect(p2Saved.alive).toBe(true);
+    expect(p2Saved.health).toBeGreaterThanOrEqual(1.5);
+    expect(p2Saved.health).toBeLessThan(2.5);
+    // Wait i-frames & finish P2 off while Last-Stand is on cooldown
+    while ((simCoop.getSnapshot().player2?.flashTicks ?? 0) > 0) {
+      simCoop.step2P(IDLE_INPUT, { left: false, right: false, thrust: false, fire: true });
+    }
+    const p2Dead = shootP2(22);
+    expect(p2Dead.alive).toBe(false);
+    // Keep P1 alive until P2 respawns (COOP_RESPAWN_TICKS = 300), then clear P2 respawn i-frames
+    for (let t = 0; t < 340 && !simCoop.getSnapshot().player2?.alive; t++) {
+      const p1 = simCoop.getSnapshot().player;
+      simCoop.step2P(
+        { left: false, right: false, thrust: p1.y > -200, fire: false },
+        IDLE_INPUT,
+      );
+    }
+    expect(simCoop.getSnapshot().player2?.alive).toBe(true);
+    while ((simCoop.getSnapshot().player2?.flashTicks ?? 0) > 0) {
+      const p1 = simCoop.getSnapshot().player;
+      simCoop.step2P(
+        { left: false, right: false, thrust: p1.y > -200, fire: false },
+        { left: false, right: false, thrust: false, fire: true },
+      );
+    }
+    // Freshly respawned P2 must have its Last-Stand cooldown reset (2 consecutive 6-dmg hits leave P2 alive at floor)
+    const p2RespawnHit1 = shootP2(22);
+    expect(p2RespawnHit1.alive).toBe(true);
+    while ((simCoop.getSnapshot().player2?.flashTicks ?? 0) > 0) {
+      simCoop.step2P(IDLE_INPUT, { left: false, right: false, thrust: false, fire: true });
+    }
+    const p2RespawnHit2 = shootP2(22);
+    expect(p2RespawnHit2.alive).toBe(true);
+    expect(p2RespawnHit2.health).toBeGreaterThanOrEqual(1.5);
+
+    // 6. Anti-immortality regression: blind circling without firing in Normal must die cleanly,
+    // and Assist Mode blind-firing must be meaningfully more forgiving than Normal yet still killable
+    const runBlindLoop = (assistFlag: boolean, fire: boolean) => {
+      const times: number[] = [];
+      for (let seed = 100; seed < 105; seed++) {
+        const simBlind = new Simulation(data);
+        simBlind.setAssistMode(assistFlag);
+        simBlind.launch({ weapon: 0, body: 0, engine: 0 }, 'normal', seed);
+        let survivedTicks = 0;
+        const capTicks = 60 * 120;
+        for (let t = 0; t < capTicks; t++) {
+          const s = simBlind.step({ left: true, right: false, thrust: true, fire });
+          survivedTicks = t + 1;
+          if (!s.player.alive) break;
+        }
+        times.push(survivedTicks / 60);
+      }
+      return {
+        survivedCap: times.filter((s) => s >= 120).length,
+        avgSec: times.reduce((a, b) => a + b, 0) / times.length,
+      };
+    };
+
+    const normalNoFire = runBlindLoop(false, false);
+    expect(normalNoFire.survivedCap).toBe(0);
+    expect(normalNoFire.avgSec).toBeLessThan(45);
+
+    const normalFire = runBlindLoop(false, true);
+    const assistFire = runBlindLoop(true, true);
+    expect(assistFire.survivedCap).toBe(0);
+    expect(assistFire.avgSec).toBeLessThan(45);
+    expect(assistFire.avgSec).toBeGreaterThan(normalFire.avgSec);
   });
 
   it('26. Elastic depth-progressive water bobber & upper-cloud ceiling rubberband physics', () => {
@@ -2274,7 +2395,7 @@ describe('Deterministic 60Hz Simulation Parity', () => {
     expect(fullUpHold.maxAbove).toBeLessThan(120);
   });
 
-  it('27. Assist Mode: +50% max HP, mid-sortie ratio scaling, fast/passive healing, extended combo timer, and bit-identical replay', () => {
+  it('27. Assist Mode: +35% max HP, mid-sortie ratio scaling, tuned fast/passive healing, extended combo timer, and bit-identical replay', () => {
     const data = createProceduralFallbackBundle().data;
     const sim = new Simulation(data);
     expect(sim.isAssistMode()).toBe(false);
@@ -2283,43 +2404,89 @@ describe('Deterministic 60Hz Simulation Parity', () => {
     expect(sim.isAssistMode()).toBe(true);
     const hangarSnap = sim.getSnapshot();
     expect(hangarSnap.assistMode).toBe(true);
-    expect(hangarSnap.player.maxHealth).toBe(24); // 16 * 1.5
+    expect(hangarSnap.player.maxHealth).toBe(22); // round(16 * 1.35)
     expect(hangarSnap.comboMaxTimer).toBe(240);
 
     // Mid-sortie toggle preserves HP ratio (50% -> 50%)
     launchToPlaying(sim, { weapon: 0, body: 0, engine: 4 }, 'normal', 2701);
-    sim.damagePlayer(12); // 12 / 24 = 50%
-    expect(sim.getSnapshot().player.health).toBeCloseTo(12, 4);
+    sim.damagePlayer(11); // 11 / 22 = 50%
+    expect(sim.getSnapshot().player.health).toBeCloseTo(11, 4);
     sim.setAssistMode(false);
     expect(sim.getSnapshot().player.maxHealth).toBe(16);
     expect(sim.getSnapshot().player.health).toBeCloseTo(8, 4);
     sim.setAssistMode(true);
-    expect(sim.getSnapshot().player.maxHealth).toBe(24);
-    expect(sim.getSnapshot().player.health).toBeCloseTo(12, 4);
+    expect(sim.getSnapshot().player.maxHealth).toBe(22);
+    expect(sim.getSnapshot().player.health).toBeCloseTo(11, 4);
 
-    // Fast cease-fire healing: engages on 6th cease-fire tick at 1.6x speed (0.16 * 1.6 = 0.256)
-    for (let i = 0; i < 5; i++) {
+    // Fast cease-fire healing: engages on 9th cease-fire tick at 1.35x speed (0.16 * 1.35 = 0.216)
+    for (let i = 0; i < 8; i++) {
       expect(sim.step(IDLE_INPUT).player.healing).toBe(false);
     }
     const healTick = sim.step(IDLE_INPUT);
     expect(healTick.player.healing).toBe(true);
-    expect(healTick.player.health).toBeCloseTo(12 + 0.16 * 1.6, 4);
+    expect(healTick.player.health).toBeCloseTo(11 + 0.16 * 1.35, 4);
 
-    // Deterministic replay preserves assistMode bit-identically
-    const simRec = new Simulation(data);
-    simRec.setAssistMode(true);
-    simRec.launch({ weapon: 0, body: 0, engine: 0 }, 'normal', 2702);
-    for (let t = 0; t < 300; t++) {
-      simRec.step(computeAutopilotInput(simRec.getSnapshot()));
+    // Assist Mode Last-Stand Health Gate triggers once, then respects its 240-tick cooldown (no infinite loop)
+    const simAssistGate = new Simulation(data);
+    simAssistGate.setAssistMode(true);
+    // Melee body in Assist has maxHealth = round(11 * 1.35) = 15; 4.5 HP = 30% (>= 28% Assist threshold)
+    // Enemy bullet deals 6 * 0.75 = 4.5 dmg -> lethal from 4.4 HP (29.3% >= 28%)
+    launchToPlaying(simAssistGate, { weapon: 0, body: 2, engine: 4 }, 'normal', 2704);
+    simAssistGate.damagePlayer(10.6); // 15 -> 4.4 HP (29.3% >= 28%)
+    for (let i = 0; i < 8; i++) {
+      simAssistGate.step({ left: false, right: false, thrust: false, fire: true });
     }
-    const origSnap = simRec.getSnapshot();
-    const rec = simRec.getReplay();
-    expect(rec.assistMode).toBe(true);
-    const replayed = replaySimulation(data, rec);
-    expect(replayed.assistMode).toBe(true);
-    expect(replayed.player.maxHealth).toBe(origSnap.player.maxHealth);
-    expect(replayed.player.x).toBe(origSnap.player.x);
-    expect(replayed.player.y).toBe(origSnap.player.y);
-    expect(replayed.score).toBe(origSnap.score);
+    const fireAssistShot = () => {
+      const cur = simAssistGate.getSnapshot().player;
+      const shooter = simAssistGate.spawnEnemy('Fighter', cur.x, cur.y + 55);
+      shooter.angleDeg = -90;
+      shooter.vx = 0;
+      shooter.vy = -5;
+      shooter.fireTimer = 0;
+      for (let t = 0; t < 24 && simAssistGate.getSnapshot().player.alive; t++) {
+        const before = simAssistGate.getSnapshot().player.flashTicks;
+        const s = simAssistGate.step({ left: false, right: false, thrust: false, fire: true });
+        if (s.player.flashTicks > before || !s.player.alive) {
+          shooter.active = false;
+          break;
+        }
+      }
+      return simAssistGate.getSnapshot().player;
+    };
+    const assistSave = fireAssistShot();
+    expect(assistSave.alive).toBe(true);
+    expect(assistSave.health).toBeGreaterThanOrEqual(2.0);
+    // Heal back to ~4.3 HP (> 28%) while still inside 240-tick Assist cooldown -> next lethal shot MUST kill
+    while (
+      simAssistGate.getSnapshot().player.alive &&
+      (simAssistGate.getSnapshot().player.flashTicks > 0 ||
+        simAssistGate.getSnapshot().player.health < 4.3)
+    ) {
+      simAssistGate.step(IDLE_INPUT);
+    }
+    expect(simAssistGate.getSnapshot().player.health).toBeGreaterThanOrEqual(4.3);
+    expect(simAssistGate.getSnapshot().player.health).toBeLessThan(4.5);
+    const assistKill = fireAssistShot();
+    expect(assistKill.alive).toBe(false);
+
+    // Deterministic replay preserves assistMode and Normal mode bit-identically
+    for (const assistFlag of [true, false]) {
+      const simRec = new Simulation(data);
+      simRec.setAssistMode(assistFlag);
+      simRec.launch({ weapon: 0, body: 0, engine: 0 }, 'normal', assistFlag ? 2702 : 2703);
+      for (let t = 0; t < 300; t++) {
+        simRec.step(computeAutopilotInput(simRec.getSnapshot()));
+      }
+      const origSnap = simRec.getSnapshot();
+      const rec = simRec.getReplay();
+      expect(Boolean(rec.assistMode)).toBe(assistFlag);
+      const replayed = replaySimulation(data, rec);
+      expect(Boolean(replayed.assistMode)).toBe(assistFlag);
+      expect(replayed.player.maxHealth).toBe(origSnap.player.maxHealth);
+      expect(replayed.player.health).toBeCloseTo(origSnap.player.health, 6);
+      expect(replayed.player.x).toBe(origSnap.player.x);
+      expect(replayed.player.y).toBe(origSnap.player.y);
+      expect(replayed.score).toBe(origSnap.score);
+    }
   });
 });

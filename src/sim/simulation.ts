@@ -174,21 +174,25 @@ const COMBO_MAX_TIMER = 180;
 const ASSIST_COMBO_MAX_TIMER = 240;
 const COMBO_WARNING_THRESHOLD = 60;
 const HEAL_DELAY_TICKS = 12;
-const ASSIST_HEAL_DELAY_TICKS = 6;
-const ASSIST_MAX_HEALTH_MULT = 1.5;
-const ASSIST_INCOMING_DMG_MULT = 0.65;
-const ASSIST_ENV_DMG_MULT = 0.5;
-const ASSIST_HEAL_SPEED_MULT = 1.6;
-const ASSIST_PASSIVE_HEAL_WAIT_TICKS = 120;
-const ASSIST_ENEMY_BULLET_SPEED_MULT = 0.8;
-const ASSIST_SPAWN_COOLDOWN_MULT = 1.3;
-const ASSIST_DIFFICULTY_INTERVAL_TICKS = 80;
-const COMBAT_IFRAMES_NORMAL = 26;
-const COMBAT_IFRAMES_SFMT = 20;
-const COMBAT_IFRAMES_ASSIST = 42;
+const ASSIST_HEAL_DELAY_TICKS = 9;
+const ASSIST_MAX_HEALTH_MULT = 1.35;
+const ASSIST_INCOMING_DMG_MULT = 0.75;
+const ASSIST_ENV_DMG_MULT = 0.6;
+const ASSIST_HEAL_SPEED_MULT = 1.35;
+const ASSIST_PASSIVE_HEAL_WAIT_TICKS = 180;
+const ASSIST_PASSIVE_HEAL_MULT = 0.15;
+const ASSIST_ENEMY_BULLET_SPEED_MULT = 0.85;
+const ASSIST_SPAWN_COOLDOWN_MULT = 1.2;
+const ASSIST_DIFFICULTY_INTERVAL_TICKS = 72;
+const COMBAT_IFRAMES_NORMAL = 15;
+const COMBAT_IFRAMES_SFMT = 11;
+const COMBAT_IFRAMES_ASSIST = 20;
 const COMBAT_IFRAMES_DOGFIGHT = 12;
-const ENEMY_BULLET_SPEED_SCALE = 0.85;
-const INITIAL_SPAWN_GRACE_TICKS = 55;
+const LAST_STAND_COOLDOWN_NORMAL = 360;
+const LAST_STAND_COOLDOWN_SFMT = 480;
+const LAST_STAND_COOLDOWN_ASSIST = 240;
+const ENEMY_BULLET_SPEED_SCALE = 0.93;
+const INITIAL_SPAWN_GRACE_TICKS = 35;
 const LASER_BEAM_LENGTH = 520;
 const NUKE_MAX_RADIUS = 420;
 const PLASMA_AOE_RADIUS = 80;
@@ -597,6 +601,8 @@ export class Simulation implements ISimulation {
   private lastFirePressed = false;
   private lastPlayerHitTick = -1000;
   private lastP2HitTick = -1000;
+  private p1LastStandTick = -10000;
+  private p2LastStandTick = -10000;
   private distinctKindsThisSortie = new Set<EnemyKind>();
   private sortieFinalized = false;
   private finalizedScoreAdded = 0;
@@ -1119,6 +1125,8 @@ export class Simulation implements ISimulation {
     this.lastFirePressed = false;
     this.lastPlayerHitTick = -1000;
     this.lastP2HitTick = -1000;
+    this.p1LastStandTick = -10000;
+    this.p2LastStandTick = -10000;
     this.distinctKindsThisSortie.clear();
     this.sortieFinalized = false;
     this.finalizedScoreAdded = 0;
@@ -1299,6 +1307,8 @@ export class Simulation implements ISimulation {
     this.dogfight = null;
     this.p1RespawnTicks = 0;
     this.p2RespawnTicks = 0;
+    this.p1LastStandTick = -10000;
+    this.p2LastStandTick = -10000;
     this.p1WetTicks = 0;
     this.p2WetTicks = 0;
     this.p1WasFiringLaser = false;
@@ -1423,8 +1433,8 @@ export class Simulation implements ISimulation {
       const spd = spec.initvelocity || 8;
       vx = dirToPlayer * spd;
       fireTimer = Math.max(
-        45,
-        (spec.fireinterval || 20) + this.rng.range(20, spec.fireintervalrand || 90),
+        30,
+        (spec.fireinterval || 20) + this.rng.range(10, spec.fireintervalrand || 90),
       );
       aiTimer = Math.round(
         (spec.airethinktimer || 60) + this.rng.range(0, spec.airethinktimerrand || 90),
@@ -1908,9 +1918,13 @@ export class Simulation implements ISimulation {
     if (deadPlayer === this.player) {
       this.p1WetTicks = 0;
       this.p1WasFiringLaser = false;
+      this.p1LastStandTick = -10000;
+      this.lastPlayerHitTick = -1000;
     } else if (deadPlayer === this.player2) {
       this.p2WetTicks = 0;
       this.p2WasFiringLaser = false;
+      this.p2LastStandTick = -10000;
+      this.lastP2HitTick = -1000;
     }
     this.emitAudio('sndlaunch', rx, ry);
   }
@@ -2488,18 +2502,18 @@ export class Simulation implements ISimulation {
     if (input.fire || p.fireCooldown > 0) {
       p.healing = false;
       p.healingTicks = 0;
-      // Assist Mode gentle passive recovery while firing if unhit for 2s+ (stopping fire still heals 6.4x faster)
+      // Assist Mode gentle passive recovery while firing if unhit for 3s+ (stopping fire still heals 9x faster)
       if (this.assistMode && canHeal) {
         const lastHit = p === this.player ? this.lastPlayerHitTick : this.lastP2HitTick;
         if (this.tick - lastHit >= ASSIST_PASSIVE_HEAL_WAIT_TICKS) {
           const baseHeal = p.isUrauser ? 0.01 : p.bodySpec.healingspd;
-          p.health = Math.min(p.maxHealth, p.health + baseHeal * 0.25);
+          p.health = Math.min(p.maxHealth, p.health + baseHeal * ASSIST_PASSIVE_HEAL_MULT);
         }
       }
       return;
     }
 
-    if (!canHeal) {
+    if (!canHeal || p.flashTicks > 6) {
       p.healing = false;
       p.healingTicks = 0;
       return;
@@ -3230,8 +3244,8 @@ export class Simulation implements ISimulation {
 
     this.spawnEnemy(kind);
     const baseSpawnCd = Math.max(
-      16,
-      Math.round(52 - Math.min(28, this.difficulty / 32)),
+      14,
+      Math.round(44 - Math.min(24, this.difficulty / 36)),
     );
     this.spawnTimer = this.assistMode
       ? Math.round(baseSpawnCd * ASSIST_SPAWN_COOLDOWN_MULT)
@@ -3552,14 +3566,14 @@ export class Simulation implements ISimulation {
         case 'Fighter': {
           // Authentic dogfighter rethink cycle: alternates between pursuit and brief pass-through banks
           enemy.aiTimer--;
-          if (enemy.aiTimer <= -22) {
+          if (enemy.aiTimer <= -14) {
             enemy.aiTimer = Math.round(
               (spec.airethinktimer || 60) +
                 this.rng.range(0, spec.airethinktimerrand || 90),
             );
           }
-          const baseTurnRate = (spec.reaction || 0.3) * 5 + 1.7;
-          const turnRate = enemy.aiTimer > 0 ? baseTurnRate : baseTurnRate * 0.35;
+          const baseTurnRate = (spec.reaction || 0.3) * 6.5 + 2.2;
+          const turnRate = enemy.aiTimer > 0 ? baseTurnRate : baseTurnRate * 0.45;
           const diff = shortestAngleDiffDeg(enemy.angleDeg, angleToPlayer);
           enemy.angleDeg += clamp(diff, -turnRate, turnRate);
 
@@ -3590,13 +3604,13 @@ export class Simulation implements ISimulation {
               enemy.fireTimer--;
             } else if (
               dist > (spec.minfiredist || 40) &&
-              dist < 340 &&
+              dist < 440 &&
               this.isEnemyInFireViewport(enemy, targetPlayer, -6, -6) &&
-              Math.abs(shortestAngleDiffDeg(enemy.angleDeg, angleToPlayer)) <= 26
+              Math.abs(shortestAngleDiffDeg(enemy.angleDeg, angleToPlayer)) <= 32
             ) {
               enemy.fireTimer = Math.round(
                 ((spec.fireinterval || 20) +
-                  this.rng.range(10, spec.fireintervalrand || 90)) *
+                  this.rng.range(4, spec.fireintervalrand || 90)) *
                   fireIntervalMult,
               );
               const shotAngle = enemy.angleDeg + this.rng.range(-4, 4);
@@ -3656,7 +3670,7 @@ export class Simulation implements ISimulation {
           ) {
             if (enemy.fireTimer > 0) {
               enemy.fireTimer--;
-            } else if (dist < 460) {
+            } else if (dist < 580) {
               enemy.fireTimer = Math.max(1, Math.round(spec.fireinterval * fireIntervalMult));
               this.spawnEnemyBullet(
                 enemy.x,
@@ -3757,7 +3771,7 @@ export class Simulation implements ISimulation {
                       pl &&
                       pl.alive &&
                       pl.flashTicks <= 0 &&
-                      distPointToSegmentSq(pl.x, pl.y, enemy.x, enemy.y, lx2, ly2) <= 100
+                      distPointToSegmentSq(pl.x, pl.y, enemy.x, enemy.y, lx2, ly2) <= 121
                     ) {
                       this.applyDamageToTargetPlayer(pl, 1.5, true, true);
                     }
@@ -3771,14 +3785,14 @@ export class Simulation implements ISimulation {
                 if (enemy.laserChargeTicks <= 0) {
                   enemy.laserChargeTicks = 0;
                   enemy.salvoRemaining = spec.bulletspersalvo || 60;
-                  enemy.fireTimer = Math.round(115 * fireIntervalMult);
+                  enemy.fireTimer = Math.round(110 * fireIntervalMult);
                   this.emitAudio('sndlaser', enemy.x, enemy.y);
                 }
               } else {
                 enemy.laserActive = false;
                 if (enemy.fireTimer > 0) {
                   enemy.fireTimer--;
-                } else if (dist < 420) {
+                } else if (dist < 500) {
                   enemy.gunAngleDeg = angleToPlayer;
                   enemy.laserChargeTicks = 24;
                   this.emitAudio('sndlaser', enemy.x, enemy.y, 0.42, 0.55);
@@ -3806,13 +3820,13 @@ export class Simulation implements ISimulation {
               } else if (enemy.fireTimer > 0) {
                 enemy.fireTimer--;
               } else if (
-                dist < 380 &&
+                dist < 460 &&
                 this.isEnemyInFireViewport(enemy, targetPlayer, -4, -4) &&
-                Math.abs(shortestAngleDiffDeg(enemy.angleDeg, angleToPlayer)) <= 28
+                Math.abs(shortestAngleDiffDeg(enemy.angleDeg, angleToPlayer)) <= 34
               ) {
                 enemy.salvoRemaining = spec.bulletspersalvo || 12;
                 enemy.salvoCooldown = 0;
-                enemy.fireTimer = Math.round(95 * fireIntervalMult);
+                enemy.fireTimer = Math.round(88 * fireIntervalMult);
               }
             }
           } else {
@@ -3894,8 +3908,8 @@ export class Simulation implements ISimulation {
             } else if (enemy.salvoCooldown > 0) {
               enemy.salvoCooldown--;
             } else if (
-              Math.abs(enemy.x - targetPlayer.x) < 350 &&
-              dist < (enemy.kind === 'BigBoat' ? 620 : 440)
+              Math.abs(enemy.x - targetPlayer.x) < 420 &&
+              dist < (enemy.kind === 'BigBoat' ? 680 : 540)
             ) {
               const numBoats = this.enemies.filter(
                 (b) => b.active && (b.kind === 'Boat' || b.kind === 'BigBoat'),
@@ -4144,7 +4158,7 @@ export class Simulation implements ISimulation {
               }
             } else if (enemy.salvoCooldown > 0) {
               enemy.salvoCooldown--;
-            } else if (dist < 520) {
+            } else if (dist < 660) {
               enemy.salvoRemaining = spec.bulletspersalvo || 32;
               enemy.fireTimer = 0;
               enemy.salvoCooldown = Math.round(
@@ -4554,7 +4568,7 @@ export class Simulation implements ISimulation {
           : [this.player];
         for (const pl of candidates) {
           if (!pl.alive) continue;
-          const playerBulletHitRadius = 4.5 + proj.radius * 0.5;
+          const playerBulletHitRadius = 6.5 + proj.radius * 0.65;
           if (
             pl.flashTicks <= 0 &&
             distPointToSegmentSq(
@@ -4712,7 +4726,7 @@ export class Simulation implements ISimulation {
     const effectiveDealMult =
       (body.impactdealdmgmult || 0.25) + (body.impactdmgmult || 0);
 
-    const bodyCollisionRadius = isMeleeBody ? 11 : 7;
+    const bodyCollisionRadius = isMeleeBody ? 11 : 8.5;
     for (const enemy of this.enemies) {
       if (!enemy.active) continue;
       if (!isPointInEnemyHitbox(p.x, p.y, bodyCollisionRadius, enemy)) continue;
@@ -4927,7 +4941,7 @@ export class Simulation implements ISimulation {
     ) {
       p.shieldReady = false;
       p.shieldCooldown = AEGIS_SHIELD_COOLDOWN_TICKS;
-      p.flashTicks = Math.max(p.flashTicks, 18);
+      p.flashTicks = Math.max(p.flashTicks, 12);
       this.emitShockwave(p.x, p.y, 64, 0.85, 16);
       this.emitAudio('sndhealed', p.x, p.y);
       return;
@@ -4941,18 +4955,33 @@ export class Simulation implements ISimulation {
       effectiveAmount *= ASSIST_INCOMING_DMG_MULT;
     }
 
-    // Authentic arcade Last-Stand Health Gate on PvE combat hits:
-    // Prevents sudden cheap deletion from moderate HP without giving the player a critical-HP warning window.
+    // Authentic arcade Last-Stand Health Gate on PvE combat hits with per-player cooldown:
+    // Prevents sudden cheap deletion from healthy HP without enabling an infinite cease-fire heal loop.
     if (fromEnemyCombat && !isDogfight && p.maxHealth > 0) {
       const hpRatio = p.health / p.maxHealth;
       const gateThreshold = this.assistMode
-        ? 0.18
+        ? 0.28
         : this.mode === 'sfmt'
-          ? 0.35
-          : 0.25;
-      if (hpRatio >= gateThreshold && p.health - effectiveAmount <= 0) {
-        const survivalFloor = Math.max(1.5, p.maxHealth * 0.12);
+          ? 0.5
+          : 0.4;
+      const gateCooldown = this.assistMode
+        ? LAST_STAND_COOLDOWN_ASSIST
+        : this.mode === 'sfmt'
+          ? LAST_STAND_COOLDOWN_SFMT
+          : LAST_STAND_COOLDOWN_NORMAL;
+      const lastStandTick =
+        p === this.player ? this.p1LastStandTick : this.p2LastStandTick;
+      const gateReady = this.tick - lastStandTick >= gateCooldown;
+      if (gateReady && hpRatio >= gateThreshold && p.health - effectiveAmount <= 0) {
+        const survivalFloor = this.assistMode
+          ? Math.max(2.0, p.maxHealth * 0.12)
+          : Math.max(1.5, p.maxHealth * 0.1);
         p.health = Math.min(p.health, survivalFloor);
+        if (p === this.player) {
+          this.p1LastStandTick = this.tick;
+        } else if (p === this.player2) {
+          this.p2LastStandTick = this.tick;
+        }
       } else {
         p.health = Math.max(0, p.health - effectiveAmount);
       }
@@ -4971,6 +5000,10 @@ export class Simulation implements ISimulation {
               : COMBAT_IFRAMES_NORMAL
         : 6;
       p.flashTicks = Math.max(p.flashTicks, iframes);
+      if (fromEnemyCombat) {
+        p.healing = false;
+        p.healingTicks = 0;
+      }
       if (p === this.player) {
         this.lastPlayerHitTick = this.tick;
       } else if (p === this.player2) {
