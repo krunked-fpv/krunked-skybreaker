@@ -540,6 +540,15 @@ describe('Translucent stick deflection & flight input math', () => {
       expect(overlay.getSnapshot().firePressed).toBe(false);
       expect(fireBtn!.getAttribute('data-pressed')).toBe('false');
 
+      // document.visibilitychange (hidden=true) releases held fire cleanly
+      fireBtn!.emit('pointerdown', mkEv(12));
+      expect(overlay.getSnapshot().firePressed).toBe(true);
+      fakeDocument.hidden = true;
+      fakeDocument.emit('visibilitychange');
+      expect(overlay.getSnapshot().firePressed).toBe(false);
+      expect(fireBtn!.getAttribute('data-pressed')).toBe('false');
+      fakeDocument.hidden = false;
+
       // Mode switch (flight -> hangar menu) releases held fire cleanly
       fireBtn!.emit('pointerdown', mkEv(11));
       expect(overlay.getSnapshot().firePressed).toBe(true);
@@ -554,6 +563,47 @@ describe('Translucent stick deflection & flight input math', () => {
       expect(overlay.getFlightInput().fire).toBe(false);
 
       overlay.dispose();
+
+      // Legacy TouchEvent fallback (when PointerEvent is absent on older WebKit/car browsers)
+      const legacyWindow = new FakeEventTarget();
+      Object.defineProperty(globalThis, 'window', { value: legacyWindow, configurable: true });
+      const legacyOverlay = new TouchControlsOverlay(fakeBody as unknown as HTMLElement);
+      legacyOverlay.setVisible(true);
+      legacyOverlay.updateContext({
+        phase: 'playing',
+        paused: false,
+        modDeckOpen: false,
+        paletteStudioOpen: false,
+        palette: PALETTES[0]!,
+      });
+      const legacyRoot = legacyOverlay.getElement() as unknown as FakeElement;
+      const legacyFireBtn = findByTestId(legacyRoot, 'touch-btn-fire');
+      expect(legacyFireBtn).not.toBeNull();
+      const mkTouchEv = (identifier: number) => ({
+        changedTouches: [{ identifier, clientX: 480, clientY: 300 }],
+        preventDefault: vi.fn(),
+      });
+
+      legacyFireBtn!.emit('touchstart', mkTouchEv(21));
+      expect(legacyOverlay.getSnapshot().firePressed).toBe(true);
+      expect(legacyOverlay.getFlightInput().fire).toBe(true);
+      expect(legacyFireBtn!.getAttribute('data-pressed')).toBe('true');
+
+      // Unrelated touch identifier does NOT release held fire
+      legacyFireBtn!.emit('touchend', mkTouchEv(99));
+      expect(legacyOverlay.getSnapshot().firePressed).toBe(true);
+
+      legacyFireBtn!.emit('touchend', mkTouchEv(21));
+      expect(legacyOverlay.getSnapshot().firePressed).toBe(false);
+      expect(legacyFireBtn!.getAttribute('data-pressed')).toBe('false');
+
+      legacyFireBtn!.emit('touchstart', mkTouchEv(22));
+      expect(legacyOverlay.getSnapshot().firePressed).toBe(true);
+      legacyFireBtn!.emit('touchcancel', mkTouchEv(22));
+      expect(legacyOverlay.getSnapshot().firePressed).toBe(false);
+      expect(legacyOverlay.getFlightInput().fire).toBe(false);
+
+      legacyOverlay.dispose();
     } finally {
       Object.defineProperty(globalThis, 'document', { value: origDocument, configurable: true });
       Object.defineProperty(globalThis, 'window', { value: origWindow, configurable: true });

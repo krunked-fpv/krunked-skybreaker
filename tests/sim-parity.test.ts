@@ -2334,6 +2334,112 @@ describe('Deterministic 60Hz Simulation Parity', () => {
       const s = simHealGate.step(IDLE_INPUT);
       expect(s.player.healing).toBe(false);
     }
+
+    // 8. Overdrive (SFMT) Last-Stand enforces 50% threshold, 11-tick i-frames, and 480-tick cooldown
+    // Below 50% (5 / 11 = 45.5%): single 6-dmg bullet kills immediately without Last-Stand save
+    const simSfmtBelow = new Simulation(data);
+    launchToPlaying(simSfmtBelow, { weapon: 0, body: 2, engine: 4 }, 'sfmt', 2506);
+    simSfmtBelow.damagePlayer(6); // 11 -> 5 HP (45.5% < 50%)
+    for (let i = 0; i < 8; i++) {
+      simSfmtBelow.step({ left: false, right: false, thrust: false, fire: true });
+    }
+    const sfmtBelowHit = shootPlayerFromBelow(simSfmtBelow, true, 20);
+    expect(sfmtBelowHit.snap.player.alive).toBe(false);
+
+    // At/above 50% (5.6 / 11 = 50.9%): single 6-dmg bullet triggers Last-Stand save with 11 i-frames,
+    // then a second lethal hit after healing back above 50% inside the 480-tick cooldown kills cleanly
+    const simSfmtGate = new Simulation(data);
+    launchToPlaying(simSfmtGate, { weapon: 0, body: 2, engine: 4 }, 'sfmt', 2507);
+    simSfmtGate.damagePlayer(5.4); // 11 -> 5.6 HP (50.9% >= 50%)
+    for (let i = 0; i < 8; i++) {
+      simSfmtGate.step({ left: false, right: false, thrust: false, fire: true });
+    }
+    const sfmtSave = shootPlayerFromBelow(simSfmtGate, true, 20);
+    expect(sfmtSave.snap.player.alive).toBe(true);
+    expect(sfmtSave.peakFlash).toBeGreaterThanOrEqual(10);
+    expect(sfmtSave.peakFlash).toBeLessThanOrEqual(11);
+    expect(sfmtSave.lowestAliveHp).toBeGreaterThanOrEqual(1.5);
+    while (
+      simSfmtGate.getSnapshot().player.alive &&
+      (simSfmtGate.getSnapshot().player.flashTicks > 0 ||
+        simSfmtGate.getSnapshot().player.health < 5.6)
+    ) {
+      simSfmtGate.step(IDLE_INPUT);
+    }
+    expect(simSfmtGate.getSnapshot().player.health).toBeGreaterThanOrEqual(5.6);
+    expect(simSfmtGate.getSnapshot().player.health).toBeLessThan(6.0);
+    const sfmtKill = shootPlayerFromBelow(simSfmtGate, true, 24);
+    expect(sfmtKill.snap.player.alive).toBe(false);
+
+    // 9. Co-op P1 respawn symmetrically resets P1's Last-Stand cooldown
+    const modRegP1 = new ModRegistry(false);
+    const simCoopP1 = new Simulation(data, modRegP1);
+    simCoopP1.setModFlags({
+      ...DEFAULT_ACT2_MOD_FLAGS,
+      moddedEnabled: true,
+      multiplayerMode: 'coop2p',
+      p2BotEnabled: false,
+    });
+    simCoopP1.setP2Loadout({ weapon: 5, body: 5, engine: 5 });
+    simCoopP1.launch({ weapon: 0, body: 2, engine: 4 }, 'normal', 2508);
+    while (simCoopP1.getSnapshot().phase === 'launching') {
+      simCoopP1.step2P(IDLE_INPUT, IDLE_INPUT);
+    }
+    const shootP1 = (maxSteps = 22) => {
+      const p1 = simCoopP1.getSnapshot().player;
+      const fighter = simCoopP1.spawnEnemy('Fighter', p1.x, p1.y + 55);
+      fighter.angleDeg = -90;
+      fighter.vx = 0;
+      fighter.vy = -5;
+      fighter.fireTimer = 0;
+      for (let t = 0; t < maxSteps && simCoopP1.getSnapshot().player.alive; t++) {
+        const beforeFlash = simCoopP1.getSnapshot().player.flashTicks;
+        simCoopP1.step2P(
+          { left: false, right: false, thrust: false, fire: true },
+          IDLE_INPUT,
+        );
+        const afterFlash = simCoopP1.getSnapshot().player.flashTicks;
+        if (afterFlash > beforeFlash || !simCoopP1.getSnapshot().player.alive) {
+          fighter.active = false;
+          break;
+        }
+      }
+      return simCoopP1.getSnapshot().player;
+    };
+    expect(shootP1(22).health).toBeCloseTo(5, 4);
+    while (simCoopP1.getSnapshot().player.flashTicks > 0) {
+      simCoopP1.step2P({ left: false, right: false, thrust: false, fire: true }, IDLE_INPUT);
+    }
+    const p1Saved = shootP1(22);
+    expect(p1Saved.alive).toBe(true);
+    expect(p1Saved.health).toBeGreaterThanOrEqual(1.5);
+    while (simCoopP1.getSnapshot().player.flashTicks > 0) {
+      simCoopP1.step2P({ left: false, right: false, thrust: false, fire: true }, IDLE_INPUT);
+    }
+    expect(shootP1(22).alive).toBe(false);
+    // Keep P2 alive until P1 respawns (COOP_RESPAWN_TICKS = 300), then clear P1 respawn i-frames
+    for (let t = 0; t < 340 && !simCoopP1.getSnapshot().player.alive; t++) {
+      const p2 = simCoopP1.getSnapshot().player2!;
+      simCoopP1.step2P(
+        IDLE_INPUT,
+        { left: true, right: false, thrust: p2.y > -300, fire: false },
+      );
+    }
+    expect(simCoopP1.getSnapshot().player.alive).toBe(true);
+    while (simCoopP1.getSnapshot().player.flashTicks > 0) {
+      const p2 = simCoopP1.getSnapshot().player2!;
+      simCoopP1.step2P(
+        { left: false, right: false, thrust: false, fire: true },
+        { left: false, right: false, thrust: p2.y > -200, fire: false },
+      );
+    }
+    expect(shootP1(22).alive).toBe(true);
+    while (simCoopP1.getSnapshot().player.flashTicks > 0) {
+      simCoopP1.step2P({ left: false, right: false, thrust: false, fire: true }, IDLE_INPUT);
+    }
+    const p1RespawnSave = shootP1(22);
+    expect(p1RespawnSave.alive).toBe(true);
+    expect(p1RespawnSave.health).toBeGreaterThanOrEqual(1.5);
   });
 
   it('26. Elastic depth-progressive water bobber & upper-cloud ceiling rubberband physics', () => {

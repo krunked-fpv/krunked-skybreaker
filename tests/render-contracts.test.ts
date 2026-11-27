@@ -3600,6 +3600,27 @@ describe('Renderer Visual & UI Regression Contracts', () => {
     expect(drawnTexts.some((d) => d.text.includes('+35% HULL'))).toBe(true);
     expect(drawnTexts.some((d) => d.text.includes('+50% HULL'))).toBe(false);
 
+    // Assist OFF + Daily Seed ON must still render [E] ASSIST: OFF at (26, <=22) alongside DAILY
+    drawnTexts.length = 0;
+    controller.setAssistMode(false);
+    const hangarOffSnap = makeSnapshot({ phase: 'hangar', assistMode: false });
+    const uiOff = controller.buildUiState(hangarOffSnap, undefined, {
+      modFlags: dailyModFlags,
+      dailySeedId: '20261127',
+    });
+    renderer.render(hangarOffSnap, hangarOffSnap, 0, uiOff, 0.75);
+    const assistOffHeaderDraw = drawnTexts.find(
+      (d) => d.text === '[E] ASSIST: OFF' && d.x === 26 && d.y <= 22,
+    );
+    const dailyOffDraw = drawnTexts.find((d) => d.text === 'DAILY 20261127');
+    expect(assistOffHeaderDraw).toBeDefined();
+    expect(dailyOffDraw).toBeDefined();
+    expect(
+      dailyOffDraw!.x !== assistOffHeaderDraw!.x ||
+        dailyOffDraw!.y !== assistOffHeaderDraw!.y,
+    ).toBe(true);
+    controller.setAssistMode(true);
+
     const playSnap = makeSnapshot({ phase: 'playing', assistMode: true });
     renderer.render(playSnap, playSnap, 0, null, 1.0);
     const lines = formatTelemetryLines({
@@ -3651,6 +3672,38 @@ describe('Renderer Visual & UI Regression Contracts', () => {
     expect(fbDaily!.x !== fbAssist!.x || fbDaily!.y !== fbAssist!.y).toBe(true);
     expect(fallbackTexts.some((d) => d.text.includes('NORMAL + ASSIST'))).toBe(true);
     expect(fallbackTexts.some((d) => d.text.includes('+35% HULL'))).toBe(true);
+
+    // Fallback drawMenuPass with Assist OFF + Daily Seed ON also keeps [E] ASSIST: OFF separate from DAILY
+    fallbackTexts.length = 0;
+    const drawBitmapOffSpy = vi.spyOn(
+      renderer as unknown as {
+        drawBitmapText: (
+          gl: unknown,
+          font: unknown,
+          text: string,
+          x: number,
+          y: number,
+          scale: number,
+          align: unknown,
+          color: unknown,
+        ) => void;
+      },
+      'drawBitmapText',
+    );
+    const origDrawBitmapOff = drawBitmapOffSpy.getMockImplementation();
+    drawBitmapOffSpy.mockImplementation((glArg, font, text, x, y, scale, align, color) => {
+      fallbackTexts.push({ text, x, y });
+      origDrawBitmapOff?.(glArg, font, text, x, y, scale, align, color);
+    });
+    renderer.render(hangarOffSnap, hangarOffSnap, 0, uiOff, 2.75);
+    drawBitmapOffSpy.mockRestore();
+    const fbAssistOff = fallbackTexts.find(
+      (d) => d.text === '[E] ASSIST: OFF' && d.x === 26 && d.y <= 22,
+    );
+    const fbDailyOff = fallbackTexts.find((d) => d.text === 'DAILY 20261127');
+    expect(fbAssistOff).toBeDefined();
+    expect(fbDailyOff).toBeDefined();
+    expect(fbDailyOff!.x !== fbAssistOff!.x || fbDailyOff!.y !== fbAssistOff!.y).toBe(true);
 
     expect(renderer.getFrameMetrics().webglErrors).toBe(0);
     renderer.dispose();

@@ -3143,7 +3143,7 @@ export class Simulation implements ISimulation {
   private updateSpawnDirector(): void {
     const coord = this.getSpawnCoordinator();
 
-    // Difficulty increments every 60 ticks (1s) in standard/SFMT, or every 80 ticks in Assist Mode
+    // Difficulty increments every 60 ticks (1s) in standard/SFMT, or every 72 ticks in Assist Mode
     const diffInterval = this.assistMode ? ASSIST_DIFFICULTY_INTERVAL_TICKS : 60;
     this.difficultyTimer++;
     if (this.difficultyTimer >= diffInterval) {
