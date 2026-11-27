@@ -82,19 +82,20 @@ export function computeStickDeflection(
 }
 
 /**
- * Pure translation from dual translucent stick vectors + dedicated BOOST hold
- * into the simulation's digital `InputState`.
+ * Pure translation from left translucent flight stick + static pressable FIRE
+ * and BOOST buttons into the simulation's digital `InputState`.
  *
  * - Horizontal deflection beyond `deadzone` drives `left` / `right`.
  * - Upward deflection (`y < -thrustThreshold`) OR `boostPressed` drives `thrust`.
  * - Holding left stick inside the neutral deadzone (or pulling downward) with
- *   boost & right stick released leaves `thrust = false, fire = false` so the
+ *   boost & fire released leaves `thrust = false, fire = false` so the
  *   player's neutral auto-healing triggers cleanly.
- * - Any touch/drag on the right combat stick sets `fire = true`.
+ * - Pressing the static `FIRE` button sets `fire = true` (all weapons shoot
+ *   along the aircraft's nose).
  */
 export function stickVectorToFlightInput(
   leftStick: TouchStickVector,
-  rightStick: TouchStickVector,
+  firePressed: boolean,
   boostPressed: boolean,
   options?: StickFlightOptions,
 ): InputState {
@@ -105,7 +106,7 @@ export function stickVectorToFlightInput(
   const right = leftStick.active && leftStick.x > deadzone;
   const stickThrust = leftStick.active && leftStick.y < -thrustThreshold;
   const thrust = stickThrust || boostPressed;
-  const fire = rightStick.active;
+  const fire = Boolean(firePressed);
 
   return { left, right, thrust, fire };
 }
@@ -323,10 +324,50 @@ function buildOverlayCss(): string {
   pointer-events: none;
 }
 
-.sb-stick-right {
+.sb-btn-fire {
+  position: absolute;
   right: var(--sb-pad-x);
   bottom: var(--sb-pad-bottom);
+  width: var(--sb-stick-size);
+  height: var(--sb-stick-size);
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, var(--sb-ring-inner), var(--sb-ring-bg) 68%);
+  border: 2px solid var(--sb-ring-border);
+  color: var(--sb-ink);
+  text-shadow: 0 1px 3px var(--sb-ink-shadow), 0 0 6px var(--sb-ink-shadow);
+  font-family: inherit;
+  font-size: clamp(13px, 2.8vmin, 16px);
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
   pointer-events: auto;
+  touch-action: none;
+  box-sizing: border-box;
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  box-shadow:
+    inset 0 0 0 1px var(--sb-ring-inner),
+    0 6px 20px rgba(0, 0, 0, 0.24);
+  transition: transform 80ms ease, border-color 80ms ease, background 80ms ease, box-shadow 80ms ease;
+}
+
+.sb-btn-fire[data-pressed="true"] {
+  transform: scale(0.93);
+  background: radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.36), var(--sb-puck-active) 72%);
+  border-color: var(--sb-accent);
+  box-shadow:
+    inset 0 0 16px var(--sb-accent-soft),
+    0 0 18px var(--sb-glow);
+}
+
+.sb-btn-fire-label {
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
 }
 
 .sb-stick-svg {
@@ -381,8 +422,9 @@ function buildOverlayCss(): string {
   transition: opacity 80ms ease;
 }
 
-.sb-stick-shell[data-active="true"] .sb-stick-fire-ring {
+.sb-btn-fire[data-pressed="true"] .sb-stick-fire-ring {
   opacity: 0.95;
+  filter: drop-shadow(0 0 5px var(--sb-glow));
 }
 
 .sb-stick-tag {
@@ -398,12 +440,6 @@ function buildOverlayCss(): string {
 
 .sb-stick-thrust-tag {
   top: 7px;
-  left: 50%;
-  transform: translateX(-50%);
-}
-
-.sb-stick-fire-tag {
-  bottom: 9px;
   left: 50%;
   transform: translateX(-50%);
 }
@@ -625,14 +661,14 @@ function buildLeftStickSvg(): SVGSVGElement {
   return svg;
 }
 
-function buildRightStickSvg(): SVGSVGElement {
+function buildFireButtonSvg(): SVGSVGElement {
   const svg = createSvgElement('svg', {
     class: 'sb-stick-svg',
     viewBox: '0 0 120 120',
     'aria-hidden': 'true',
   });
 
-  // Combat fire halo ring
+  // Static combat fire halo ring
   svg.appendChild(
     createSvgElement('circle', {
       class: 'sb-stick-fire-ring',
@@ -642,12 +678,12 @@ function buildRightStickSvg(): SVGSVGElement {
     }),
   );
 
-  // Diagonal tactical reticle ticks
+  // Subtle tactical reticle ticks
   for (const [x1, y1, x2, y2] of [
-    ['60', '18', '60', '28'],
-    ['60', '92', '60', '102'],
-    ['18', '60', '28', '60'],
-    ['92', '60', '102', '60'],
+    ['60', '16', '60', '26'],
+    ['60', '94', '60', '104'],
+    ['16', '60', '26', '60'],
+    ['94', '60', '104', '60'],
   ]) {
     svg.appendChild(
       createSvgElement('line', {
@@ -664,8 +700,8 @@ function buildRightStickSvg(): SVGSVGElement {
 }
 
 /**
- * Palette-reactive frosted translucent dual game sticks overlay for mobile,
- * tablet, and touchscreen/Tesla play.
+ * Palette-reactive frosted translucent flight stick + static pressable FIRE/BOOST
+ * buttons overlay for mobile, tablet, and touchscreen/Tesla play.
  *
  * Strictly hidden (`display: none`, `data-visible="false"`) until `setVisible(true)`.
  */
@@ -678,19 +714,16 @@ export class TouchControlsOverlay {
   private mode: 'flight' | 'menu' = 'menu';
 
   private leftStick: TouchStickVector = neutralStick();
-  private rightStick: TouchStickVector = neutralStick();
+  private firePressed = false;
   private boostPressed = false;
 
   private leftPointerId: number | null = null;
-  private rightPointerId: number | null = null;
+  private firePointerId: number | null = null;
   private boostPointerId: number | null = null;
 
   private leftOriginX = 0;
   private leftOriginY = 0;
   private leftMaxRadius = DEFAULT_STICK_MAX_RADIUS;
-  private rightOriginX = 0;
-  private rightOriginY = 0;
-  private rightMaxRadius = DEFAULT_STICK_MAX_RADIUS;
 
   private pendingCommands: ControllerMenuCommand[] = [];
   private activeMenuDir: MenuDirection | null = null;
@@ -701,8 +734,7 @@ export class TouchControlsOverlay {
   private leftZone: HTMLElement | null = null;
   private leftShell: HTMLElement | null = null;
   private leftPuck: HTMLElement | null = null;
-  private rightShell: HTMLElement | null = null;
-  private rightPuck: HTMLElement | null = null;
+  private fireBtn: HTMLButtonElement | null = null;
   private boostBtn: HTMLButtonElement | null = null;
   private pauseBtn: HTMLButtonElement | null = null;
   private menuCluster: HTMLElement | null = null;
@@ -808,7 +840,7 @@ export class TouchControlsOverlay {
     }
     return stickVectorToFlightInput(
       this.leftStick,
-      this.rightStick,
+      this.firePressed,
       this.boostPressed,
     );
   }
@@ -852,7 +884,7 @@ export class TouchControlsOverlay {
       paused: this.paused,
       flightInput: this.getFlightInput(),
       leftStick: { ...this.leftStick },
-      rightStick: { ...this.rightStick },
+      firePressed: this.firePressed,
       boostPressed: this.boostPressed,
     };
   }
@@ -863,10 +895,10 @@ export class TouchControlsOverlay {
 
   public resetInputs(): void {
     this.leftPointerId = null;
-    this.rightPointerId = null;
+    this.firePointerId = null;
     this.boostPointerId = null;
     this.leftStick = neutralStick();
-    this.rightStick = neutralStick();
+    this.firePressed = false;
     this.boostPressed = false;
     this.activeMenuDir = null;
     this.menuRepeatNextMs = 0;
@@ -891,8 +923,7 @@ export class TouchControlsOverlay {
     this.leftZone = null;
     this.leftShell = null;
     this.leftPuck = null;
-    this.rightShell = null;
-    this.rightPuck = null;
+    this.fireBtn = null;
     this.boostBtn = null;
     this.pauseBtn = null;
     this.menuCluster = null;
@@ -943,7 +974,7 @@ export class TouchControlsOverlay {
     leftZone.appendChild(leftShell);
     root.appendChild(leftZone);
 
-    // --- Right Flight Zone (Combat Fire Stick + Ergonomic BOOST button) ---
+    // --- Right Flight Zone (Static Pressable FIRE button + Ergonomic BOOST button) ---
     const rightZone = document.createElement('div');
     rightZone.className = 'sb-touch-zone-right sb-touch-flight-only';
 
@@ -956,24 +987,21 @@ export class TouchControlsOverlay {
     boostBtn.textContent = 'BOOST';
     rightZone.appendChild(boostBtn);
 
-    const rightShell = document.createElement('div');
-    rightShell.className = 'sb-stick-shell sb-stick-right';
-    rightShell.setAttribute('data-testid', 'touch-stick-right');
-    rightShell.setAttribute('data-active', 'false');
+    const fireBtn = document.createElement('button');
+    fireBtn.type = 'button';
+    fireBtn.className = 'sb-btn-fire';
+    fireBtn.setAttribute('data-testid', 'touch-btn-fire');
+    fireBtn.setAttribute('data-pressed', 'false');
+    fireBtn.setAttribute('aria-label', 'Fire');
 
-    rightShell.appendChild(buildRightStickSvg());
+    fireBtn.appendChild(buildFireButtonSvg());
 
-    const fireTag = document.createElement('span');
-    fireTag.className = 'sb-stick-tag sb-stick-fire-tag';
-    fireTag.textContent = 'FIRE';
-    rightShell.appendChild(fireTag);
+    const fireLabel = document.createElement('span');
+    fireLabel.className = 'sb-btn-fire-label';
+    fireLabel.textContent = 'FIRE';
+    fireBtn.appendChild(fireLabel);
 
-    const rightPuck = document.createElement('div');
-    rightPuck.className = 'sb-stick-puck';
-    rightPuck.setAttribute('data-testid', 'touch-puck-right');
-    rightShell.appendChild(rightPuck);
-
-    rightZone.appendChild(rightShell);
+    rightZone.appendChild(fireBtn);
     root.appendChild(rightZone);
 
     // --- Top-Right Flight Pause Pill ---
@@ -994,8 +1022,7 @@ export class TouchControlsOverlay {
     this.leftZone = leftZone;
     this.leftShell = leftShell;
     this.leftPuck = leftPuck;
-    this.rightShell = rightShell;
-    this.rightPuck = rightPuck;
+    this.fireBtn = fireBtn;
     this.boostBtn = boostBtn;
     this.pauseBtn = pauseBtn;
     this.menuCluster = menuCluster;
@@ -1090,39 +1117,18 @@ export class TouchControlsOverlay {
       this.renderStickVisuals();
     };
 
-    // --- Right Stick Handling (Fire combat stick) ---
-    const startRight = (id: number, clientX: number, clientY: number): void => {
-      if (this.rightPointerId !== null && this.rightPointerId !== id) return;
-      if (!this.rightShell) return;
-
-      this.rightPointerId = id;
-      const rect = this.rightShell.getBoundingClientRect();
-      const radius = Math.max(40, (rect.width || 120) * 0.5);
-      this.rightOriginX = rect.left + rect.width * 0.5;
-      this.rightOriginY = rect.top + rect.height * 0.5;
-      this.rightMaxRadius = Math.max(24, radius * 0.52);
-      this.rightStick = computeStickDeflection(
-        clientX - this.rightOriginX,
-        clientY - this.rightOriginY,
-        this.rightMaxRadius,
-      );
+    // --- Static Pressable Fire Button ---
+    const startFire = (id: number): void => {
+      if (this.firePointerId !== null && this.firePointerId !== id) return;
+      this.firePointerId = id;
+      this.firePressed = true;
       this.renderStickVisuals();
     };
 
-    const moveRight = (id: number, clientX: number, clientY: number): void => {
-      if (this.rightPointerId !== id) return;
-      this.rightStick = computeStickDeflection(
-        clientX - this.rightOriginX,
-        clientY - this.rightOriginY,
-        this.rightMaxRadius,
-      );
-      this.renderStickVisuals();
-    };
-
-    const endRight = (id: number): void => {
-      if (this.rightPointerId !== id) return;
-      this.rightPointerId = null;
-      this.rightStick = neutralStick();
+    const endFire = (id: number): void => {
+      if (this.firePointerId !== id) return;
+      this.firePointerId = null;
+      this.firePressed = false;
       this.renderStickVisuals();
     };
 
@@ -1180,28 +1186,17 @@ export class TouchControlsOverlay {
       }
 
       addListener(
-        this.rightShell,
+        this.fireBtn,
         'pointerdown',
         (ev) => {
           const e = ev as PointerEvent;
           e.preventDefault();
           try {
-            this.rightShell?.setPointerCapture?.(e.pointerId);
+            this.fireBtn?.setPointerCapture?.(e.pointerId);
           } catch {
             // Ignore synthetic pointer capture errors
           }
-          startRight(e.pointerId, e.clientX, e.clientY);
-        },
-        { passive: false },
-      );
-      addListener(
-        this.rightShell,
-        'pointermove',
-        (ev) => {
-          const e = ev as PointerEvent;
-          if (this.rightPointerId !== e.pointerId) return;
-          e.preventDefault();
-          moveRight(e.pointerId, e.clientX, e.clientY);
+          startFire(e.pointerId);
         },
         { passive: false },
       );
@@ -1210,9 +1205,9 @@ export class TouchControlsOverlay {
         'pointercancel',
         'lostpointercapture',
       ] as const) {
-        addListener(this.rightShell, endType, (ev) => {
+        addListener(this.fireBtn, endType, (ev) => {
           const e = ev as PointerEvent;
-          endRight(e.pointerId);
+          endFire(e.pointerId);
         });
       }
 
@@ -1290,37 +1285,22 @@ export class TouchControlsOverlay {
       }
 
       addListener(
-        this.rightShell,
+        this.fireBtn,
         'touchstart',
         (ev) => {
           const e = ev as TouchEvent;
           e.preventDefault();
           const t = e.changedTouches[0];
-          if (t) startRight(t.identifier, t.clientX, t.clientY);
-        },
-        { passive: false },
-      );
-      addListener(
-        this.rightShell,
-        'touchmove',
-        (ev) => {
-          const e = ev as TouchEvent;
-          for (let i = 0; i < e.changedTouches.length; i++) {
-            const t = e.changedTouches[i]!;
-            if (t.identifier === this.rightPointerId) {
-              e.preventDefault();
-              moveRight(t.identifier, t.clientX, t.clientY);
-            }
-          }
+          if (t) startFire(t.identifier);
         },
         { passive: false },
       );
       for (const endType of ['touchend', 'touchcancel'] as const) {
-        addListener(this.rightShell, endType, (ev) => {
+        addListener(this.fireBtn, endType, (ev) => {
           const e = ev as TouchEvent;
           for (let i = 0; i < e.changedTouches.length; i++) {
             const t = e.changedTouches[i]!;
-            endRight(t.identifier);
+            endFire(t.identifier);
           }
         });
       }
@@ -1459,16 +1439,11 @@ export class TouchControlsOverlay {
         : 'translate3d(0px, 0px, 0)';
     }
 
-    if (this.rightShell && this.rightPuck) {
-      const rx = this.rightStick.x * this.rightMaxRadius;
-      const ry = this.rightStick.y * this.rightMaxRadius;
-      this.rightShell.setAttribute(
-        'data-active',
-        this.rightStick.active ? 'true' : 'false',
+    if (this.fireBtn) {
+      this.fireBtn.setAttribute(
+        'data-pressed',
+        this.firePressed ? 'true' : 'false',
       );
-      this.rightPuck.style.transform = this.rightStick.active
-        ? `translate3d(${rx.toFixed(1)}px, ${ry.toFixed(1)}px, 0)`
-        : 'translate3d(0px, 0px, 0)';
     }
 
     if (this.boostBtn) {

@@ -31,7 +31,7 @@ Open `http://127.0.0.1:5173/`.
 |---|---|---|---|---|
 | **Thrust** | `Up` / `W` | P1 `W` · P2 `Up` | `A`/`Cross`, `RT`/`R2`, D-Pad Up, or Left Stick Up | Left Translucent Stick Up or `BOOST` pad |
 | **Pitch Left / Right** | `Left` / `Right` or `A` / `D` | P1 `A`/`D` · P2 `Left`/`Right` | Left Stick X, D-Pad, or HID Hat Switch | Left Translucent Stick Left / Right |
-| **Fire** | `Z` / `Space` / `J` | P1 `F`/`Space`/`LShift` · P2 `M`/`Num0`/`/`/`Enter` | `X`/`Square`, `B`/`Circle`, `Y`, `RB`/`LB`, `LT`/`L2` | Right Translucent Combat Stick (`FIRE`) |
+| **Fire** | `Z` / `Space` / `J` | P1 `F`/`Space`/`LShift` · P2 `M`/`Num0`/`/`/`Enter` | `X`/`Square`, `B`/`Circle`, `Y`, `RB`/`LB`, `LT`/`L2` | Static Pressable `FIRE` button |
 | **Hangar & Mod Deck** | `Up`/`Down` rows, `Left`/`Right` cycle, `C` palette, `V` asset vault (`SKYBREAKER` ↔ `STEAM LOCAL`), `M` mode, `U` toggle `ALL UNLOCKED` ↔ `CAMPAIGN LOCKS`, `Tab` Mod Deck, `Enter`/`X` launch | Same | D-Pad / Stick (auto-repeat), `A` select, `Start` launch, `Select`/`View` Mod Deck, `Y` palette, `X` mode, `LB`/`RB` cycle, `B` back | Tap rows directly OR use Left Translucent Stick + `LAUNCH` / `CYCLE` / `MODS` buttons |
 | **Palette Studio** | `Up`/`Down` slot, `Q`/`E`/`Tab` R/G/B, `Left`/`Right` tune, `1`–`4` presets, `R` reset, `Enter` save, `Esc` back | Same | D-Pad / Stick slot & tune, `LB`/`RB` R/G/B, `Y` reset, `A`/`Start` save, `B` back | Left Stick slot & tune + `SAVE` / `RGB` / `BACK` buttons |
 | **Pause / Telemetry** | `P` / `Esc` pause (`H` Hangar), `` ` `` Parity Telemetry HUD | Same | `Start` pause/resume (auto-pauses on P1 disconnect), `Y` retry, `B` Hangar + dual-rumble haptics | Top-right `|| PAUSE` pill + Pause menu taps/buttons |

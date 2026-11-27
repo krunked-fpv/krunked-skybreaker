@@ -281,9 +281,6 @@ describe('Translucent stick deflection & flight input math', () => {
   });
 
   it('maps deadzone, steering, upward thrust, downward neutral healing, and simultaneous multi-touch combat', () => {
-    const idleRight = { x: 0, y: 0, active: false, magnitude: 0 };
-    const firingRight = { x: 0.1, y: 0.1, active: true, magnitude: 0.14 };
-
     // Inside deadzone -> neutral healing zone (all false)
     const neutral = stickVectorToFlightInput(
       {
@@ -292,7 +289,7 @@ describe('Translucent stick deflection & flight input math', () => {
         active: true,
         magnitude: 0.25,
       },
-      idleRight,
+      false,
       false,
     );
     expect(neutral).toEqual({
@@ -305,7 +302,7 @@ describe('Translucent stick deflection & flight input math', () => {
     // Pulling straight down does NOT trigger thrust (stays healing-safe)
     const downPull = stickVectorToFlightInput(
       { x: 0, y: 0.95, active: true, magnitude: 0.95 },
-      idleRight,
+      false,
       false,
     );
     expect(downPull).toEqual({
@@ -318,7 +315,7 @@ describe('Translucent stick deflection & flight input math', () => {
     // Hard left + upward thrust
     const upLeft = stickVectorToFlightInput(
       { x: -0.7, y: -0.6, active: true, magnitude: 0.92 },
-      idleRight,
+      false,
       false,
     );
     expect(upLeft).toEqual({
@@ -328,10 +325,10 @@ describe('Translucent stick deflection & flight input math', () => {
       fire: false,
     });
 
-    // Simultaneous multi-touch: right turn + dedicated BOOST button + right combat stick FIRE
+    // Simultaneous multi-touch: right turn + dedicated BOOST button + static pressable FIRE button
     const multiTouch = stickVectorToFlightInput(
       { x: 0.8, y: 0.1, active: true, magnitude: 0.81 },
-      firingRight,
+      true,
       true,
     );
     expect(multiTouch).toEqual({
@@ -366,6 +363,7 @@ describe('Translucent stick deflection & flight input math', () => {
       thrust: false,
       fire: false,
     });
+    expect(overlay.getSnapshot().firePressed).toBe(false);
 
     overlay.updateContext({
       phase: 'playing',
@@ -377,6 +375,7 @@ describe('Translucent stick deflection & flight input math', () => {
     overlay.setVisible(true);
     expect(overlay.isVisible()).toBe(true);
     expect(overlay.getSnapshot().mode).toBe('flight');
+    expect(overlay.getSnapshot().firePressed).toBe(false);
     expect(overlay.drainCommands(1000)).toEqual([]);
 
     overlay.updateContext({
@@ -389,6 +388,176 @@ describe('Translucent stick deflection & flight input math', () => {
     expect(overlay.getSnapshot().mode).toBe('menu');
 
     overlay.dispose();
+  });
+
+  it('renders FIRE as a static pressable button (no right stick/puck) and handles press, slide, multi-pointer, cancel, blur, and mode switch cleanly', () => {
+    class FakeElement extends FakeEventTarget {
+      public readonly tagName: string;
+      public className = '';
+      public type = '';
+      public textContent = '';
+      public parentElement: FakeElement | null = null;
+      public children: FakeElement[] = [];
+      public attributes = new Map<string, string>();
+      public style: {
+        display: string;
+        transform: string;
+        vars: Record<string, string>;
+        setProperty: (k: string, v: string) => void;
+      } = {
+        display: '',
+        transform: '',
+        vars: {},
+        setProperty(k: string, v: string) {
+          this.vars[k] = v;
+        },
+      };
+      public setPointerCapture = vi.fn();
+
+      constructor(tag: string) {
+        super();
+        this.tagName = tag.toUpperCase();
+      }
+      setAttribute(name: string, value: string): void {
+        this.attributes.set(name, value);
+      }
+      getAttribute(name: string): string | null {
+        return this.attributes.get(name) ?? null;
+      }
+      appendChild(child: FakeElement): FakeElement {
+        child.parentElement = this;
+        this.children.push(child);
+        return child;
+      }
+      removeChild(child: FakeElement): FakeElement {
+        const idx = this.children.indexOf(child);
+        if (idx >= 0) this.children.splice(idx, 1);
+        child.parentElement = null;
+        return child;
+      }
+      querySelector(): FakeElement | null {
+        return null;
+      }
+      getBoundingClientRect() {
+        return { left: 420, top: 240, width: 120, height: 120, right: 540, bottom: 360 };
+      }
+    }
+
+    const findByTestId = (root: FakeElement, id: string): FakeElement | null => {
+      if (root.getAttribute('data-testid') === id) return root;
+      for (const ch of root.children) {
+        const hit = findByTestId(ch, id);
+        if (hit) return hit;
+      }
+      return null;
+    };
+
+    const fakeHead = new FakeElement('head');
+    const fakeBody = new FakeElement('body');
+    const fakeDocument = Object.assign(new FakeEventTarget(), {
+      head: fakeHead,
+      body: fakeBody,
+      hidden: false,
+      createElement: (tag: string) => new FakeElement(tag),
+      createElementNS: (_ns: string, tag: string) => new FakeElement(tag),
+    });
+    const fakeWindow = Object.assign(new FakeEventTarget(), {
+      PointerEvent: function PointerEvent() {},
+    });
+
+    const origDocument = globalThis.document;
+    const origWindow = globalThis.window;
+    Object.defineProperty(globalThis, 'document', { value: fakeDocument, configurable: true });
+    Object.defineProperty(globalThis, 'window', { value: fakeWindow, configurable: true });
+
+    try {
+      const overlay = new TouchControlsOverlay(fakeBody as unknown as HTMLElement);
+      overlay.setVisible(true);
+      overlay.updateContext({
+        phase: 'playing',
+        paused: false,
+        modDeckOpen: false,
+        paletteStudioOpen: false,
+        palette: PALETTES[0]!,
+      });
+
+      const root = overlay.getElement() as unknown as FakeElement;
+      expect(root).not.toBeNull();
+
+      // Static pressable button present; draggable right stick & puck must NOT exist
+      const fireBtn = findByTestId(root, 'touch-btn-fire');
+      expect(fireBtn).not.toBeNull();
+      expect(fireBtn!.tagName).toBe('BUTTON');
+      expect(fireBtn!.getAttribute('aria-label')).toBe('Fire');
+      expect(fireBtn!.getAttribute('data-pressed')).toBe('false');
+      expect(findByTestId(root, 'touch-stick-right')).toBeNull();
+      expect(findByTestId(root, 'touch-puck-right')).toBeNull();
+
+      const mkEv = (pointerId: number, clientX = 480, clientY = 300) => ({
+        pointerId,
+        clientX,
+        clientY,
+        preventDefault: vi.fn(),
+      });
+
+      // Press down -> fire active, data-pressed=true
+      fireBtn!.emit('pointerdown', mkEv(7, 480, 300));
+      expect(overlay.getSnapshot().firePressed).toBe(true);
+      expect(overlay.getFlightInput().fire).toBe(true);
+      expect(fireBtn!.getAttribute('data-pressed')).toBe('true');
+
+      // Sliding across button does NOT release fire and applies zero joystick transform
+      fireBtn!.emit('pointermove', mkEv(7, 540, 260));
+      expect(overlay.getSnapshot().firePressed).toBe(true);
+      expect(overlay.getFlightInput().fire).toBe(true);
+      expect(fireBtn!.style.transform).toBe('');
+
+      // Unrelated pointer release does NOT release held fire
+      fireBtn!.emit('pointerup', mkEv(99));
+      expect(overlay.getSnapshot().firePressed).toBe(true);
+
+      // Owning pointer release clears fire cleanly
+      fireBtn!.emit('pointerup', mkEv(7));
+      expect(overlay.getSnapshot().firePressed).toBe(false);
+      expect(overlay.getFlightInput().fire).toBe(false);
+      expect(fireBtn!.getAttribute('data-pressed')).toBe('false');
+
+      // pointercancel & lostpointercapture both release cleanly
+      fireBtn!.emit('pointerdown', mkEv(8));
+      expect(overlay.getSnapshot().firePressed).toBe(true);
+      fireBtn!.emit('pointercancel', mkEv(8));
+      expect(overlay.getSnapshot().firePressed).toBe(false);
+
+      fireBtn!.emit('pointerdown', mkEv(9));
+      expect(overlay.getSnapshot().firePressed).toBe(true);
+      fireBtn!.emit('lostpointercapture', mkEv(9));
+      expect(overlay.getSnapshot().firePressed).toBe(false);
+
+      // Window blur releases held fire cleanly
+      fireBtn!.emit('pointerdown', mkEv(10));
+      expect(overlay.getSnapshot().firePressed).toBe(true);
+      fakeWindow.emit('blur');
+      expect(overlay.getSnapshot().firePressed).toBe(false);
+      expect(fireBtn!.getAttribute('data-pressed')).toBe('false');
+
+      // Mode switch (flight -> hangar menu) releases held fire cleanly
+      fireBtn!.emit('pointerdown', mkEv(11));
+      expect(overlay.getSnapshot().firePressed).toBe(true);
+      overlay.updateContext({
+        phase: 'hangar',
+        paused: false,
+        modDeckOpen: false,
+        paletteStudioOpen: false,
+        palette: PALETTES[0]!,
+      });
+      expect(overlay.getSnapshot().firePressed).toBe(false);
+      expect(overlay.getFlightInput().fire).toBe(false);
+
+      overlay.dispose();
+    } finally {
+      Object.defineProperty(globalThis, 'document', { value: origDocument, configurable: true });
+      Object.defineProperty(globalThis, 'window', { value: origWindow, configurable: true });
+    }
   });
 });
 

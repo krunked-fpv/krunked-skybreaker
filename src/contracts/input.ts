@@ -70,7 +70,7 @@ export interface TouchControlsSnapshot {
   paused: boolean;
   flightInput: InputState;
   leftStick: TouchStickVector;
-  rightStick: TouchStickVector;
+  firePressed: boolean;
   boostPressed: boolean;
 }
 
