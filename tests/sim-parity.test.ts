@@ -2301,6 +2301,39 @@ describe('Deterministic 60Hz Simulation Parity', () => {
     expect(assistFire.survivedCap).toBe(0);
     expect(assistFire.avgSec).toBeLessThan(45);
     expect(assistFire.avgSec).toBeGreaterThan(normalFire.avgSec);
+
+    // 7. Enemy combat hits interrupt active cease-fire healing and pause repair while combat mercy i-frames (> 6 ticks) remain active
+    const simHealGate = new Simulation(data);
+    launchToPlaying(simHealGate, { weapon: 0, body: 1, engine: 4 }, 'normal', 2505);
+    simHealGate.damagePlayer(10);
+    // Advance cease-fire until active healing engages
+    for (let i = 0; i < 14; i++) {
+      simHealGate.step(IDLE_INPUT);
+    }
+    expect(simHealGate.getSnapshot().player.healing).toBe(true);
+    // Land a single enemy Fighter shot while player is NOT firing
+    const hgPlayer = simHealGate.getSnapshot().player;
+    const hgShooter = simHealGate.spawnEnemy('Fighter', hgPlayer.x, hgPlayer.y + 55);
+    hgShooter.angleDeg = -90;
+    hgShooter.vx = 0;
+    hgShooter.vy = -5;
+    hgShooter.fireTimer = 0;
+    let hitLanded = false;
+    for (let t = 0; t < 20; t++) {
+      const s = simHealGate.step(IDLE_INPUT);
+      if (s.player.flashTicks >= 14) {
+        hitLanded = true;
+        hgShooter.active = false;
+        expect(s.player.healing).toBe(false);
+        break;
+      }
+    }
+    expect(hitLanded).toBe(true);
+    // While combat mercy i-frames remain > 6 ticks, cease-fire healing stays paused
+    while (simHealGate.getSnapshot().player.flashTicks > 6) {
+      const s = simHealGate.step(IDLE_INPUT);
+      expect(s.player.healing).toBe(false);
+    }
   });
 
   it('26. Elastic depth-progressive water bobber & upper-cloud ceiling rubberband physics', () => {

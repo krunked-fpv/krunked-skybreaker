@@ -833,7 +833,7 @@ describe('100-Playtester Act I + Act II Bug-Squashing Gauntlet', () => {
       });
       const start = launchToPlaying(sim, { weapon: 7, body: 7, engine: 7 }, 'normal', 20017);
       expect(start.player.planeName).toBe('VAMPIRE FLAKVECTOR');
-      const carrier = sim.spawnEnemy('SkyCarrier', start.player.x + 80);
+      const carrier = sim.spawnEnemy('SkyCarrier', start.player.x + 220);
       expect(carrier.maxHealth).toBe(750);
 
       // Verify Vampire lifesteal while holding fire: true

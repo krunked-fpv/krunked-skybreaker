@@ -3615,6 +3615,43 @@ describe('Renderer Visual & UI Regression Contracts', () => {
     const overSnap = makeSnapshot({ phase: 'gameover', assistMode: true });
     renderer.render(overSnap, overSnap, 0, null, 2.0);
 
+    // Fallback WebGL2Renderer.drawMenuPass (without external HangarHudPass) must also keep
+    // [E] ASSIST at (26, 5), keep DAILY out of the Assist tap box, and show +35% HULL copy.
+    renderer.setHangarHudPass(null);
+    const fallbackTexts: Array<{ text: string; x: number; y: number }> = [];
+    const drawBitmapSpy = vi.spyOn(
+      renderer as unknown as {
+        drawBitmapText: (
+          gl: unknown,
+          font: unknown,
+          text: string,
+          x: number,
+          y: number,
+          scale: number,
+          align: unknown,
+          color: unknown,
+        ) => void;
+      },
+      'drawBitmapText',
+    );
+    const origDrawBitmap = drawBitmapSpy.getMockImplementation();
+    drawBitmapSpy.mockImplementation((glArg, font, text, x, y, scale, align, color) => {
+      fallbackTexts.push({ text, x, y });
+      origDrawBitmap?.(glArg, font, text, x, y, scale, align, color);
+    });
+    renderer.render(hangarSnap, hangarSnap, 0, ui, 2.5);
+    drawBitmapSpy.mockRestore();
+
+    const fbAssist = fallbackTexts.find(
+      (d) => d.text === '[E] ASSIST: ON' && d.x === 26 && d.y <= 22,
+    );
+    const fbDaily = fallbackTexts.find((d) => d.text === 'DAILY 20261127');
+    expect(fbAssist).toBeDefined();
+    expect(fbDaily).toBeDefined();
+    expect(fbDaily!.x !== fbAssist!.x || fbDaily!.y !== fbAssist!.y).toBe(true);
+    expect(fallbackTexts.some((d) => d.text.includes('NORMAL + ASSIST'))).toBe(true);
+    expect(fallbackTexts.some((d) => d.text.includes('+35% HULL'))).toBe(true);
+
     expect(renderer.getFrameMetrics().webglErrors).toBe(0);
     renderer.dispose();
   });

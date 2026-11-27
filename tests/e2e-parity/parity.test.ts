@@ -1201,13 +1201,23 @@ describe('Gate 3B: Adversarial Gameplay & Physics Mechanic Proofs (Live Steam Da
     // #60: [2,0,0] score 1000 points
     expect(pre.activeMissions.map((m) => m.id)).toEqual([0, 30, 60]);
 
-    // Let Ace Pilot Bot hunt a wave of Fighters to clear both Mission #0 (5 Fighters) and Mission #60 (1000 pts)
-    for (let i = 0; i < 12; i++) {
-      sim.spawnEnemy('Fighter', (i % 2 === 0 ? 1 : -1) * (140 + i * 24), -260 - (i % 3) * 40);
+    // Let Ace Pilot Bot hunt staggered Fighter waves to clear both Mission #0 (5 Fighters) and Mission #60 (1000 pts)
+    for (let i = 0; i < 6; i++) {
+      sim.spawnEnemy('Fighter', (i % 2 === 0 ? 1 : -1) * (180 + i * 28), -260 - (i % 3) * 40);
     }
     sim.setAutopilot(true);
     let sawPopup = false;
     for (let t = 0; t < 2400; t++) {
+      if (t === 180) {
+        const cur = sim.getSnapshot().player;
+        for (let i = 0; i < 6; i++) {
+          sim.spawnEnemy(
+            'Fighter',
+            cur.x + (i % 2 === 0 ? 1 : -1) * (200 + i * 28),
+            -260 - (i % 3) * 40,
+          );
+        }
+      }
       const s = sim.step(IDLE_INPUT);
       if (s.audioEvents.some((e) => e.cue === 'sndpopup')) sawPopup = true;
       if (

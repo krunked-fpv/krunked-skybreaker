@@ -3851,18 +3851,20 @@ export class WebGL2Renderer implements IRenderer {
       30 + (30 - medFont.spec.lineHeight * medScale) * 0.5,
     );
 
-    if (moddedEnabled && hangarUi.modFlags?.dailySeed && hangarUi.dailySeedId) {
-      this.drawBitmapText(
-        gl,
-        smallFont,
-        `DAILY ${hangarUi.dailySeedId}`,
-        26,
-        5,
-        1,
-        'left',
-        contrast.darkPanelAccent,
-      );
-    }
+    const assistActive = Boolean(hangarUi.assistMode ?? snapshot.assistMode);
+    const showDailyHeader = Boolean(
+      moddedEnabled && hangarUi.modFlags?.dailySeed && hangarUi.dailySeedId,
+    );
+    this.drawBitmapText(
+      gl,
+      smallFont,
+      assistActive ? '[E] ASSIST: ON' : '[E] ASSIST: OFF',
+      26,
+      5,
+      1,
+      'left',
+      assistActive ? contrast.darkPanelAccent : contrast.darkPanelFg,
+    );
 
     this.drawBitmapText(
       gl,
@@ -3923,25 +3925,26 @@ export class WebGL2Renderer implements IRenderer {
       return;
     }
 
+    const pBackLuma =
+      0.299 * previewPal.backcol[0] +
+      0.587 * previewPal.backcol[1] +
+      0.114 * previewPal.backcol[2];
+    const p1Luma =
+      0.299 * previewPal.colors[1][0] +
+      0.587 * previewPal.colors[1][1] +
+      0.114 * previewPal.colors[1][2];
+    const stageOverlayCol: RgbaTuple =
+      pBackLuma > 0.45 && p1Luma > 0.45
+        ? [0.08, 0.04, 0.12, 0.96]
+        : pBackLuma <= 0.45 && p1Luma <= 0.45
+          ? previewPal.colors[7]
+          : previewPal.colors[1];
+
     if (
       moddedEnabled &&
       hangarUi.modFlags &&
       hangarUi.modFlags.multiplayerMode !== 'solo'
     ) {
-      const pBackLuma =
-        0.299 * previewPal.backcol[0] +
-        0.587 * previewPal.backcol[1] +
-        0.114 * previewPal.backcol[2];
-      const p1Luma =
-        0.299 * previewPal.colors[1][0] +
-        0.587 * previewPal.colors[1][1] +
-        0.114 * previewPal.colors[1][2];
-      const p2PreviewCol: RgbaTuple =
-        pBackLuma > 0.45 && p1Luma > 0.45
-          ? [0.08, 0.04, 0.12, 0.96]
-          : pBackLuma <= 0.45 && p1Luma <= 0.45
-            ? previewPal.colors[7]
-            : previewPal.colors[1];
       this.drawBitmapText(
         gl,
         smallFont,
@@ -3950,7 +3953,20 @@ export class WebGL2Renderer implements IRenderer {
         151,
         1,
         'left',
-        p2PreviewCol,
+        stageOverlayCol,
+      );
+    }
+
+    if (showDailyHeader) {
+      this.drawBitmapText(
+        gl,
+        smallFont,
+        `DAILY ${hangarUi.dailySeedId}`,
+        554,
+        151,
+        1,
+        'right',
+        stageOverlayCol,
       );
     }
 
@@ -3965,7 +3981,8 @@ export class WebGL2Renderer implements IRenderer {
         : steamAvailable
           ? 'SKYBREAKER'
           : 'SKYBREAKER [STEAM N/A]';
-    const modeLabel = hangarUi.mode === 'sfmt' ? 'OVERDRIVE' : 'NORMAL';
+    const baseModeLabel = hangarUi.mode === 'sfmt' ? 'OVERDRIVE' : 'NORMAL';
+    const modeLabel = assistActive ? `${baseModeLabel} + ASSIST` : baseModeLabel;
     const isAllUnlocked = Boolean(hangarUi.allUnlocked);
     const arsenalEnabled = Boolean(
       moddedEnabled && hangarUi.modFlags?.arsenalBosses,
@@ -4005,8 +4022,10 @@ export class WebGL2Renderer implements IRenderer {
                 ? 'ORIGINAL SKYBREAKER ART & SYNTH\nOR LOCAL STEAM VAULT (IF OWNED)'
                 : hangarUi.activeRow === 'mode'
                   ? modeAvailable
-                    ? 'OVERDRIVE MODE - HIGH SPEED ACE WAVE'
-                    : 'COMPLETE 15 MISSIONS OR SINK A BLIMP TO UNLOCK'
+                    ? assistActive
+                      ? 'ASSIST ON: +35% HULL, MERCY I-FRAMES, FAST HEAL\nPRESS E TO TOGGLE ASSIST  -  LT/RT: MODE'
+                      : 'OVERDRIVE MODE - HIGH SPEED ACE WAVE\nPRESS E FOR ASSIST MODE (FORGIVING COMBAT)'
+                    : 'COMPLETE 15 MISSIONS OR SINK A BLIMP TO UNLOCK\nPRESS E FOR ASSIST MODE (FORGIVING COMBAT)'
                   : 'PRESS SPACE OR ENTER TO LAUNCH SORTIE';
 
     const rowDefs: {
