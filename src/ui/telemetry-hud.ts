@@ -33,7 +33,7 @@ export function formatTelemetryLines(data: TelemetryData): string[] {
   const lines = [
     `ASSETS: ${assetModeLabel} | PALETTE: ${frameMetrics.activePaletteId}`,
     `FPS: ${frameMetrics.fps.toFixed(1)} | AVG: ${frameMetrics.avgFrameDeltaMs.toFixed(2)}ms | P95: ${frameMetrics.p95FrameDeltaMs.toFixed(2)}ms | DC: ${frameMetrics.drawCalls} | GLERR: ${frameMetrics.webglErrors}`,
-    `SIM: t=${snapshot.tick} phase=${snapshot.phase} mode=${snapshot.mode}${snapshot.paused ? ' [PAUSED]' : ''} craft="${p.planeName}"`,
+    `SIM: t=${snapshot.tick} phase=${snapshot.phase} mode=${snapshot.mode}${snapshot.assistMode ? ' [ASSIST]' : ''}${snapshot.paused ? ' [PAUSED]' : ''} craft="${p.planeName}"`,
     `POS: (${p.x.toFixed(1)}, ${p.y.toFixed(1)}) VEL: (${p.vx.toFixed(2)}, ${p.vy.toFixed(2)}) spd=${speed.toFixed(2)} ang=${p.angleDeg.toFixed(1)}deg`,
     `HP: ${p.health.toFixed(1)}/${p.maxHealth} (${((p.health / Math.max(1, p.maxHealth)) * 100).toFixed(0)}%) heal=${p.healing ? 'Y' : 'N'} uw=${p.underwater ? 'Y' : 'N'} sp=${p.inSpace ? 'Y' : 'N'}`,
     `COMBAT: enemies=${snapshot.enemies.length} diff=${snapshot.difficulty.toFixed(0)} score=${snapshot.score} combo=x${snapshot.combo}`,

@@ -137,6 +137,7 @@ export function serializeReplay(recording: ReplayRecording): string {
       ? { dailyDateId: recording.dailyDateId }
       : {}),
     ...(recording.planeName !== undefined ? { planeName: recording.planeName } : {}),
+    ...(recording.assistMode ? { assistMode: true } : {}),
   };
   return JSON.stringify(canonical);
 }
@@ -174,6 +175,7 @@ export function parseReplayJson(raw: string): ReplayRecording | null {
     modFlags,
     dailyDateId,
     planeName,
+    assistMode,
   } = parsed;
 
   if (
@@ -286,6 +288,14 @@ export function parseReplayJson(raw: string): ReplayRecording | null {
     cleanPlaneName = planeName;
   }
 
+  let cleanAssistMode: boolean | undefined;
+  if (assistMode !== undefined) {
+    if (typeof assistMode !== 'boolean') {
+      return null;
+    }
+    cleanAssistMode = assistMode;
+  }
+
   return {
     seed,
     mode: mode as GameMode,
@@ -298,6 +308,7 @@ export function parseReplayJson(raw: string): ReplayRecording | null {
     ...(cleanModFlags !== undefined ? { modFlags: cleanModFlags } : {}),
     ...(cleanDailyDateId !== undefined ? { dailyDateId: cleanDailyDateId } : {}),
     ...(cleanPlaneName !== undefined ? { planeName: cleanPlaneName } : {}),
+    ...(cleanAssistMode !== undefined ? { assistMode: cleanAssistMode } : {}),
   };
 }
 
@@ -349,6 +360,10 @@ export class GhostRunner {
       MAX_REPLAY_FRAMES,
       Math.max(recording.frames.length, recording.finalTicks || 0, highestFrameTick),
     );
+
+    if (recording.assistMode) {
+      this.sim.setAssistMode(true);
+    }
 
     this.sim.launch(recording.loadout, recording.mode, recording.seed);
     const initSnap = this.sim.getSnapshot();

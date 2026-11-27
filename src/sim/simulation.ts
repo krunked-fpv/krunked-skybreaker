@@ -171,8 +171,24 @@ const ACT2_BOSS_SPECS: Partial<Record<EnemyKind, EnemySpec>> = {
 
 const COMBO_MAX = 20;
 const COMBO_MAX_TIMER = 180;
+const ASSIST_COMBO_MAX_TIMER = 240;
 const COMBO_WARNING_THRESHOLD = 60;
 const HEAL_DELAY_TICKS = 12;
+const ASSIST_HEAL_DELAY_TICKS = 6;
+const ASSIST_MAX_HEALTH_MULT = 1.5;
+const ASSIST_INCOMING_DMG_MULT = 0.65;
+const ASSIST_ENV_DMG_MULT = 0.5;
+const ASSIST_HEAL_SPEED_MULT = 1.6;
+const ASSIST_PASSIVE_HEAL_WAIT_TICKS = 120;
+const ASSIST_ENEMY_BULLET_SPEED_MULT = 0.8;
+const ASSIST_SPAWN_COOLDOWN_MULT = 1.3;
+const ASSIST_DIFFICULTY_INTERVAL_TICKS = 80;
+const COMBAT_IFRAMES_NORMAL = 26;
+const COMBAT_IFRAMES_SFMT = 20;
+const COMBAT_IFRAMES_ASSIST = 42;
+const COMBAT_IFRAMES_DOGFIGHT = 12;
+const ENEMY_BULLET_SPEED_SCALE = 0.85;
+const INITIAL_SPAWN_GRACE_TICKS = 55;
 const LASER_BEAM_LENGTH = 520;
 const NUKE_MAX_RADIUS = 420;
 const PLASMA_AOE_RADIUS = 80;
@@ -550,6 +566,7 @@ export class Simulation implements ISimulation {
   private profile: PilotProfile;
   private phase: SimPhase = 'hangar';
   private mode: GameMode = 'normal';
+  private assistMode = false;
   private paused = false;
   private autopilotEnabled = false;
   private seed = 1;
@@ -569,7 +586,7 @@ export class Simulation implements ISimulation {
   private comboWarning = false;
   private difficulty = 60;
   private difficultyTimer = 0;
-  private spawnTimer = 15;
+  private spawnTimer = INITIAL_SPAWN_GRACE_TICKS;
   private parallaxTimer = 60;
 
   private killsThisSortie = 0;
@@ -579,6 +596,7 @@ export class Simulation implements ISimulation {
   private continuousFireTicks = 0;
   private lastFirePressed = false;
   private lastPlayerHitTick = -1000;
+  private lastP2HitTick = -1000;
   private distinctKindsThisSortie = new Set<EnemyKind>();
   private sortieFinalized = false;
   private finalizedScoreAdded = 0;
@@ -793,7 +811,10 @@ export class Simulation implements ISimulation {
     const bodySpec: BodySpec = isUrauser
       ? { ...rawBodySpec, maxhealth: 120, healingspd: 0.01 }
       : { ...rawBodySpec };
-    const maxHealth = isUrauser ? 120 : bodySpec.maxhealth;
+    const baseMaxHealth = isUrauser ? 120 : bodySpec.maxhealth;
+    const maxHealth = this.assistMode
+      ? Math.round(baseMaxHealth * ASSIST_MAX_HEALTH_MULT)
+      : baseMaxHealth;
 
     return {
       weaponSpec,
@@ -1085,7 +1106,7 @@ export class Simulation implements ISimulation {
     this.comboWarning = false;
     this.difficulty = this.getSpawnCoordinator().initialDifficulty;
     this.difficultyTimer = 0;
-    this.spawnTimer = 15;
+    this.spawnTimer = INITIAL_SPAWN_GRACE_TICKS;
     this.parallaxTimer = 45;
     this.nextBossDifficulty = 160;
     this.bossWaveIndex = 0;
@@ -1097,6 +1118,7 @@ export class Simulation implements ISimulation {
     this.continuousFireTicks = 0;
     this.lastFirePressed = false;
     this.lastPlayerHitTick = -1000;
+    this.lastP2HitTick = -1000;
     this.distinctKindsThisSortie.clear();
     this.sortieFinalized = false;
     this.finalizedScoreAdded = 0;
@@ -1300,6 +1322,45 @@ export class Simulation implements ISimulation {
     this.profile.lastMode = mode;
   }
 
+  private getComboMaxTimer(): number {
+    return this.assistMode ? ASSIST_COMBO_MAX_TIMER : COMBO_MAX_TIMER;
+  }
+
+  private rescalePlayerMaxHealthForAssist(p: PlayerState): void {
+    const baseMax = p.isUrauser ? 120 : p.bodySpec.maxhealth;
+    const nextMax = this.assistMode
+      ? Math.round(baseMax * ASSIST_MAX_HEALTH_MULT)
+      : baseMax;
+    if (p.maxHealth === nextMax) return;
+    if (this.phase === 'hangar') {
+      p.maxHealth = nextMax;
+      p.health = nextMax;
+    } else if (p.alive) {
+      const ratio = p.maxHealth > 0 ? p.health / p.maxHealth : 1;
+      p.maxHealth = nextMax;
+      p.health = clamp(ratio * nextMax, 1, nextMax);
+    } else {
+      p.maxHealth = nextMax;
+    }
+  }
+
+  setAssistMode(enabled: boolean): void {
+    const next = Boolean(enabled);
+    if (this.assistMode === next) return;
+    this.assistMode = next;
+    this.rescalePlayerMaxHealthForAssist(this.player);
+    if (this.player2) {
+      this.rescalePlayerMaxHealthForAssist(this.player2);
+    }
+    if (this.comboTimer > this.getComboMaxTimer()) {
+      this.comboTimer = this.getComboMaxTimer();
+    }
+  }
+
+  isAssistMode(): boolean {
+    return this.assistMode;
+  }
+
   setPaused(paused: boolean): void {
     this.paused = paused;
   }
@@ -1353,6 +1414,7 @@ export class Simulation implements ISimulation {
     let fallFrames = 0;
     let surfaceTimer = 0;
     let fireTimer = 30;
+    let aiTimer = 0;
     let salvoCooldown = 30;
     let salvoRemaining = 0;
     let carrierLaunchTimer: number | undefined;
@@ -1360,7 +1422,13 @@ export class Simulation implements ISimulation {
     if (kind === 'Fighter') {
       const spd = spec.initvelocity || 8;
       vx = dirToPlayer * spd;
-      fireTimer = (spec.fireinterval || 20) + this.rng.range(0, spec.fireintervalrand || 40);
+      fireTimer = Math.max(
+        45,
+        (spec.fireinterval || 20) + this.rng.range(20, spec.fireintervalrand || 90),
+      );
+      aiTimer = Math.round(
+        (spec.airethinktimer || 60) + this.rng.range(0, spec.airethinktimerrand || 90),
+      );
       state = 'chase';
     } else if (kind === 'Jet') {
       const spd = spec.speed || spec.initvelocity || 20;
@@ -1371,7 +1439,7 @@ export class Simulation implements ISimulation {
       const spd = spec.initvelocity || 6;
       vx = dirToPlayer * spd;
       state = 'chase';
-      fireTimer = 45;
+      fireTimer = kind === 'LaserAce' ? 45 : 55;
       salvoRemaining = 0;
       this.emitAudio('sndacespawn', ex, ey);
     } else if (kind === 'Boat' || kind === 'BigBoat') {
@@ -1429,7 +1497,11 @@ export class Simulation implements ISimulation {
     }
 
     const gunAngleDeg =
-      (Math.atan2(this.player.y - ey, this.player.x - ex) * 180) / Math.PI;
+      kind === 'Boat' || kind === 'BigBoat' || kind === 'Dreadnought'
+        ? -90
+        : kind === 'Blimp' || kind === 'SkyCarrier'
+          ? 90
+          : (Math.atan2(this.player.y - ey, this.player.x - ex) * 180) / Math.PI;
 
     const entity: EnemyEntity = {
       id: this.nextEntityId++,
@@ -1446,7 +1518,7 @@ export class Simulation implements ISimulation {
       maxHealth: spec.health,
       active: true,
       state,
-      aiTimer: 0,
+      aiTimer,
       fireTimer,
       salvoRemaining,
       salvoCooldown,
@@ -2192,8 +2264,36 @@ export class Simulation implements ISimulation {
     }
 
     if (nowUnderwater) {
-      p.envWaterFactor = Math.min(1, p.envWaterFactor + engine.wateracceleration);
-      p.vy -= engine.waterforce * (0.6 + p.envWaterFactor);
+      const depth = Math.max(0, p.y - seaLevel);
+      // Elastic "bobber" buoyancy: resistance & upward restoring snap grow dramatically with depth
+      const depthScale = engine.waterproof ? 175 : 64;
+      const depthNorm = depth / depthScale;
+      const depthSpring = engine.waterproof
+        ? depthNorm * 0.55 + 0.4 * depthNorm * depthNorm
+        : depthNorm * 0.9 + 0.75 * depthNorm * depthNorm;
+
+      p.envWaterFactor = Math.min(
+        engine.waterproof ? 5.0 : 9.0,
+        p.envWaterFactor + engine.wateracceleration * (1 + depthNorm * 0.9),
+      );
+
+      // Hydrodynamic drag progressively brakes downward plunge the deeper you submerge
+      if (p.vy > 0) {
+        const plungeDrag = engine.waterproof
+          ? Math.max(0.84, 0.97 - depthNorm * 0.05)
+          : Math.max(0.72, 0.94 - depthNorm * 0.08);
+        p.vy *= plungeDrag;
+      }
+
+      const buoyancy =
+        engine.waterforce *
+        (0.75 + p.envWaterFactor + depthSpring * (engine.waterproof ? 0.65 : 1.55));
+      p.vy -= buoyancy;
+
+      const maxPopUp = engine.waterproof ? -10.5 : -13.0;
+      if (p.vy < maxPopUp) {
+        p.vy = maxPopUp;
+      }
 
       if (!engine.waterproof) {
         const diff = shortestAngleDiffDeg(p.angleDeg, -90);
@@ -2204,10 +2304,13 @@ export class Simulation implements ISimulation {
         p.angleDeg += Math.sign(diff) * rotStep;
 
         const hpRatio = p.maxHealth > 0 ? p.health / p.maxHealth : 1;
-        const waterDmg =
+        const rawWaterDmg =
           hpRatio < engine.waterlowhpperc
             ? engine.waterdmglowhp
             : engine.waterdmg;
+        const waterDmg = this.assistMode
+          ? rawWaterDmg * ASSIST_ENV_DMG_MULT
+          : rawWaterDmg;
         if (waterDmg > 0) {
           this.applyDamageToTargetPlayer(p, waterDmg, false);
         }
@@ -2226,13 +2329,46 @@ export class Simulation implements ISimulation {
     const nowInSpace = p.y < spaceLevel;
     p.inSpace = nowInSpace;
     if (nowInSpace) {
-      p.envSpaceFactor = Math.min(1, p.envSpaceFactor + engine.spaceacceleration);
-      p.vy += engine.spaceforce * (0.6 + p.envSpaceFactor);
+      const altAbove = Math.max(0, spaceLevel - p.y);
+      // Elastic upper-cloud ceiling rubberband: steeper downward restoring push the higher you climb
+      const altNorm = altAbove / 60;
+      const altSpring = altNorm * 0.9 + 0.75 * altNorm * altNorm;
+
+      p.envSpaceFactor = Math.min(
+        9.0,
+        p.envSpaceFactor + engine.spaceacceleration * (1 + altNorm * 0.9),
+      );
+
+      // Thin upper atmosphere progressively dampens upward velocity
+      if (p.vy < 0) {
+        const climbDrag = Math.max(0.72, 0.93 - altNorm * 0.08);
+        p.vy *= climbDrag;
+      }
+
+      const pushback =
+        engine.spaceforce * (0.75 + p.envSpaceFactor + altSpring * 1.55);
+      p.vy += pushback;
+      if (p.vy > 13.0) {
+        p.vy = 13.0;
+      }
+
+      // Gently tip nose downward once stalling inside the upper clouds
+      if (p.vy > -1.0) {
+        const downDiff = shortestAngleDiffDeg(p.angleDeg, 90);
+        if (Math.abs(downDiff) < 175) {
+          const rotStep = Math.min(Math.abs(downDiff), 2.0);
+          p.angleDeg += Math.sign(downDiff) * rotStep;
+        }
+      }
+
       const hpRatio = p.maxHealth > 0 ? p.health / p.maxHealth : 1;
-      const spaceDmg =
+      const rawSpaceDmg =
         hpRatio < engine.spacelowhpperc
           ? engine.spacedmglowhp
           : engine.spacedmg;
+      const spaceDmg = this.assistMode
+        ? rawSpaceDmg * ASSIST_ENV_DMG_MULT
+        : rawSpaceDmg;
       if (spaceDmg > 0) {
         this.applyDamageToTargetPlayer(p, spaceDmg, false);
       }
@@ -2344,16 +2480,24 @@ export class Simulation implements ISimulation {
       }
     }
 
-    if (input.fire || p.fireCooldown > 0) {
-      p.healing = false;
-      p.healingTicks = 0;
-      return;
-    }
-
     const canHeal =
       p.health < p.maxHealth &&
       (!p.underwater || p.engineSpec.waterproof) &&
       !p.inSpace;
+
+    if (input.fire || p.fireCooldown > 0) {
+      p.healing = false;
+      p.healingTicks = 0;
+      // Assist Mode gentle passive recovery while firing if unhit for 2s+ (stopping fire still heals 6.4x faster)
+      if (this.assistMode && canHeal) {
+        const lastHit = p === this.player ? this.lastPlayerHitTick : this.lastP2HitTick;
+        if (this.tick - lastHit >= ASSIST_PASSIVE_HEAL_WAIT_TICKS) {
+          const baseHeal = p.isUrauser ? 0.01 : p.bodySpec.healingspd;
+          p.health = Math.min(p.maxHealth, p.health + baseHeal * 0.25);
+        }
+      }
+      return;
+    }
 
     if (!canHeal) {
       p.healing = false;
@@ -2361,14 +2505,16 @@ export class Simulation implements ISimulation {
       return;
     }
 
+    const healDelay = this.assistMode ? ASSIST_HEAL_DELAY_TICKS : HEAL_DELAY_TICKS;
     p.healingTicks++;
-    if (p.healingTicks >= HEAL_DELAY_TICKS) {
+    if (p.healingTicks >= healDelay) {
       p.healing = true;
       const prevHp = p.health;
-      const healAmt = p.isUrauser ? 0.01 : p.bodySpec.healingspd;
+      const baseHeal = p.isUrauser ? 0.01 : p.bodySpec.healingspd;
+      const healAmt = this.assistMode ? baseHeal * ASSIST_HEAL_SPEED_MULT : baseHeal;
       p.health = Math.min(p.maxHealth, p.health + healAmt);
 
-      if (p.healingTicks === HEAL_DELAY_TICKS || p.healingTicks % 10 === 0) {
+      if (p.healingTicks === healDelay || p.healingTicks % 10 === 0) {
         if (p.health < p.maxHealth) {
           this.emitAudio('sndheal', p.x, p.y);
         }
@@ -2983,9 +3129,10 @@ export class Simulation implements ISimulation {
   private updateSpawnDirector(): void {
     const coord = this.getSpawnCoordinator();
 
-    // Difficulty increments every 60 ticks (1s)
+    // Difficulty increments every 60 ticks (1s) in standard/SFMT, or every 80 ticks in Assist Mode
+    const diffInterval = this.assistMode ? ASSIST_DIFFICULTY_INTERVAL_TICKS : 60;
     this.difficultyTimer++;
-    if (this.difficultyTimer >= 60) {
+    if (this.difficultyTimer >= diffInterval) {
       this.difficultyTimer = 0;
       for (const step of coord.increaseDifficulty) {
         if (this.difficulty < step.max) {
@@ -3082,7 +3229,13 @@ export class Simulation implements ISimulation {
     }
 
     this.spawnEnemy(kind);
-    this.spawnTimer = Math.max(14, Math.round(38 - Math.min(20, this.difficulty / 45)));
+    const baseSpawnCd = Math.max(
+      16,
+      Math.round(52 - Math.min(28, this.difficulty / 32)),
+    );
+    this.spawnTimer = this.assistMode
+      ? Math.round(baseSpawnCd * ASSIST_SPAWN_COOLDOWN_MULT)
+      : baseSpawnCd;
   }
 
   private seedInitialHorizonParallax(): void {
@@ -3347,11 +3500,32 @@ export class Simulation implements ISimulation {
     return this.player.alive || Boolean(this.player2?.alive);
   }
 
+  private isEnemyInFireViewport(
+    enemy: EnemyEntity,
+    targetPlayer: PlayerState,
+    marginX = 0,
+    marginY = 0,
+  ): boolean {
+    const inCamera =
+      Math.abs(enemy.x - this.cameraTargetX) <= 300 + marginX &&
+      Math.abs(enemy.y - this.cameraTargetY) <= 200 + marginY;
+    if (inCamera) return true;
+    if (!this.player2) return false;
+    return (
+      Math.abs(enemy.x - targetPlayer.x) <= 300 + marginX &&
+      Math.abs(enemy.y - targetPlayer.y) <= 200 + marginY
+    );
+  }
+
   private updateEnemies(): void {
     const specMap = this.getEnemyMap();
     const seaLevel = this.data.room.sealevel;
     const spaceLevel = this.data.room.spacelevel;
     const anyAlive = this.anyActivePlayerAlive();
+    const bulletSpeedMult =
+      ENEMY_BULLET_SPEED_SCALE *
+      (this.assistMode ? ASSIST_ENEMY_BULLET_SPEED_MULT : 1);
+    const fireIntervalMult = this.assistMode ? 1.25 : 1;
 
     for (const enemy of this.enemies) {
       if (!enemy.active) continue;
@@ -3376,18 +3550,26 @@ export class Simulation implements ISimulation {
 
       switch (enemy.kind) {
         case 'Fighter': {
-          const turnRate =
-            (spec.reaction || 0.3) * 8 + (spec.turnvariance || 3);
+          // Authentic dogfighter rethink cycle: alternates between pursuit and brief pass-through banks
+          enemy.aiTimer--;
+          if (enemy.aiTimer <= -22) {
+            enemy.aiTimer = Math.round(
+              (spec.airethinktimer || 60) +
+                this.rng.range(0, spec.airethinktimerrand || 90),
+            );
+          }
+          const baseTurnRate = (spec.reaction || 0.3) * 5 + 1.7;
+          const turnRate = enemy.aiTimer > 0 ? baseTurnRate : baseTurnRate * 0.35;
           const diff = shortestAngleDiffDeg(enemy.angleDeg, angleToPlayer);
           enemy.angleDeg += clamp(diff, -turnRate, turnRate);
 
           // Sea and space avoidance
           if (enemy.y > seaLevel - (spec.reactionseaheighta || 100)) {
             const upDiff = shortestAngleDiffDeg(enemy.angleDeg, -90);
-            enemy.angleDeg += clamp(upDiff, -turnRate * 1.4, turnRate * 1.4);
+            enemy.angleDeg += clamp(upDiff, -baseTurnRate * 1.6, baseTurnRate * 1.6);
           } else if (enemy.y < spaceLevel + (spec.reactionspaceheightoffseta || 100)) {
             const dnDiff = shortestAngleDiffDeg(enemy.angleDeg, 90);
-            enemy.angleDeg += clamp(dnDiff, -turnRate * 1.4, turnRate * 1.4);
+            enemy.angleDeg += clamp(dnDiff, -baseTurnRate * 1.6, baseTurnRate * 1.6);
           }
 
           const targetSpd =
@@ -3406,17 +3588,25 @@ export class Simulation implements ISimulation {
           if (this.phase === 'playing' && anyAlive) {
             if (enemy.fireTimer > 0) {
               enemy.fireTimer--;
-            } else if (dist > (spec.minfiredist || 40) && dist < 640) {
-              enemy.fireTimer =
-                (spec.fireinterval || 20) +
-                this.rng.range(0, spec.fireintervalrand || 90);
+            } else if (
+              dist > (spec.minfiredist || 40) &&
+              dist < 340 &&
+              this.isEnemyInFireViewport(enemy, targetPlayer, -6, -6) &&
+              Math.abs(shortestAngleDiffDeg(enemy.angleDeg, angleToPlayer)) <= 26
+            ) {
+              enemy.fireTimer = Math.round(
+                ((spec.fireinterval || 20) +
+                  this.rng.range(10, spec.fireintervalrand || 90)) *
+                  fireIntervalMult,
+              );
+              const shotAngle = enemy.angleDeg + this.rng.range(-4, 4);
               this.spawnEnemyBullet(
                 enemy.x,
                 enemy.y,
-                angleToPlayer,
-                spec.bulletspeed || 14,
+                shotAngle,
+                (spec.bulletspeed || 14) * bulletSpeedMult,
               );
-              this.spawnVisualParticle('fireFlash', enemy.x, enemy.y, angleToPlayer);
+              this.spawnVisualParticle('fireFlash', enemy.x, enemy.y, shotAngle);
             }
           }
           break;
@@ -3466,13 +3656,13 @@ export class Simulation implements ISimulation {
           ) {
             if (enemy.fireTimer > 0) {
               enemy.fireTimer--;
-            } else if (dist < 820) {
-              enemy.fireTimer = Math.max(1, spec.fireinterval);
+            } else if (dist < 460) {
+              enemy.fireTimer = Math.max(1, Math.round(spec.fireinterval * fireIntervalMult));
               this.spawnEnemyBullet(
                 enemy.x,
                 enemy.y,
                 angleToPlayer,
-                Math.max(5, spec.bulletspeed || 5),
+                Math.max(4, (spec.bulletspeed || 5) * (this.assistMode ? ASSIST_ENEMY_BULLET_SPEED_MULT : 1)),
               );
               this.spawnVisualParticle('fireFlash', enemy.x, enemy.y, angleToPlayer);
             }
@@ -3567,9 +3757,9 @@ export class Simulation implements ISimulation {
                       pl &&
                       pl.alive &&
                       pl.flashTicks <= 0 &&
-                      distPointToSegmentSq(pl.x, pl.y, enemy.x, enemy.y, lx2, ly2) <= 144
+                      distPointToSegmentSq(pl.x, pl.y, enemy.x, enemy.y, lx2, ly2) <= 100
                     ) {
-                      this.applyDamageToTargetPlayer(pl, 1.5, true);
+                      this.applyDamageToTargetPlayer(pl, 1.5, true, true);
                     }
                   }
                 }
@@ -3581,14 +3771,14 @@ export class Simulation implements ISimulation {
                 if (enemy.laserChargeTicks <= 0) {
                   enemy.laserChargeTicks = 0;
                   enemy.salvoRemaining = spec.bulletspersalvo || 60;
-                  enemy.fireTimer = 110;
+                  enemy.fireTimer = Math.round(115 * fireIntervalMult);
                   this.emitAudio('sndlaser', enemy.x, enemy.y);
                 }
               } else {
                 enemy.laserActive = false;
                 if (enemy.fireTimer > 0) {
                   enemy.fireTimer--;
-                } else if (dist < 600) {
+                } else if (dist < 420) {
                   enemy.gunAngleDeg = angleToPlayer;
                   enemy.laserChargeTicks = 24;
                   this.emitAudio('sndlaser', enemy.x, enemy.y, 0.42, 0.55);
@@ -3597,14 +3787,17 @@ export class Simulation implements ISimulation {
             } else {
               if (enemy.salvoRemaining > 0) {
                 if (enemy.salvoCooldown <= 0) {
-                  enemy.salvoCooldown = spec.bulletfireinterval || 3;
+                  enemy.salvoCooldown = Math.max(
+                    2,
+                    Math.round((spec.bulletfireinterval || 3) * (this.assistMode ? 1.35 : 1)),
+                  );
                   enemy.salvoRemaining--;
-                  const shotAngle = angleToPlayer + this.rng.range(-4, 4);
+                  const shotAngle = enemy.angleDeg + this.rng.range(-5, 5);
                   this.spawnEnemyBullet(
                     enemy.x,
                     enemy.y,
                     shotAngle,
-                    spec.bulletspeed || 20,
+                    (spec.bulletspeed || 20) * bulletSpeedMult,
                   );
                   this.spawnVisualParticle('fireFlash', enemy.x, enemy.y, shotAngle);
                 } else {
@@ -3612,10 +3805,14 @@ export class Simulation implements ISimulation {
                 }
               } else if (enemy.fireTimer > 0) {
                 enemy.fireTimer--;
-              } else if (dist < 620) {
+              } else if (
+                dist < 380 &&
+                this.isEnemyInFireViewport(enemy, targetPlayer, -4, -4) &&
+                Math.abs(shortestAngleDiffDeg(enemy.angleDeg, angleToPlayer)) <= 28
+              ) {
                 enemy.salvoRemaining = spec.bulletspersalvo || 12;
                 enemy.salvoCooldown = 0;
-                enemy.fireTimer = 85;
+                enemy.fireTimer = Math.round(95 * fireIntervalMult);
               }
             }
           } else {
@@ -3657,13 +3854,16 @@ export class Simulation implements ISimulation {
 
             if (enemy.salvoRemaining > 0) {
               if (enemy.fireTimer <= 0) {
-                enemy.fireTimer = spec.bulletfireinterval || 10;
+                enemy.fireTimer = Math.max(
+                  1,
+                  Math.round((spec.bulletfireinterval || 10) * (this.assistMode ? 1.25 : 1)),
+                );
                 enemy.salvoRemaining--;
                 this.spawnEnemyBullet(
                   enemy.x,
                   enemy.y - 8,
-                  enemy.gunAngleDeg + this.rng.range(-3, 3),
-                  spec.bulletspeed || 10,
+                  enemy.gunAngleDeg + this.rng.range(-3.5, 3.5),
+                  (spec.bulletspeed || 10) * bulletSpeedMult,
                 );
                 this.triggerEnemyGunRecoil(enemy);
                 const gr = (enemy.gunAngleDeg * Math.PI) / 180;
@@ -3693,16 +3893,21 @@ export class Simulation implements ISimulation {
               }
             } else if (enemy.salvoCooldown > 0) {
               enemy.salvoCooldown--;
-            } else if (dist < 720) {
+            } else if (
+              Math.abs(enemy.x - targetPlayer.x) < 350 &&
+              dist < (enemy.kind === 'BigBoat' ? 620 : 440)
+            ) {
               const numBoats = this.enemies.filter(
                 (b) => b.active && (b.kind === 'Boat' || b.kind === 'BigBoat'),
               ).length;
               enemy.salvoRemaining = spec.bulletspersalvo || 3;
               enemy.fireTimer = 0;
-              enemy.salvoCooldown =
-                (spec.firesalvotimer || 90) +
-                this.rng.range(0, spec.firesalvotimerrand || 120) +
-                numBoats * (spec.salvofirelimiterperboatmultiplier || 4);
+              enemy.salvoCooldown = Math.round(
+                ((spec.firesalvotimer || 90) +
+                  this.rng.range(0, spec.firesalvotimerrand || 120) +
+                  numBoats * (spec.salvofirelimiterperboatmultiplier || 4)) *
+                  fireIntervalMult,
+              );
             }
           }
           break;
@@ -3740,7 +3945,7 @@ export class Simulation implements ISimulation {
                   enemy.x - 75,
                   enemy.y - 16,
                   enemy.gunAngleDeg + this.rng.range(-4, 4),
-                  spec.bulletspeed || 12,
+                  (spec.bulletspeed || 12) * bulletSpeedMult,
                 );
                 this.triggerEnemyGunRecoil(enemy);
                 const gr = (enemy.gunAngleDeg * Math.PI) / 180;
@@ -3755,7 +3960,7 @@ export class Simulation implements ISimulation {
                     enemy.x + 75,
                     enemy.y - 16,
                     enemy.gunAngleDeg + this.rng.range(-4, 4),
-                    spec.bulletspeed || 12,
+                    (spec.bulletspeed || 12) * bulletSpeedMult,
                   );
                   this.spawnVisualParticle(
                     'EBigFlash',
@@ -3913,13 +4118,16 @@ export class Simulation implements ISimulation {
 
             if (enemy.salvoRemaining > 0) {
               if (enemy.fireTimer <= 0) {
-                enemy.fireTimer = spec.bulletfireinterval || 1;
+                enemy.fireTimer = Math.max(
+                  1,
+                  Math.round((spec.bulletfireinterval || 1) * (this.assistMode ? 1.5 : 1)),
+                );
                 enemy.salvoRemaining--;
                 this.spawnEnemyBullet(
                   enemy.x,
                   enemy.y + 24,
                   enemy.gunAngleDeg + this.rng.range(-12, 12),
-                  spec.bulletspeed || 10,
+                  (spec.bulletspeed || 10) * bulletSpeedMult,
                 );
                 this.triggerEnemyGunRecoil(enemy);
                 if (enemy.salvoRemaining % 2 === 0) {
@@ -3936,12 +4144,14 @@ export class Simulation implements ISimulation {
               }
             } else if (enemy.salvoCooldown > 0) {
               enemy.salvoCooldown--;
-            } else if (dist < 900) {
+            } else if (dist < 520) {
               enemy.salvoRemaining = spec.bulletspersalvo || 32;
               enemy.fireTimer = 0;
-              enemy.salvoCooldown =
-                (spec.firesalvotimer || 50) +
-                this.rng.range(0, spec.firesalvotimerrand || 30);
+              enemy.salvoCooldown = Math.round(
+                ((spec.firesalvotimer || 50) +
+                  this.rng.range(0, spec.firesalvotimerrand || 30)) *
+                  fireIntervalMult,
+              );
             }
           }
           break;
@@ -3990,7 +4200,7 @@ export class Simulation implements ISimulation {
                   enemy.x,
                   enemy.y + 24,
                   enemy.gunAngleDeg + this.rng.range(-8, 8),
-                  spec.bulletspeed || 11,
+                  (spec.bulletspeed || 11) * bulletSpeedMult,
                 );
                 this.triggerEnemyGunRecoil(enemy);
                 const toggle = (this.enemyTurretToggle.get(enemy.id) ?? 0) ^ 1;
@@ -4344,6 +4554,7 @@ export class Simulation implements ISimulation {
           : [this.player];
         for (const pl of candidates) {
           if (!pl.alive) continue;
+          const playerBulletHitRadius = 4.5 + proj.radius * 0.5;
           if (
             pl.flashTicks <= 0 &&
             distPointToSegmentSq(
@@ -4354,9 +4565,9 @@ export class Simulation implements ISimulation {
               proj.x,
               proj.y,
             ) <=
-              (8 + proj.radius) * (8 + proj.radius)
+              playerBulletHitRadius * playerBulletHitRadius
           ) {
-            this.applyDamageToTargetPlayer(pl, proj.dmg, true);
+            this.applyDamageToTargetPlayer(pl, proj.dmg, true, true);
             this.spawnParticle('ebullet_fade', proj.x, proj.y);
             consumed = true;
             break;
@@ -4501,9 +4712,10 @@ export class Simulation implements ISimulation {
     const effectiveDealMult =
       (body.impactdealdmgmult || 0.25) + (body.impactdmgmult || 0);
 
+    const bodyCollisionRadius = isMeleeBody ? 11 : 7;
     for (const enemy of this.enemies) {
       if (!enemy.active) continue;
-      if (!isPointInEnemyHitbox(p.x, p.y, 10, enemy)) continue;
+      if (!isPointInEnemyHitbox(p.x, p.y, bodyCollisionRadius, enemy)) continue;
 
       if (enemy.kind === 'Missile') {
         const spec = getEnemySpec(this.getEnemyMap(), 'Missile');
@@ -4513,6 +4725,7 @@ export class Simulation implements ISimulation {
           this.applyDamageToTargetPlayer(
             p,
             Math.max(1, (spec.damageonhit || 4) * effectiveRecvMult * 4),
+            true,
             true,
           );
           this.hitstopTicks = Math.max(this.hitstopTicks, body.impactsleeptime);
@@ -4530,8 +4743,7 @@ export class Simulation implements ISimulation {
       } else {
         if (p.flashTicks > 0) continue;
         const selfDmg = Math.max(1, 16 * effectiveRecvMult);
-        this.applyDamageToTargetPlayer(p, selfDmg, true);
-        p.flashTicks = Math.max(p.flashTicks, 12);
+        this.applyDamageToTargetPlayer(p, selfDmg, true, true);
         this.hitstopTicks = Math.max(this.hitstopTicks, body.impactsleeptime);
         this.screenShake = Math.max(this.screenShake, body.impactcamshake);
         p.vx *= body.impactspeedmult || 0.9;
@@ -4603,7 +4815,7 @@ export class Simulation implements ISimulation {
 
     const prevCombo = this.combo;
     this.combo = Math.min(COMBO_MAX, this.combo + 1);
-    this.comboTimer = COMBO_MAX_TIMER;
+    this.comboTimer = this.getComboMaxTimer();
     this.comboWarning = false;
     this.comboKillStreak++;
     this.bestComboThisSortie = Math.max(this.bestComboThisSortie, this.combo);
@@ -4703,6 +4915,7 @@ export class Simulation implements ISimulation {
     p: PlayerState,
     amount: number,
     emitHitCue: boolean,
+    fromEnemyCombat = false,
   ): void {
     if (!p.alive || amount <= 0) return;
 
@@ -4714,17 +4927,54 @@ export class Simulation implements ISimulation {
     ) {
       p.shieldReady = false;
       p.shieldCooldown = AEGIS_SHIELD_COOLDOWN_TICKS;
-      p.flashTicks = Math.max(p.flashTicks, 8);
+      p.flashTicks = Math.max(p.flashTicks, 18);
       this.emitShockwave(p.x, p.y, 64, 0.85, 16);
       this.emitAudio('sndhealed', p.x, p.y);
       return;
     }
 
-    p.health = Math.max(0, p.health - amount);
+    const mpMode = this.getEffectiveMultiplayerMode();
+    const isDogfight =
+      !this.modRegistry.isVanillaLocked() && mpMode === 'dogfight1v1';
+    let effectiveAmount = amount;
+    if (fromEnemyCombat && this.assistMode) {
+      effectiveAmount *= ASSIST_INCOMING_DMG_MULT;
+    }
+
+    // Authentic arcade Last-Stand Health Gate on PvE combat hits:
+    // Prevents sudden cheap deletion from moderate HP without giving the player a critical-HP warning window.
+    if (fromEnemyCombat && !isDogfight && p.maxHealth > 0) {
+      const hpRatio = p.health / p.maxHealth;
+      const gateThreshold = this.assistMode
+        ? 0.18
+        : this.mode === 'sfmt'
+          ? 0.35
+          : 0.25;
+      if (hpRatio >= gateThreshold && p.health - effectiveAmount <= 0) {
+        const survivalFloor = Math.max(1.5, p.maxHealth * 0.12);
+        p.health = Math.min(p.health, survivalFloor);
+      } else {
+        p.health = Math.max(0, p.health - effectiveAmount);
+      }
+    } else {
+      p.health = Math.max(0, p.health - effectiveAmount);
+    }
+
     if (emitHitCue) {
-      p.flashTicks = Math.max(p.flashTicks, 6);
+      const iframes = fromEnemyCombat
+        ? isDogfight
+          ? COMBAT_IFRAMES_DOGFIGHT
+          : this.assistMode
+            ? COMBAT_IFRAMES_ASSIST
+            : this.mode === 'sfmt'
+              ? COMBAT_IFRAMES_SFMT
+              : COMBAT_IFRAMES_NORMAL
+        : 6;
+      p.flashTicks = Math.max(p.flashTicks, iframes);
       if (p === this.player) {
         this.lastPlayerHitTick = this.tick;
+      } else if (p === this.player2) {
+        this.lastP2HitTick = this.tick;
       }
       this.screenShake = Math.max(this.screenShake, 3);
       this.emitAudio('sndplayerhit', p.x, p.y);
@@ -5791,7 +6041,7 @@ export class Simulation implements ISimulation {
       score: this.score,
       combo: this.combo,
       comboTimer: this.comboTimer,
-      comboMaxTimer: COMBO_MAX_TIMER,
+      comboMaxTimer: this.getComboMaxTimer(),
       comboWarning: this.comboWarning,
       difficulty: this.difficulty,
       killsThisSortie: this.killsThisSortie,
@@ -5821,6 +6071,7 @@ export class Simulation implements ISimulation {
       spaceLevel: this.data.room.spacelevel,
       autopilotEnabled: this.autopilotEnabled,
       seed: this.seed,
+      assistMode: this.assistMode,
     };
 
     if (modded) {
@@ -5848,6 +6099,9 @@ export class Simulation implements ISimulation {
       finalScore: this.score,
       finalTicks: this.tick,
     };
+    if (this.assistMode) {
+      recording.assistMode = true;
+    }
     if (modded) {
       recording.version = 2;
       recording.modFlags = cloneModFlags(this.modFlags);
@@ -5900,6 +6154,9 @@ export function replaySimulation(
   const sim = new Simulation(data, effectiveRegistry);
   if (!modRegistry && recording.modFlags?.moddedEnabled) {
     sim.setModFlags(recording.modFlags);
+  }
+  if (recording.assistMode) {
+    sim.setAssistMode(true);
   }
   sim.launch(recording.loadout, recording.mode, recording.seed);
   for (const frame of recording.frames) {

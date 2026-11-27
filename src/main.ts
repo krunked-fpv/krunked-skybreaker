@@ -63,12 +63,14 @@ import {
   computeCampaignUnlockedProfile,
   loadExplicitStoredAssetMode,
   loadProgressionLockMode,
+  loadStoredAssistMode,
   loadStoredCustomPalette,
   loadStoredModFlags,
   loadStoredPbGhost,
   loadStoredProfile,
   saveProgressionLockMode,
   saveStoredAssetMode,
+  saveStoredAssistMode,
   saveStoredCustomPalette,
   saveStoredModFlags,
   saveStoredPbGhost,
@@ -127,12 +129,14 @@ async function bootstrap(): Promise<void> {
     vault.data.vaultSource === 'steam-local' ? 'steam-local' : 'skybreaker';
 
   let progressionLocked = loadProgressionLockMode();
+  let assistMode = loadStoredAssistMode();
   const storedProfile = loadStoredProfile(undefined, { progressionLocked });
   let modFlags = loadStoredModFlags();
   let pbGhostReplay = loadStoredPbGhost();
 
   const modRegistry = new ModRegistry(!modFlags.moddedEnabled);
   const sim = new Simulation(vault.data, modRegistry, storedProfile);
+  sim.setAssistMode(assistMode);
 
   const renderer = new WebGL2Renderer();
   renderer.init(canvas, vault);
@@ -150,6 +154,7 @@ async function bootstrap(): Promise<void> {
     vaultSource: vault.data.vaultSource,
     totalMissionsCount: vault.data.global.missions.length,
     allUnlocked: !progressionLocked,
+    assistMode,
   });
   hangar.setSteamAvailable(steamAvailable);
   hangar.setAssetMode(activeAssetMode);
@@ -444,6 +449,24 @@ async function bootstrap(): Promise<void> {
     persistCurrentProfile();
   };
 
+  const setAssistModeEnabled = (enabled: boolean, playCue = true): void => {
+    assistMode = Boolean(enabled);
+    saveStoredAssistMode(assistMode);
+    sim.setAssistMode(assistMode);
+    hangar.setAssistMode(assistMode);
+    currSnapshot = sim.getSnapshot();
+    prevSnapshot = currSnapshot;
+    audio.syncFromSnapshot(currSnapshot);
+    if (playCue) {
+      audio.playSfx(assistMode ? 'sndsfmt' : 'sndswap');
+      controllerToast.show(
+        assistMode ? 'ASSIST MODE: ON' : 'ASSIST MODE: OFF',
+        renderer.getPalette(),
+      );
+    }
+    renderFrame(1);
+  };
+
   const handleHangarKeyAction = (code: string): boolean => {
     const snap = sim.getSnapshot();
 
@@ -514,6 +537,11 @@ async function bootstrap(): Promise<void> {
 
     if (code === 'KeyU') {
       setProgressionLockMode(!progressionLocked, true);
+      return true;
+    }
+
+    if (code === 'KeyE') {
+      setAssistModeEnabled(!assistMode, true);
       return true;
     }
 
@@ -632,6 +660,11 @@ async function bootstrap(): Promise<void> {
         return;
       }
 
+      case 'toggle-assist': {
+        setAssistModeEnabled(!assistMode, true);
+        return;
+      }
+
       case 'hangar-row-tap': {
         if (
           snap.phase !== 'hangar' ||
@@ -682,6 +715,8 @@ async function bootstrap(): Promise<void> {
             cmd.code === 'KeyX'
           ) {
             executePauseAction('hangar');
+          } else if (cmd.code === 'KeyE') {
+            setAssistModeEnabled(!assistMode, true);
           } else if (cmd.code === 'Escape' || cmd.code === 'KeyP') {
             executePauseAction('resume');
           } else if (cmd.code === 'Enter' || cmd.code === 'Space') {
@@ -690,7 +725,9 @@ async function bootstrap(): Promise<void> {
           return;
         }
         if (snap.phase === 'gameover') {
-          if (
+          if (cmd.code === 'KeyE') {
+            setAssistModeEnabled(!assistMode, true);
+          } else if (
             cmd.code === 'Enter' ||
             cmd.code === 'Space' ||
             cmd.code === 'KeyX' ||
@@ -837,6 +874,10 @@ async function bootstrap(): Promise<void> {
     }
 
     if (snap.paused) {
+      if (e.code === 'KeyE') {
+        setAssistModeEnabled(!assistMode, true);
+        return;
+      }
       if (e.code === 'KeyR') {
         sim.setPaused(false);
         launchCurrentSortie(undefined, false);
@@ -874,7 +915,9 @@ async function bootstrap(): Promise<void> {
     }
 
     if (snap.phase === 'gameover') {
-      if (e.code === 'Enter' || e.code === 'KeyX' || e.code === 'Space' || e.code === 'KeyZ' || e.code === 'KeyR') {
+      if (e.code === 'KeyE') {
+        setAssistModeEnabled(!assistMode, true);
+      } else if (e.code === 'Enter' || e.code === 'KeyX' || e.code === 'Space' || e.code === 'KeyZ' || e.code === 'KeyR') {
         launchCurrentSortie(undefined, false);
       } else if (e.code === 'KeyH' || e.code === 'Backspace') {
         returnToHangarUi(true);
@@ -1208,6 +1251,7 @@ async function bootstrap(): Promise<void> {
       dogfight: snap.dogfight ?? null,
       shockwaveCount: snap.shockwaves?.length ?? 0,
       controller: getControllerStatus(),
+      assistMode: Boolean(snap.assistMode),
     };
   };
 
@@ -1308,7 +1352,10 @@ async function bootstrap(): Promise<void> {
       clearStoredProfileKeys();
       pbGhostReplay = null;
       progressionLocked = false;
+      assistMode = false;
       hangar.setAllUnlocked(true);
+      hangar.setAssistMode(false);
+      sim.setAssistMode(false);
       sim.setGhostReplay(null);
       applyModFlags(DEFAULT_ACT2_MOD_FLAGS);
       sim.resetProfile();
@@ -1396,6 +1443,9 @@ async function bootstrap(): Promise<void> {
       touchDetector.setForceVisible(visible);
       touchControls.setVisible(touchDetector.touchOverlayVisible);
       renderFrame(1);
+    },
+    setAssistMode(enabled: boolean): void {
+      setAssistModeEnabled(enabled, false);
     },
   };
 

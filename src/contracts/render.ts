@@ -114,6 +114,8 @@ export interface HangarUiState {
   paletteStudio?: PaletteStudioState | null;
   p2Loadout?: Loadout;
   p2PlaneName?: string;
+  /** Accessible Assist Mode status displayed in Hangar */
+  assistMode?: boolean;
 }
 
 export interface FrameMetrics {

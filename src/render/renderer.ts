@@ -2277,7 +2277,13 @@ export class WebGL2Renderer implements IRenderer {
     solidWorldOut: number[],
   ): void {
     const rad = p.angleDeg * DEG_TO_RAD;
-    const flash = p.flashTicks > 0 ? 1 : 0;
+    const flash =
+      p.flashTicks > 0 &&
+      (p.flashTicks <= 6 ||
+        p.flashTicks > 20 ||
+        Math.floor(p.flashTicks / 3) % 2 === 1)
+        ? 1
+        : 0;
     const isSubmerged = p.y > -12;
     const target = isSubmerged ? underwaterOut : mainOut;
     const clipSea = !isSubmerged;

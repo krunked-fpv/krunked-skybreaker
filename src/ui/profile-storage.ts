@@ -25,6 +25,7 @@ export const LEGACY_ACT2_PB_GHOST_KEY = 'krunked_luftrausers_act2_pb_ghost_v1';
 export const ASSET_MODE_STORAGE_KEY = 'krunked_skybreaker_asset_mode_v1';
 export const PROGRESSION_LOCK_STORAGE_KEY =
   'krunked_skybreaker_progression_lock_v1';
+export const ASSIST_MODE_STORAGE_KEY = 'krunked_skybreaker_assist_mode_v1';
 
 export type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
@@ -494,6 +495,29 @@ export function saveStoredAssetMode(
   }
 }
 
+export function loadStoredAssistMode(
+  storage: StorageLike | null = getDefaultStorage(),
+): boolean {
+  if (!storage) return false;
+  try {
+    return storage.getItem(ASSIST_MODE_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+export function saveStoredAssistMode(
+  enabled: boolean,
+  storage: StorageLike | null = getDefaultStorage(),
+): void {
+  if (!storage) return;
+  try {
+    storage.setItem(ASSIST_MODE_STORAGE_KEY, enabled ? 'true' : 'false');
+  } catch {
+    // ignore
+  }
+}
+
 export function clearStoredProfileKeys(
   storage: StorageLike | null = getDefaultStorage(),
 ): void {
@@ -508,6 +532,7 @@ export function clearStoredProfileKeys(
     ACT2_PB_GHOST_KEY,
     LEGACY_ACT2_PB_GHOST_KEY,
     PROGRESSION_LOCK_STORAGE_KEY,
+    ASSIST_MODE_STORAGE_KEY,
   ];
   for (const key of keys) {
     try {

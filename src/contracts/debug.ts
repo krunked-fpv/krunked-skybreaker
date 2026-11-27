@@ -67,6 +67,8 @@ export interface SkybreakerDebugState {
   shockwaveCount?: number;
   /** Controller, Gamepad & Touch status telemetry */
   controller?: ControllerStatusSnapshot;
+  /** Assist Mode toggle state */
+  assistMode?: boolean;
 }
 
 export type RauserDebugState = SkybreakerDebugState;
@@ -107,6 +109,8 @@ export interface SkybreakerDebugApi {
   /** Controller & Touch Controls QA Seams */
   getControllerState?(): ControllerStatusSnapshot;
   setTouchControlsVisible?(visible: boolean | null): void;
+  /** Assist Mode QA Seam */
+  setAssistMode?(enabled: boolean): void;
 }
 
 export type RauserDebugApi = SkybreakerDebugApi;

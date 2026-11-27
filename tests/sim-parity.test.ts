@@ -2106,4 +2106,220 @@ describe('Deterministic 60Hz Simulation Parity', () => {
     expect(hangarSnap.particles).toHaveLength(0);
     expect(hangarSnap.audioEvents.some((e) => e.cue === 'sndhangar')).toBe(true);
   });
+
+  it('25. Combat balance: post-hit i-frames, Last-Stand Health Gate, forward-cone on-screen Fighter firing, and neutral Boat turrets', () => {
+    const data = createProceduralFallbackBundle().data;
+
+    // 1. Off-screen Fighter & backwards-facing on-screen Fighter must NOT snipe the player
+    const simAi = new Simulation(data);
+    const preAi = launchToPlaying(simAi, { weapon: 0, body: 1, engine: 4 }, 'normal', 2501);
+    const offscreenFighter = simAi.spawnEnemy('Fighter', preAi.player.x + 420, preAi.player.y);
+    offscreenFighter.fireTimer = 0;
+    const awayFighter = simAi.spawnEnemy('Fighter', preAi.player.x + 140, preAi.player.y);
+    awayFighter.angleDeg = 0; // Flying away to the right (+X), opposite player at left
+    awayFighter.vx = 6;
+    awayFighter.fireTimer = 0;
+    const stepOff = simAi.step(IDLE_INPUT);
+    expect(stepOff.projectiles.filter((p) => p.owner === 'enemy')).toHaveLength(0);
+
+    // On-screen Fighter lined up directly at the player DOES fire forward along its nose
+    const linedFighter = simAi.spawnEnemy('Fighter', preAi.player.x + 160, preAi.player.y);
+    linedFighter.angleDeg = 180; // Pointed straight left at player
+    linedFighter.vx = -6;
+    linedFighter.fireTimer = 0;
+    const stepOn = simAi.step(IDLE_INPUT);
+    const enemyShots = stepOn.projectiles.filter((p) => p.owner === 'enemy');
+    expect(enemyShots.length).toBeGreaterThanOrEqual(1);
+
+    // 2. Boat spawns with turret aimed straight up (-90 deg) instead of instant player lock
+    const spawnedBoat = simAi.spawnEnemy('Boat', preAi.player.x + 200, 0);
+    expect(spawnedBoat.gunAngleDeg).toBe(-90);
+
+    // 3. Post-hit combat i-frames (>= 20 ticks) + Last-Stand Health Gate prevent cheap rapid deletion
+    const simMercy = new Simulation(data);
+    launchToPlaying(simMercy, { weapon: 0, body: 0, engine: 0 }, 'normal', 2502);
+    // Drop to 5 HP (31.25% >= 25% threshold) and spawn a Fighter directly underneath firing up along x = player.x
+    simMercy.damagePlayer(11);
+    expect(simMercy.getSnapshot().player.health).toBeCloseTo(5, 4);
+    // Clear debug hit flash while holding fire so cease-fire heal does not trigger
+    for (let i = 0; i < 8; i++) simMercy.step({ left: false, right: false, thrust: false, fire: true });
+
+    const curM = simMercy.getSnapshot().player;
+    const shooter = simMercy.spawnEnemy('Fighter', curM.x, curM.y + 60);
+    shooter.angleDeg = -90; // Aimed straight up at player along the same vertical axis
+    shooter.vx = 0;
+    shooter.vy = -5;
+    shooter.fireTimer = 0;
+    let sawMercySave = false;
+    let sawLongIframes = false;
+    for (let t = 0; t < 20; t++) {
+      const s = simMercy.step({ left: false, right: false, thrust: false, fire: true });
+      if (s.player.flashTicks >= 20) {
+        sawLongIframes = true;
+      }
+      if (s.player.alive && s.player.health < 5 && s.player.health >= 1.5) {
+        sawMercySave = true;
+      }
+    }
+    expect(sawLongIframes).toBe(true);
+    expect(sawMercySave).toBe(true);
+
+    // Once combat i-frames expire while below critical HP (< 25%), a subsequent enemy hit DOES kill cleanly
+    while (simMercy.getSnapshot().player.flashTicks > 0 && simMercy.getSnapshot().player.alive) {
+      simMercy.step({ left: false, right: false, thrust: false, fire: true });
+    }
+    const postM = simMercy.getSnapshot().player;
+    if (postM.alive) {
+      const finisher = simMercy.spawnEnemy('Fighter', postM.x, postM.y + 50);
+      finisher.angleDeg = -90;
+      finisher.vx = 0;
+      finisher.vy = -5;
+      finisher.fireTimer = 0;
+      for (let t = 0; t < 20 && simMercy.getSnapshot().player.alive; t++) {
+        simMercy.step({ left: false, right: false, thrust: false, fire: true });
+      }
+    }
+    expect(simMercy.getSnapshot().player.alive).toBe(false);
+  });
+
+  it('26. Elastic depth-progressive water bobber & upper-cloud ceiling rubberband physics', () => {
+    const data = createProceduralFallbackBundle().data;
+
+    const runWaterDive = (thrustHoldTicks: number, engine: PartIndex = 0) => {
+      const sim = new Simulation(data);
+      launchToPlaying(sim, { weapon: 0, body: 0, engine }, 'normal', 2601);
+      // Turn straight down (+90)
+      for (let i = 0; i < 18; i++) sim.step({ left: false, right: true, thrust: false, fire: false });
+      let guard = 0;
+      while (!sim.getSnapshot().player.underwater && guard < 100) {
+        sim.step({ left: false, right: false, thrust: true, fire: false });
+        guard++;
+      }
+      let maxDepth = 0;
+      let exitVy = 0;
+      let peakEnv = 0;
+      let ticksSub = 0;
+      for (let t = 0; t < 180; t++) {
+        const s = sim.step({ left: false, right: false, thrust: t < thrustHoldTicks, fire: false });
+        if (!s.player.alive) return { maxDepth, exitVy, peakEnv, ticksSub, alive: false };
+        if (s.player.underwater) {
+          ticksSub++;
+          maxDepth = Math.max(maxDepth, s.player.y);
+          peakEnv = Math.max(peakEnv, s.player.envWaterFactor);
+        } else {
+          exitVy = s.player.vy;
+          break;
+        }
+      }
+      return { maxDepth, exitVy, peakEnv, ticksSub, alive: sim.getSnapshot().player.alive };
+    };
+
+    const shallowDip = runWaterDive(0, 0);
+    const deepBobber = runWaterDive(12, 0);
+    const fullDownHold = runWaterDive(180, 0);
+    const subHold = runWaterDive(180, 3);
+
+    expect(shallowDip.alive).toBe(true);
+    expect(deepBobber.alive).toBe(true);
+    expect(fullDownHold.alive).toBe(true);
+    // Deeper submersion builds stronger bobber tension & pops out faster on release
+    expect(deepBobber.maxDepth).toBeGreaterThan(shallowDip.maxDepth);
+    expect(deepBobber.peakEnv).toBeGreaterThan(shallowDip.peakEnv);
+    expect(Math.abs(deepBobber.exitVy)).toBeGreaterThan(Math.abs(shallowDip.exitVy) + 1.5);
+    // Even holding full thrust downward, water rubberband overpowers and pops you back out
+    expect(fullDownHold.exitVy).toBeLessThan(-2);
+    expect(fullDownHold.maxDepth).toBeLessThan(120);
+    // Underwater engine dives much deeper safely yet is still bounded by progressive buoyancy
+    expect(subHold.alive).toBe(true);
+    expect(subHold.maxDepth).toBeGreaterThan(deepBobber.maxDepth);
+    expect(subHold.maxDepth).toBeLessThan(260);
+    expect(subHold.exitVy).toBeLessThan(-1);
+
+    const runCloudClimb = (thrustHoldTicks: number) => {
+      const sim = new Simulation(data);
+      launchToPlaying(sim, { weapon: 0, body: 0, engine: 0 }, 'normal', 2602);
+      let guard = 0;
+      while (!sim.getSnapshot().player.inSpace && guard < 300) {
+        sim.step({ left: false, right: false, thrust: true, fire: false });
+        guard++;
+      }
+      let maxAbove = 0;
+      let exitVy = 0;
+      let peakEnv = 0;
+      for (let t = 0; t < 180; t++) {
+        const s = sim.step({ left: false, right: false, thrust: t < thrustHoldTicks, fire: false });
+        if (!s.player.alive) return { maxAbove, exitVy, peakEnv, alive: false };
+        if (s.player.inSpace) {
+          maxAbove = Math.max(maxAbove, data.room.spacelevel - s.player.y);
+          peakEnv = Math.max(peakEnv, s.player.envSpaceFactor);
+        } else {
+          exitVy = s.player.vy;
+          break;
+        }
+      }
+      return { maxAbove, exitVy, peakEnv, alive: sim.getSnapshot().player.alive };
+    };
+
+    const shallowCloud = runCloudClimb(0);
+    const deepCloud = runCloudClimb(12);
+    const fullUpHold = runCloudClimb(180);
+
+    expect(shallowCloud.alive).toBe(true);
+    expect(deepCloud.alive).toBe(true);
+    expect(fullUpHold.alive).toBe(true);
+    expect(deepCloud.maxAbove).toBeGreaterThan(shallowCloud.maxAbove);
+    expect(deepCloud.peakEnv).toBeGreaterThan(shallowCloud.peakEnv);
+    expect(deepCloud.exitVy).toBeGreaterThan(shallowCloud.exitVy + 1.5);
+    expect(fullUpHold.exitVy).toBeGreaterThan(2);
+    expect(fullUpHold.maxAbove).toBeLessThan(120);
+  });
+
+  it('27. Assist Mode: +50% max HP, mid-sortie ratio scaling, fast/passive healing, extended combo timer, and bit-identical replay', () => {
+    const data = createProceduralFallbackBundle().data;
+    const sim = new Simulation(data);
+    expect(sim.isAssistMode()).toBe(false);
+
+    sim.setAssistMode(true);
+    expect(sim.isAssistMode()).toBe(true);
+    const hangarSnap = sim.getSnapshot();
+    expect(hangarSnap.assistMode).toBe(true);
+    expect(hangarSnap.player.maxHealth).toBe(24); // 16 * 1.5
+    expect(hangarSnap.comboMaxTimer).toBe(240);
+
+    // Mid-sortie toggle preserves HP ratio (50% -> 50%)
+    launchToPlaying(sim, { weapon: 0, body: 0, engine: 4 }, 'normal', 2701);
+    sim.damagePlayer(12); // 12 / 24 = 50%
+    expect(sim.getSnapshot().player.health).toBeCloseTo(12, 4);
+    sim.setAssistMode(false);
+    expect(sim.getSnapshot().player.maxHealth).toBe(16);
+    expect(sim.getSnapshot().player.health).toBeCloseTo(8, 4);
+    sim.setAssistMode(true);
+    expect(sim.getSnapshot().player.maxHealth).toBe(24);
+    expect(sim.getSnapshot().player.health).toBeCloseTo(12, 4);
+
+    // Fast cease-fire healing: engages on 6th cease-fire tick at 1.6x speed (0.16 * 1.6 = 0.256)
+    for (let i = 0; i < 5; i++) {
+      expect(sim.step(IDLE_INPUT).player.healing).toBe(false);
+    }
+    const healTick = sim.step(IDLE_INPUT);
+    expect(healTick.player.healing).toBe(true);
+    expect(healTick.player.health).toBeCloseTo(12 + 0.16 * 1.6, 4);
+
+    // Deterministic replay preserves assistMode bit-identically
+    const simRec = new Simulation(data);
+    simRec.setAssistMode(true);
+    simRec.launch({ weapon: 0, body: 0, engine: 0 }, 'normal', 2702);
+    for (let t = 0; t < 300; t++) {
+      simRec.step(computeAutopilotInput(simRec.getSnapshot()));
+    }
+    const origSnap = simRec.getSnapshot();
+    const rec = simRec.getReplay();
+    expect(rec.assistMode).toBe(true);
+    const replayed = replaySimulation(data, rec);
+    expect(replayed.assistMode).toBe(true);
+    expect(replayed.player.maxHealth).toBe(origSnap.player.maxHealth);
+    expect(replayed.player.x).toBe(origSnap.player.x);
+    expect(replayed.player.y).toBe(origSnap.player.y);
+    expect(replayed.score).toBe(origSnap.score);
+  });
 });

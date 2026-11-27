@@ -284,6 +284,7 @@ export interface ReplayRecording {
   modFlags?: Act2ModFlags;
   dailyDateId?: string | null;
   planeName?: string;
+  assistMode?: boolean;
 }
 
 export interface SimSnapshot {
@@ -334,6 +335,8 @@ export interface SimSnapshot {
   activeMods?: Act2ModFlags;
   /** Daily Seed identifier (YYYYMMDD) when Daily Seed sortie active */
   dailySeedId?: string | null;
+  /** Accessible Assist Mode flag (reduced damage, extended i-frames, forgiving healing) */
+  assistMode?: boolean;
 }
 
 export interface ISimulation {
@@ -343,6 +346,8 @@ export interface ISimulation {
   returnToHangar(): void;
   setLoadout(loadout: Loadout): void;
   setMode(mode: GameMode): void;
+  setAssistMode?(enabled: boolean): void;
+  isAssistMode?(): boolean;
   setPaused(paused: boolean): void;
   setAutopilot(enabled: boolean): void;
   damagePlayer(amount: number): void;

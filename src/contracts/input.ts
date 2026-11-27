@@ -34,6 +34,7 @@ export type ControllerMenuCommand =
   | { kind: 'return-hangar' }
   | { kind: 'relaunch' }
   | { kind: 'toggle-mod-deck' }
+  | { kind: 'toggle-assist' }
   | {
       kind: 'hangar-row-tap';
       rowIndex: number;

@@ -541,6 +541,38 @@ describe('Direct canvas tap mapping & virtual hit testing', () => {
       }),
     ).toBeNull();
   });
+
+  it('resolves Assist Mode toggle taps in Hangar header, Pause card, and Game Over prompt bar', () => {
+    expect(
+      resolveCanvasTapCommand(90, 10, {
+        phase: 'hangar',
+        paused: false,
+        modDeckOpen: false,
+        paletteStudioOpen: false,
+        activeHangarRowIndex: 0,
+      }),
+    ).toEqual({ kind: 'toggle-assist' });
+
+    expect(
+      resolveCanvasTapCommand(300, 268, {
+        phase: 'playing',
+        paused: true,
+        modDeckOpen: false,
+        paletteStudioOpen: false,
+        activeHangarRowIndex: 0,
+      }),
+    ).toEqual({ kind: 'toggle-assist' });
+
+    expect(
+      resolveCanvasTapCommand(315, 345, {
+        phase: 'gameover',
+        paused: false,
+        modDeckOpen: false,
+        paletteStudioOpen: false,
+        activeHangarRowIndex: 0,
+      }),
+    ).toEqual({ kind: 'toggle-assist' });
+  });
 });
 
 describe('ControllerToast ephemeral status pill', () => {

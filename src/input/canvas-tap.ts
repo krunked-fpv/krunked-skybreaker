@@ -32,12 +32,20 @@ const PAUSE_OPT_START_Y = PAUSE_CARD_Y + 64; // 186
 const PAUSE_OPT_STEP_Y = 24;
 const PAUSE_OPT_HEIGHT = 20;
 const PAUSE_OPT_COUNT = 3;
+const PAUSE_ASSIST_Y = PAUSE_CARD_Y + 136; // 258
+const PAUSE_ASSIST_HEIGHT = 20;
+
+const HANGAR_ASSIST_MIN_X = 20;
+const HANGAR_ASSIST_MAX_X = 176;
+const HANGAR_ASSIST_MIN_Y = 0;
+const HANGAR_ASSIST_MAX_Y = 22;
 
 const GAMEOVER_PROJ_X = 36;
 const GAMEOVER_PROJ_Y = 22;
 const GAMEOVER_PROJ_W = 528;
 const GAMEOVER_PROMPT_TOP_Y = 324;
 const GAMEOVER_PROMPT_BOTTOM_Y = 388;
+const GAMEOVER_ASSIST_START_X = 245;
 const GAMEOVER_HANGAR_SPLIT_X = Math.round(
   GAMEOVER_PROJ_X + GAMEOVER_PROJ_W * (2 / 3),
 ); // 388 (right third of bottom prompt bar)
@@ -121,6 +129,14 @@ export function resolveCanvasTapCommand(
     !context.modDeckOpen &&
     !context.paletteStudioOpen
   ) {
+    if (
+      virtualX >= HANGAR_ASSIST_MIN_X &&
+      virtualX <= HANGAR_ASSIST_MAX_X &&
+      virtualY >= HANGAR_ASSIST_MIN_Y &&
+      virtualY <= HANGAR_ASSIST_MAX_Y
+    ) {
+      return { kind: 'toggle-assist' };
+    }
     const { rowX, rowWidth, rowStartY, rowHeight, rowStep, rowCount } =
       HANGAR_LAYOUT;
     if (virtualX >= rowX && virtualX <= rowX + rowWidth) {
@@ -160,6 +176,12 @@ export function resolveCanvasTapCommand(
           return { kind: 'pause-option-tap', optionIndex };
         }
       }
+      if (
+        virtualY >= PAUSE_ASSIST_Y &&
+        virtualY <= PAUSE_ASSIST_Y + PAUSE_ASSIST_HEIGHT
+      ) {
+        return { kind: 'toggle-assist' };
+      }
     }
     return null;
   }
@@ -174,6 +196,9 @@ export function resolveCanvasTapCommand(
     ) {
       if (virtualX >= GAMEOVER_HANGAR_SPLIT_X) {
         return { kind: 'return-hangar' };
+      }
+      if (virtualX >= GAMEOVER_ASSIST_START_X) {
+        return { kind: 'toggle-assist' };
       }
       return { kind: 'relaunch' };
     }

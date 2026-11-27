@@ -48,6 +48,7 @@ import {
   ACT2_CUSTOM_PALETTE_KEY,
   ACT2_MODS_STORAGE_KEY,
   ACT2_PB_GHOST_KEY,
+  ASSIST_MODE_STORAGE_KEY,
   HANGAR_ROWS,
   HangarController,
   LEGACY_ACT2_CUSTOM_PALETTE_KEY,
@@ -57,14 +58,18 @@ import {
   PROFILE_STORAGE_KEY,
   PROGRESSION_LOCK_STORAGE_KEY,
   TelemetryHud,
+  clearStoredProfileKeys,
   computeCampaignUnlockedProfile,
+  formatTelemetryLines,
   loadProgressionLockMode,
+  loadStoredAssistMode,
   loadStoredCustomPalette,
   loadStoredModFlags,
   loadStoredPbGhost,
   loadStoredProfile,
   normalizeStoredPaletteId,
   saveProgressionLockMode,
+  saveStoredAssistMode,
   type StorageLike,
 } from '../src/ui';
 
@@ -3507,6 +3512,63 @@ describe('Renderer Visual & UI Regression Contracts', () => {
     expect(hudSpy).toHaveBeenCalledTimes(1);
     expect(pauseSpy).toHaveBeenCalledTimes(1);
     expect(gameOverSpy).toHaveBeenCalledTimes(1);
+
+    expect(renderer.getFrameMetrics().webglErrors).toBe(0);
+    renderer.dispose();
+  });
+
+  it('persists Assist Mode cleanly and renders Hangar, HUD, Pause, Game Over, and Telemetry [ASSIST] without WebGL errors', () => {
+    const store = new Map<string, string>();
+    const storage: StorageLike = {
+      getItem: (k) => store.get(k) ?? null,
+      setItem: (k, v) => {
+        store.set(k, v);
+      },
+      removeItem: (k) => {
+        store.delete(k);
+      },
+    };
+
+    expect(loadStoredAssistMode(storage)).toBe(false);
+    saveStoredAssistMode(true, storage);
+    expect(store.get(ASSIST_MODE_STORAGE_KEY)).toBe('true');
+    expect(loadStoredAssistMode(storage)).toBe(true);
+    clearStoredProfileKeys(storage);
+    expect(loadStoredAssistMode(storage)).toBe(false);
+
+    const { gl } = createMockWebGL2Context();
+    const canvas = {
+      width: 600,
+      height: 400,
+      style: { imageRendering: '' },
+      getContext: vi.fn((kind: string) => (kind === 'webgl2' ? gl : null)),
+    } as unknown as HTMLCanvasElement;
+    const vault = createMockVaultBundle();
+    const renderer = new WebGL2Renderer();
+    renderer.init(canvas, vault);
+
+    const controller = new HangarController({ assistMode: true, allUnlocked: true });
+    expect(controller.isAssistMode()).toBe(true);
+
+    const hangarSnap = makeSnapshot({ phase: 'hangar', assistMode: true });
+    const ui = controller.buildUiState(hangarSnap);
+    expect(ui.assistMode).toBe(true);
+    renderer.render(hangarSnap, hangarSnap, 0, ui, 0.5);
+
+    const playSnap = makeSnapshot({ phase: 'playing', assistMode: true });
+    renderer.render(playSnap, playSnap, 0, null, 1.0);
+    const lines = formatTelemetryLines({
+      snapshot: playSnap,
+      frameMetrics: renderer.getFrameMetrics(),
+      vaultSource: 'procedural-fallback',
+    });
+    expect(lines.some((l) => l.includes('[ASSIST]'))).toBe(true);
+
+    const pauseSnap = makeSnapshot({ phase: 'playing', paused: true, assistMode: true });
+    renderer.render(pauseSnap, pauseSnap, 0, null, 1.5);
+
+    const overSnap = makeSnapshot({ phase: 'gameover', assistMode: true });
+    renderer.render(overSnap, overSnap, 0, null, 2.0);
 
     expect(renderer.getFrameMetrics().webglErrors).toBe(0);
     renderer.dispose();

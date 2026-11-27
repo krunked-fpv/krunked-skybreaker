@@ -90,6 +90,7 @@ export interface HangarControllerOptions {
   initialAssetMode?: AssetPackMode;
   steamAvailable?: boolean;
   allUnlocked?: boolean;
+  assistMode?: boolean;
 }
 
 export interface HangarCycleResult {
@@ -155,6 +156,7 @@ export class HangarController {
   private steamAvailable: boolean;
   private totalMissionsCount: number;
   private allUnlocked: boolean;
+  private assistMode: boolean;
 
   private modDeckOpen = false;
   private activeModRowIndex = 0;
@@ -186,6 +188,7 @@ export class HangarController {
     this.steamAvailable = Boolean(options.steamAvailable);
     this.totalMissionsCount = options.totalMissionsCount ?? 90;
     this.allUnlocked = Boolean(options.allUnlocked);
+    this.assistMode = Boolean(options.assistMode);
   }
 
   public getActiveRow(): HangarRow {
@@ -499,6 +502,14 @@ export class HangarController {
 
   public isAllUnlocked(): boolean {
     return this.allUnlocked;
+  }
+
+  public setAssistMode(enabled: boolean): void {
+    this.assistMode = Boolean(enabled);
+  }
+
+  public isAssistMode(): boolean {
+    return this.assistMode;
   }
 
   public getPaletteCount(moddedEnabled = this.modFlagsCache.moddedEnabled): number {
@@ -850,6 +861,7 @@ export class HangarController {
       paletteStudio: this.paletteStudio.getState(),
       p2Loadout: act2Extras?.p2Loadout ?? snapshot.player2?.loadout,
       p2PlaneName: act2Extras?.p2PlaneName ?? snapshot.player2?.planeName,
+      assistMode: snapshot.assistMode ?? this.assistMode,
     };
   }
 

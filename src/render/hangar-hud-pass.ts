@@ -965,6 +965,27 @@ export function drawInGameHudPass(
     );
     leftHudY += 12;
   }
+  if (snapshot.assistMode) {
+    ctx.drawBitmapText(
+      smallFont,
+      'ASSIST MODE',
+      scoreX + 1,
+      leftHudY + 1,
+      smallScale,
+      'left',
+      contrast.hudOutline,
+    );
+    ctx.drawBitmapText(
+      smallFont,
+      'ASSIST MODE',
+      scoreX,
+      leftHudY,
+      smallScale,
+      'left',
+      contrast.hudPrimary,
+    );
+    leftHudY += 12;
+  }
 
   // Iconic top-right Combo Gauge using 5-pass colors[1] outline + draining combofont.shader
   if (!isDogfight && (snapshot.combo > 1 || snapshot.comboTimer > 0)) {
@@ -1337,7 +1358,7 @@ export function drawPauseOverlayPass(
   ]);
 
   const cardW = 284;
-  const cardH = 152;
+  const cardH = 176;
   const cardX = Math.round((VIRTUAL_WIDTH - cardW) * 0.5);
   const cardY = 122;
 
@@ -1431,6 +1452,21 @@ export function drawPauseOverlayPass(
       pushSolidBorder(solids, cardX + 22, ry, cardW - 44, 20, 1, contrast.bevelBorder);
     }
   }
+  const assistRy = cardY + 136;
+  if (snapshot.assistMode) {
+    pushSolidRect(solids, cardX + 22, assistRy, cardW - 44, 20, contrast.bannerPlateBg);
+    pushSolidBorder(solids, cardX + 22, assistRy, cardW - 44, 20, 1, pal.colors[7]);
+  } else {
+    pushSolidRect(
+      solids,
+      cardX + 22,
+      assistRy,
+      cardW - 44,
+      20,
+      withAlpha(contrast.panelDark, 0.85),
+    );
+    pushSolidBorder(solids, cardX + 22, assistRy, cardW - 44, 20, 1, contrast.bevelBorder);
+  }
   ctx.flushSolids(solids);
 
   const bigFont = ctx.resolveFont('fntb', 'fntm');
@@ -1479,6 +1515,19 @@ export function drawPauseOverlayPass(
       isSel ? contrast.selectedTextInk : contrast.darkPanelFg,
     );
   }
+
+  const assistPauseLabel = snapshot.assistMode
+    ? 'ASSIST MODE: ON [E]'
+    : 'ASSIST MODE: OFF [E]';
+  ctx.drawBitmapText(
+    smallFont,
+    assistPauseLabel,
+    VIRTUAL_WIDTH * 0.5,
+    cardY + 142,
+    1,
+    'center',
+    snapshot.assistMode ? contrast.darkPanelFg : contrast.darkPanelAccent,
+  );
 
   ctx.drawBitmapText(
     smallFont,
@@ -2000,9 +2049,12 @@ export function drawGameOverDebriefPass(
   );
 
   const blink = Math.floor(elapsedSec * 4) % 2 === 0;
+  const debriefPrompt = snapshot.assistMode
+    ? 'SPACE: RELAUNCH  -  E: ASSIST ON  -  H: HANGAR'
+    : 'SPACE: RELAUNCH  -  E: ASSIST OFF  -  H: HANGAR';
   ctx.drawBitmapText(
     smallFont,
-    'SPACE: RELAUNCH   -   H / ESC: HANGAR',
+    debriefPrompt,
     VIRTUAL_WIDTH * 0.5,
     342,
     1,
@@ -2357,29 +2409,40 @@ function renderHangarProjectorInternal(
     Math.round(30 + (30 - medFont.spec.lineHeight * medScale) * 0.5) + offsetY;
   const headerTextY = Math.min(0, offsetY) + (menuSprites['projector_top'] ? 6 : 5);
 
-  if (moddedEnabled && hangarUi.modFlags?.dailySeed && hangarUi.dailySeedId) {
-    if (menuSprites['projector_top']) {
-      drawOutlinedHeaderText(
-        ctx,
-        smallFont,
-        `DAILY ${hangarUi.dailySeedId}`,
-        26,
-        headerTextY,
-        'left',
-        contrast.darkPanelAccent,
-        contrast.panelDark,
-      );
-    } else {
-      ctx.drawBitmapText(
-        smallFont,
-        `DAILY ${hangarUi.dailySeedId}`,
-        26,
-        headerTextY,
-        1,
-        'left',
-        contrast.darkPanelAccent,
-      );
-    }
+  const assistActive = Boolean(hangarUi.assistMode ?? snapshot.assistMode);
+  const showDailyHeader = Boolean(
+    moddedEnabled && hangarUi.modFlags?.dailySeed && hangarUi.dailySeedId,
+  );
+  const leftHeaderLabel = showDailyHeader
+    ? `DAILY ${hangarUi.dailySeedId}`
+    : assistActive
+      ? '[E] ASSIST: ON'
+      : '[E] ASSIST: OFF';
+  const leftHeaderCol =
+    showDailyHeader || assistActive
+      ? contrast.darkPanelAccent
+      : contrast.darkPanelFg;
+  if (menuSprites['projector_top']) {
+    drawOutlinedHeaderText(
+      ctx,
+      smallFont,
+      leftHeaderLabel,
+      26,
+      headerTextY,
+      'left',
+      leftHeaderCol,
+      contrast.panelDark,
+    );
+  } else {
+    ctx.drawBitmapText(
+      smallFont,
+      leftHeaderLabel,
+      26,
+      headerTextY,
+      1,
+      'left',
+      leftHeaderCol,
+    );
   }
 
   if (menuSprites['projector_top']) {
@@ -2502,7 +2565,8 @@ function renderHangarProjectorInternal(
       : steamAvailable
         ? 'SKYBREAKER'
         : 'SKYBREAKER [STEAM N/A]';
-  const modeLabel = hangarUi.mode === 'sfmt' ? 'OVERDRIVE' : 'NORMAL';
+  const baseModeLabel = hangarUi.mode === 'sfmt' ? 'OVERDRIVE' : 'NORMAL';
+  const modeLabel = assistActive ? `${baseModeLabel} + ASSIST` : baseModeLabel;
   const isAllUnlocked = Boolean(hangarUi.allUnlocked);
   const arsenalEnabled = Boolean(
     moddedEnabled && hangarUi.modFlags?.arsenalBosses,
@@ -2540,8 +2604,10 @@ function renderHangarProjectorInternal(
               ? 'ORIGINAL SKYBREAKER ART & SYNTH\nOR LOCAL STEAM VAULT (IF OWNED)'
               : hangarUi.activeRow === 'mode'
                 ? modeAvailable
-                  ? 'OVERDRIVE MODE - HIGH SPEED ACE WAVE'
-                  : 'COMPLETE 15 MISSIONS OR SINK A BLIMP TO UNLOCK'
+                  ? assistActive
+                    ? 'ASSIST ON: +50% HULL, MERCY I-FRAMES, FAST HEAL\nPRESS E TO TOGGLE ASSIST  -  LT/RT: MODE'
+                    : 'OVERDRIVE MODE - HIGH SPEED ACE WAVE\nPRESS E FOR ASSIST MODE (FORGIVING COMBAT)'
+                  : 'COMPLETE 15 MISSIONS OR SINK A BLIMP TO UNLOCK\nPRESS E FOR ASSIST MODE (FORGIVING COMBAT)'
                 : 'PRESS SPACE OR ENTER TO LAUNCH SORTIE';
 
   const rowDefs: {
@@ -3071,7 +3137,7 @@ function renderHangarProjectorInternal(
   );
   ctx.drawBitmapText(
     smallFont,
-    `LT/RT:CYC U:${isAllUnlocked ? 'ALL' : 'LOCK'} TAB:MODS SPC:GO ~HUD`,
+    `E:AST U:${isAllUnlocked ? 'ALL' : 'LOCK'} TAB:MODS SPC:GO ~HUD`,
     558,
     HANGAR_LAYOUT.footerY + offsetY,
     1,
